@@ -6,6 +6,7 @@ import com.streamvault.data.local.entity.CategoryEntity
 import com.streamvault.data.local.entity.ChannelEntity
 import com.streamvault.data.mapper.toDomain
 import com.streamvault.domain.model.Category
+import com.streamvault.domain.model.ChannelNumberingMode
 import com.streamvault.domain.model.Channel
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.Result
@@ -74,8 +75,9 @@ class ChannelRepositoryImpl @Inject constructor(
                         channelDao.searchByCategory(providerId, categoryId, ftsQuery, CATEGORY_SEARCH_LIMIT)
                     },
                     preferencesRepository.parentalControlLevel,
-                    parentalControlManager.unlockedCategoriesForProvider(providerId)
-                ) { entities, level, unlockedCats ->
+                    parentalControlManager.unlockedCategoriesForProvider(providerId),
+                    preferencesRepository.liveChannelNumberingMode
+                ) { entities, level, unlockedCats, numberingMode ->
                     val filtered = if (level == 2) {
                         entities.filter { entity ->
                             val isUnlocked = entity.categoryId != null && unlockedCats.contains(entity.categoryId)
@@ -85,7 +87,7 @@ class ChannelRepositoryImpl @Inject constructor(
                         entities
                     }
 
-                    groupAndMapChannels(filtered, unlockedCats)
+                    applyNumbering(groupAndMapChannels(filtered, unlockedCats), numberingMode)
                 }
             }
         }
@@ -131,8 +133,9 @@ class ChannelRepositoryImpl @Inject constructor(
             } else combine(
                 channelDao.search(providerId, ftsQuery, GLOBAL_SEARCH_LIMIT),
                 preferencesRepository.parentalControlLevel,
-                parentalControlManager.unlockedCategoriesForProvider(providerId)
-            ) { entities, level, unlockedCats ->
+                parentalControlManager.unlockedCategoriesForProvider(providerId),
+                preferencesRepository.liveChannelNumberingMode
+            ) { entities, level, unlockedCats, numberingMode ->
                 val filtered = if (level == 2) {
                     entities.filter { entity ->
                         val isUnlocked = entity.categoryId != null && unlockedCats.contains(entity.categoryId)
@@ -142,7 +145,7 @@ class ChannelRepositoryImpl @Inject constructor(
                     entities
                 }
 
-                groupAndMapChannels(filtered, unlockedCats)
+                applyNumbering(groupAndMapChannels(filtered, unlockedCats), numberingMode)
                     .rankSearchResults(query) { it.name }
             }
         }
@@ -197,9 +200,13 @@ class ChannelRepositoryImpl @Inject constructor(
     ): Flow<List<Channel>> = combine(
         source,
         preferencesRepository.parentalControlLevel,
-        parentalControlManager.unlockedCategoriesForProvider(providerId)
-    ) { entities, level, unlockedCats ->
-        groupAndMapChannels(applyVisibilityFilter(entities, level, unlockedCats), unlockedCats)
+        parentalControlManager.unlockedCategoriesForProvider(providerId),
+        preferencesRepository.liveChannelNumberingMode
+    ) { entities, level, unlockedCats, numberingMode ->
+        applyNumbering(
+            groupAndMapChannels(applyVisibilityFilter(entities, level, unlockedCats), unlockedCats),
+            numberingMode
+        )
     }
 
     private fun groupAndMapChannels(entities: List<ChannelEntity>, unlockedCats: Set<Long>): List<Channel> {
@@ -260,6 +267,17 @@ class ChannelRepositoryImpl @Inject constructor(
 
     private fun sortChannelsByNumber(channels: List<Channel>): List<Channel> =
         channels.sortedWith(channelNumberComparator)
+
+    private fun applyNumbering(
+        channels: List<Channel>,
+        numberingMode: ChannelNumberingMode
+    ): List<Channel> =
+        when (numberingMode) {
+            ChannelNumberingMode.GROUP -> channels.mapIndexed { index, channel ->
+                channel.copy(number = index + 1)
+            }
+            ChannelNumberingMode.PROVIDER -> channels
+        }
 
     private fun channelFlow(providerId: Long, categoryId: Long): Flow<List<ChannelEntity>> =
         if (categoryId == ChannelRepository.ALL_CHANNELS_ID) {

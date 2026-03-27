@@ -84,7 +84,10 @@ fun SeriesDetailScreen(
                 .background(AppColors.Canvas),
             contentAlignment = Alignment.Center
         ) {
-            Text(stringResource(R.string.series_not_found), color = AppColors.Live)
+            Text(
+                text = uiState.error ?: stringResource(R.string.series_not_found),
+                color = AppColors.Live
+            )
         }
         return
     }
@@ -197,7 +200,11 @@ private fun SeriesDetailContent(
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 StatusPill(label = stringResource(R.string.nav_series), containerColor = AppColors.BrandMuted)
                                 series.rating.takeIf { it > 0f }?.let {
-                                    StatusPill(label = "RTG ${String.format("%.1f", it)}", containerColor = AppColors.Warning, contentColor = Color.Black)
+                                    StatusPill(
+                                        label = stringResource(R.string.label_rating, String.format("%.1f", it)),
+                                        containerColor = AppColors.Warning,
+                                        contentColor = Color.Black
+                                    )
                                 }
                                 if (unwatchedEpisodeCount > 0) {
                                     StatusPill(
@@ -256,7 +263,11 @@ private fun SeriesDetailContent(
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 StatusPill(label = stringResource(R.string.nav_series), containerColor = AppColors.BrandMuted)
                                 series.rating.takeIf { it > 0f }?.let {
-                                    StatusPill(label = "RTG ${String.format("%.1f", it)}", containerColor = AppColors.Warning, contentColor = Color.Black)
+                                    StatusPill(
+                                        label = stringResource(R.string.label_rating, String.format("%.1f", it)),
+                                        containerColor = AppColors.Warning,
+                                        contentColor = Color.Black
+                                    )
                                 }
                                 if (unwatchedEpisodeCount > 0) {
                                     StatusPill(

@@ -10,6 +10,17 @@ data class VodDialogSelection<T>(
     val groupMemberships: List<Long>
 )
 
+private fun toStoredVodGroupId(groupId: Long): Long = kotlin.math.abs(groupId)
+
+private fun toVirtualVodGroupId(groupId: Long): Long = -kotlin.math.abs(groupId)
+
+fun matchesVodGroupMembership(storedGroupId: Long?, categoryId: Long): Boolean {
+    if (storedGroupId == null) return false
+    val normalizedStored = kotlin.math.abs(storedGroupId)
+    val normalizedCategory = kotlin.math.abs(categoryId)
+    return normalizedStored == normalizedCategory
+}
+
 suspend fun <T> loadVodDialogSelection(
     item: T,
     itemId: Long,
@@ -18,6 +29,7 @@ suspend fun <T> loadVodDialogSelection(
     copyWithFavorite: (T, Boolean) -> T
 ): VodDialogSelection<T> {
     val memberships = favoriteRepository.getGroupMemberships(itemId, contentType)
+        .map(::toVirtualVodGroupId)
     val isFavorite = favoriteRepository.isFavorite(itemId, contentType)
     return VodDialogSelection(
         selectedItem = copyWithFavorite(item, isFavorite),
@@ -45,13 +57,14 @@ suspend fun updateVodGroupMembership(
     shouldBeMember: Boolean,
     favoriteRepository: FavoriteRepository
 ): List<Long> {
-    val encodedGroupId = -groupId
+    val encodedGroupId = toStoredVodGroupId(groupId)
     if (shouldBeMember) {
         favoriteRepository.addFavorite(itemId, contentType, groupId = encodedGroupId)
     } else {
         favoriteRepository.removeFavorite(itemId, contentType, groupId = encodedGroupId)
     }
     return favoriteRepository.getGroupMemberships(itemId, contentType)
+        .map(::toVirtualVodGroupId)
 }
 
 suspend fun createVodGroup(

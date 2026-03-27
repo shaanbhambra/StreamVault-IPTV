@@ -378,7 +378,7 @@ private fun PosterCard(
     subtitle: String?,
     modifier: Modifier = Modifier
 ) {
-    val posterShape = RoundedCornerShape(20.dp)
+    val posterShape = RoundedCornerShape(12.dp)
 
     Box(
         modifier = modifier
@@ -405,7 +405,7 @@ private fun PosterCard(
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(posterShape),
-                contentScale = ContentScale.Fit
+                contentScale = ContentScale.Crop
             )
         }
 

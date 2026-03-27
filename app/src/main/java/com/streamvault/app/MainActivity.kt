@@ -13,6 +13,7 @@ import androidx.lifecycle.lifecycleScope
 import com.streamvault.app.cast.CastManager
 import com.streamvault.app.cast.CastRouteChooserActivity
 import com.streamvault.app.device.isTelevisionDevice
+import com.streamvault.app.localization.resolveAppLocale
 import com.streamvault.app.navigation.AppNavigation
 import com.streamvault.app.navigation.ExternalNavigationRequest
 import com.streamvault.app.navigation.PlayerNavigationRequest
@@ -108,16 +109,14 @@ class MainActivity : ComponentActivity() {
             val currentContext = LocalContext.current
             
             val configuration = remember(appLanguage) {
-                val conf = Configuration(currentContext.resources.configuration)
-                if (appLanguage != "system") {
-                    val locale = Locale(appLanguage)
-                    Locale.setDefault(locale)
-                    conf.setLocale(locale)
-                    conf.setLayoutDirection(locale)
-                } else {
-                    conf.setLocale(Locale.getDefault())
-                    conf.setLayoutDirection(Locale.getDefault())
-                }
+                val locale = resolveAppLocale(
+                    preferredLanguageTag = appLanguage,
+                    baseConfiguration = this@MainActivity.resources.configuration
+                )
+                val conf = Configuration(this@MainActivity.resources.configuration)
+                Locale.setDefault(locale)
+                conf.setLocale(locale)
+                conf.setLayoutDirection(locale)
                 conf
             }
             val localizedContext = remember(configuration, currentContext) {

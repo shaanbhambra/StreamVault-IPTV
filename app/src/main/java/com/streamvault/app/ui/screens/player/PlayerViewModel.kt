@@ -16,6 +16,7 @@ import com.streamvault.data.remote.xtream.XtreamStreamUrlResolver
 import com.streamvault.data.security.CredentialDecryptionException
 import com.streamvault.domain.manager.RecordingManager
 import com.streamvault.domain.model.Category
+import com.streamvault.domain.model.ChannelNumberingMode
 import com.streamvault.domain.model.Program
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.DecoderMode
@@ -230,6 +231,7 @@ class PlayerViewModel @Inject constructor(
     private var currentArtworkUrl: String? = null
     private var currentResolvedPlaybackUrl: String = ""
     private var pendingCatchUpUrls: List<String> = emptyList()
+    private var channelNumberingMode: ChannelNumberingMode = ChannelNumberingMode.GROUP
 
     val castConnectionState: StateFlow<CastConnectionState> = castManager.connectionState
 
@@ -1075,10 +1077,18 @@ class PlayerViewModel @Inject constructor(
                 channelRepository.getChannelsByNumber(providerId, categoryId)
             }
             
-            flows.collect { channels ->
-                val numberedChannels = channels
-                channelList = numberedChannels
-                _currentChannelList.value = numberedChannels
+            combine(flows, preferencesRepository.liveChannelNumberingMode) { channels, numberingMode ->
+                val displayedChannels = when (numberingMode) {
+                    ChannelNumberingMode.GROUP -> channels.mapIndexed { index, channel ->
+                        channel.copy(number = index + 1)
+                    }
+                    ChannelNumberingMode.PROVIDER -> channels
+                }
+                numberingMode to displayedChannels
+            }.collect { (numberingMode, displayedChannels) ->
+                channelNumberingMode = numberingMode
+                channelList = displayedChannels
+                _currentChannelList.value = displayedChannels
                 // Recalculate index based on initial ID or URL
                 if (initialChannelId != -1L) {
                     currentChannelIndex = channelList.indexOfFirst { it.id == initialChannelId }
@@ -1108,24 +1118,38 @@ class PlayerViewModel @Inject constructor(
         }
 
         recentChannelsJob = viewModelScope.launch {
-            playbackHistoryRepository.getRecentlyWatchedByProvider(currentProviderId, limit = 12)
-                .map { history ->
-                    history.asSequence()
-                        .filter { it.contentType == ContentType.LIVE }
-                        .sortedByDescending { it.lastWatchedAt }
-                        .distinctBy { it.contentId }
-                        .map { it.contentId }
-                        .toList()
-                }
-                .flatMapLatest { ids ->
-                    if (ids.isEmpty()) flowOf(emptyList())
-                    else channelRepository.getChannelsByIds(ids).map { channels ->
-                        val channelMap = channels.associateBy { it.id }
-                        ids.mapNotNull { channelMap[it] }
+            combine(
+                playbackHistoryRepository.getRecentlyWatchedByProvider(currentProviderId, limit = 12)
+                    .map { history ->
+                        history.asSequence()
+                            .filter { it.contentType == ContentType.LIVE }
+                            .sortedByDescending { it.lastWatchedAt }
+                            .distinctBy { it.contentId }
+                            .map { it.contentId }
+                            .toList()
                     }
+                    .flatMapLatest { ids ->
+                        if (ids.isEmpty()) flowOf(emptyList())
+                        else channelRepository.getChannelsByIds(ids).map { channels ->
+                            val channelMap = channels.associateBy { it.id }
+                            ids.mapNotNull { channelMap[it] }
+                        }
+                    },
+                preferencesRepository.liveChannelNumberingMode
+            ) { channels, numberingMode ->
+                numberingMode to channels
+            }.collect { (numberingMode, channels) ->
+                channelNumberingMode = numberingMode
+                val currentListNumbers = channelList.withIndex().associate { (index, channel) ->
+                    channel.id to resolveChannelNumber(channel, index)
                 }
-                .collect { channels ->
-                    _recentChannels.value = channels.filterNot { it.id == currentContentId }
+                _recentChannels.value = channels
+                        .filterNot { it.id == currentContentId }
+                        .map { channel ->
+                            currentListNumbers[channel.id]?.let { number ->
+                                channel.copy(number = number)
+                            } ?: channel
+                        }
                 }
         }
     }
@@ -1627,7 +1651,10 @@ class PlayerViewModel @Inject constructor(
     private fun resolveChannelNumber(
         channel: com.streamvault.domain.model.Channel,
         index: Int
-    ): Int = channel.number.takeIf { number -> number > 0 } ?: (index + 1)
+    ): Int = when (channelNumberingMode) {
+        ChannelNumberingMode.GROUP -> if (index >= 0) index + 1 else channel.number.takeIf { number -> number > 0 } ?: 0
+        ChannelNumberingMode.PROVIDER -> channel.number.takeIf { number -> number > 0 } ?: if (index >= 0) index + 1 else 0
+    }
 
     fun play() = playerEngine.play()
     fun pause() = playerEngine.pause()
@@ -1939,6 +1966,17 @@ class PlayerViewModel @Inject constructor(
             delay(5000)
             _showControls.value = false
         }
+    }
+
+    fun refreshControlsAutoHide() {
+        if (_showControls.value) {
+            hideControlsAfterDelay()
+        }
+    }
+
+    fun cancelControlsAutoHide() {
+        controlsHideJob?.cancel()
+        controlsHideJob = null
     }
 
     private fun hideZapOverlayAfterDelay() {

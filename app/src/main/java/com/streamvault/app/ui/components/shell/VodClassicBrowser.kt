@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,8 +28,10 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import com.streamvault.app.R
 import com.streamvault.app.ui.design.AppColors
 import com.streamvault.app.ui.design.FocusSpec
+import androidx.compose.ui.res.stringResource
 
 data class VodClassicCategoryOption(
     val key: String,
@@ -38,7 +39,8 @@ data class VodClassicCategoryOption(
     val count: Int,
     val isSelected: Boolean,
     val onClick: () -> Unit,
-    val onLongClick: (() -> Unit)? = null
+    val onLongClick: (() -> Unit)? = null,
+    val isLocked: Boolean = false
 )
 
 @Composable
@@ -100,6 +102,14 @@ fun VodClassicSplitLayout(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
+                        if (category.isLocked) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.home_locked_short),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AppColors.BrandStrong
+                            )
+                        }
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = category.count.toString(),
@@ -116,7 +126,7 @@ fun VodClassicSplitLayout(
                 .weight(1f)
                 .fillMaxHeight()
                 .background(AppColors.Canvas, RoundedCornerShape(28.dp))
-                .padding(horizontal = 18.dp, vertical = 18.dp)
+                .padding(horizontal = 16.dp, vertical = 14.dp)
         ) {
             content()
         }
@@ -130,31 +140,73 @@ fun VodClassicContentHeader(
     actions: List<VodActionChip>,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    Row(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineSmall,
-            color = AppColors.TextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        if (subtitle.isNotBlank()) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
             Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = AppColors.TextSecondary,
+                text = title,
+                style = MaterialTheme.typography.headlineSmall,
+                color = AppColors.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            if (subtitle.isNotBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
-        VodActionChipRow(
-            actions = actions,
-            modifier = Modifier
-                .fillMaxWidth()
-                .widthIn(max = 900.dp)
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            actions.forEach { action ->
+                VodClassicHeaderActionButton(action = action)
+            }
+        }
+    }
+}
+
+@Composable
+private fun VodClassicHeaderActionButton(
+    action: VodActionChip,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = action.onClick,
+        modifier = modifier,
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(18.dp)),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = AppColors.SurfaceElevated,
+            focusedContainerColor = AppColors.SurfaceEmphasis,
+            contentColor = AppColors.TextPrimary,
+            focusedContentColor = AppColors.TextPrimary
+        ),
+        border = ClickableSurfaceDefaults.border(
+            focusedBorder = Border(
+                border = BorderStroke(FocusSpec.BorderWidth, AppColors.Focus),
+                shape = RoundedCornerShape(18.dp)
+            )
+        ),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
+    ) {
+        Text(
+            text = action.label,
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

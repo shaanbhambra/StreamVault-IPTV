@@ -4,6 +4,7 @@ import com.streamvault.app.ui.model.guideLookupKey
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -29,6 +34,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,14 +48,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -62,9 +74,9 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.streamvault.app.R
+import com.streamvault.app.device.rememberIsTelevisionDevice
 import com.streamvault.app.ui.components.ChannelLogoBadge
 import com.streamvault.app.navigation.Routes
-import com.streamvault.app.ui.components.SearchInput
 import com.streamvault.app.ui.components.SelectionChip
 import com.streamvault.app.ui.components.SelectionChipRow
 import com.streamvault.app.ui.components.shell.AppNavigationChrome
@@ -564,9 +576,12 @@ private fun GuideProgramSearchRow(
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit,
     focusRequester: FocusRequester? = null,
+    autoRequestFocus: Boolean = false,
     contentPadding: PaddingValues = PaddingValues(horizontal = 24.dp, vertical = 12.dp),
-    showLabel: Boolean = true
+    showLabel: Boolean = true,
+    onSearchFieldActivated: (() -> Unit)? = null
 ) {
+    val resolvedFocusRequester = focusRequester ?: remember { FocusRequester() }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -585,17 +600,110 @@ private fun GuideProgramSearchRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            SearchInput(
+            GuideSearchField(
                 value = query,
                 onValueChange = onQueryChange,
                 placeholder = stringResource(R.string.epg_search_placeholder),
                 modifier = Modifier.weight(1f),
-                focusRequester = focusRequester ?: remember { FocusRequester() }
+                focusRequester = resolvedFocusRequester,
+                autoRequestFocus = autoRequestFocus,
+                onActivated = onSearchFieldActivated
             )
-            if (query.isNotBlank()) {
-                GuideShortcutChip(
-                    label = stringResource(R.string.epg_clear_search),
-                    onClick = onClear
+            Box(modifier = Modifier.widthIn(min = 104.dp), contentAlignment = Alignment.CenterEnd) {
+                if (query.isNotBlank()) {
+                    GuideShortcutChip(
+                        label = stringResource(R.string.epg_clear_search),
+                        onClick = onClear
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuideSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+    focusRequester: FocusRequester = remember { FocusRequester() },
+    autoRequestFocus: Boolean = false,
+    onActivated: (() -> Unit)? = null
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(autoRequestFocus) {
+        if (autoRequestFocus) {
+            focusRequester.requestFocus()
+        }
+    }
+
+    Surface(
+        onClick = {
+            focusRequester.requestFocus()
+            keyboardController?.show()
+            onActivated?.invoke()
+        },
+        modifier = modifier.height(40.dp),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (isFocused) SurfaceHighlight else SurfaceElevated,
+            focusedContainerColor = SurfaceHighlight,
+            contentColor = OnSurface,
+            focusedContentColor = OnSurface
+        ),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+        border = ClickableSurfaceDefaults.border(
+            focusedBorder = Border(
+                border = BorderStroke(2.dp, FocusBorder),
+                shape = RoundedCornerShape(10.dp)
+            )
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            androidx.tv.material3.Icon(
+                imageVector = androidx.compose.material.icons.Icons.Default.Search,
+                contentDescription = null,
+                tint = if (isFocused) Primary else OnSurfaceDim
+            )
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                if (value.isBlank()) {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OnSurfaceDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester)
+                        .focusable()
+                        .onFocusChanged {
+                            isFocused = it.isFocused
+                            if (it.isFocused) {
+                                onActivated?.invoke()
+                            }
+                        },
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = OnSurface),
+                    singleLine = true,
+                    cursorBrush = SolidColor(Primary),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() })
                 )
             }
         }
@@ -1129,15 +1237,15 @@ private fun ImmersiveGuideHero(
     }
 
     Surface(
-        modifier = modifier.height(108.dp),
+        modifier = modifier.height(96.dp),
         colors = SurfaceDefaults.colors(containerColor = SurfaceElevated),
         shape = RoundedCornerShape(20.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             val channel = selection?.channel
@@ -1145,19 +1253,22 @@ private fun ImmersiveGuideHero(
                 channelName = channel?.name ?: stringResource(R.string.epg_title),
                 logoUrl = channel?.logoUrl,
                 modifier = Modifier
-                    .width(64.dp)
-                    .height(64.dp),
+                    .width(54.dp)
+                    .height(54.dp),
                 shape = RoundedCornerShape(12.dp)
             )
 
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                verticalArrangement = Arrangement.spacedBy(1.dp)
             ) {
                 val program = selection?.program
                 Text(
                     text = program?.title ?: channel?.name ?: stringResource(R.string.epg_title),
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontSize = 15.sp,
+                        lineHeight = 18.sp
+                    ),
                     color = OnSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -1182,7 +1293,7 @@ private fun ImmersiveGuideHero(
                 if (program != null) {
                     Text(
                         text = "${format.format(Date(program.startTime))} - ${format.format(Date(program.endTime))}",
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(lineHeight = 11.sp),
                         color = OnSurface
                     )
                     if (currentTime in program.startTime until program.endTime) {
@@ -1199,7 +1310,7 @@ private fun ImmersiveGuideHero(
                         text = program.description.ifBlank { stringResource(R.string.epg_hero_no_program_description) },
                         style = MaterialTheme.typography.labelSmall,
                         color = OnSurfaceDim,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 } else {
@@ -1212,15 +1323,15 @@ private fun ImmersiveGuideHero(
                         text = stringResource(R.string.epg_hero_no_schedule_hint),
                         style = MaterialTheme.typography.labelSmall,
                         color = OnSurfaceDim,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
             Column(
-                modifier = Modifier.widthIn(min = 118.dp, max = 136.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                modifier = Modifier.widthIn(min = 112.dp, max = 128.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 GuideHeroBadge(text = stringResource(R.string.epg_schedule_summary_short, channelsWithSchedule, channelCount))
                 if (isRefreshing) {
@@ -1287,12 +1398,12 @@ private fun GuideToolbarRow(
 ) {
     Row(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         GuideToolbarButton(
             label = selectedCategoryName,
-            modifier = Modifier.widthIn(min = 220.dp, max = 300.dp),
+            modifier = Modifier.widthIn(min = 200.dp, max = 280.dp),
             onClick = onOpenCategoryPicker,
             onFocused = onGuideInteract
         )
@@ -1342,8 +1453,8 @@ private fun GuideToolbarButton(
     ) {
         Text(
             text = label,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.labelMedium,
             color = OnSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -1392,9 +1503,11 @@ private fun GuideSearchOverlay(
     onDismiss: () -> Unit
 ) {
     val searchFocusRequester = remember { FocusRequester() }
+
     LaunchedEffect(Unit) {
         searchFocusRequester.requestFocus()
     }
+
     GuideModalDialog(
         onDismiss = onDismiss,
         contentAlignment = Alignment.TopCenter
@@ -1431,6 +1544,7 @@ private fun GuideSearchOverlay(
                     onQueryChange = onQueryChange,
                     onClear = onClear,
                     focusRequester = searchFocusRequester,
+                    autoRequestFocus = true,
                     contentPadding = PaddingValues(0.dp),
                     showLabel = false
                 )
@@ -1746,12 +1860,12 @@ fun EpgGrid(
     onChannelFocused: (Channel, Program?) -> Unit,
     onProgramFocused: (Channel, Program) -> Unit
 ) {
-    val channelRailWidth = 184.dp
-    val timelineGap = 6.dp
+    val channelRailWidth = 180.dp
+    val timelineGap = 4.dp
     val rowHeight = when (density) {
-        GuideDensity.COMPACT -> 36.dp
-        GuideDensity.COMFORTABLE -> 42.dp
-        GuideDensity.CINEMATIC -> 50.dp
+        GuideDensity.COMPACT -> 38.dp
+        GuideDensity.COMFORTABLE -> 44.dp
+        GuideDensity.CINEMATIC -> 52.dp
     }
     val horizontalScrollState = rememberScrollState()
 
@@ -1786,7 +1900,7 @@ fun EpgGrid(
             Spacer(modifier = Modifier.height(4.dp))
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 itemsIndexed(
                     items = channels,
@@ -1806,6 +1920,7 @@ fun EpgGrid(
                         timelineGap = timelineGap,
                         timelineViewportWidth = timelineViewportWidth,
                         totalTimelineWidth = totalTimelineWidth,
+                        density = density,
                         rowHeight = rowHeight,
                         markerStepMs = markerStepMs,
                         scrollState = horizontalScrollState,
@@ -1861,7 +1976,7 @@ private fun GuideTimelineHeader(
         Spacer(modifier = Modifier.width(channelRailWidth + timelineGap))
         Column(
             modifier = Modifier.width(timelineViewportWidth),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1870,7 +1985,7 @@ private fun GuideTimelineHeader(
             ) {
                 Text(
                     text = stringResource(R.string.epg_timeline_label),
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     color = OnSurfaceDim
                 )
                 Text(
@@ -1878,14 +1993,14 @@ private fun GuideTimelineHeader(
                         R.string.epg_timeline_range_label,
                         formatWindowDuration(totalDuration)
                     ),
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     color = OnSurfaceDim
                 )
             }
             Box(
                 modifier = Modifier
                     .width(timelineViewportWidth)
-                    .height(22.dp)
+                    .height(20.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -1895,14 +2010,14 @@ private fun GuideTimelineHeader(
                     Box(
                         modifier = Modifier
                             .width(totalTimelineWidth)
-                            .height(22.dp)
+                            .height(20.dp)
                     ) {
                         hourMarkers.forEach { marker ->
                             val markerRatio = ((marker - windowStart).toFloat() / totalDuration.toFloat()).coerceIn(0f, 1f)
                             val markerOffset = totalTimelineWidth * markerRatio
                             Column(
                                 modifier = Modifier.padding(start = markerOffset),
-                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 Text(
                                     text = hourFormat.format(Date(marker)),
@@ -1912,7 +2027,7 @@ private fun GuideTimelineHeader(
                                 Box(
                                     modifier = Modifier
                                         .width(1.dp)
-                                        .height(10.dp)
+                                        .height(8.dp)
                                         .background(Color.White.copy(alpha = 0.16f))
                                 )
                             }
@@ -1950,6 +2065,7 @@ fun EpgRow(
     timelineGap: Dp,
     timelineViewportWidth: Dp,
     totalTimelineWidth: Dp,
+    density: GuideDensity,
     rowHeight: Dp,
     markerStepMs: Long,
     scrollState: androidx.compose.foundation.ScrollState,
@@ -1961,6 +2077,16 @@ fun EpgRow(
     var isFocused by remember { mutableStateOf(false) }
     val totalDuration = (windowEnd - windowStart).coerceAtLeast(1L)
     val currentProgram = programs.firstOrNull { now in it.startTime..it.endTime }
+    val channelPaddingVertical = when (density) {
+        GuideDensity.COMPACT -> 3.dp
+        GuideDensity.COMFORTABLE -> 4.dp
+        GuideDensity.CINEMATIC -> 5.dp
+    }
+    val channelLogoSize = when (density) {
+        GuideDensity.COMPACT -> 22.dp
+        GuideDensity.COMFORTABLE -> 24.dp
+        GuideDensity.CINEMATIC -> 26.dp
+    }
 
     Row(
         modifier = Modifier
@@ -1993,7 +2119,7 @@ fun EpgRow(
         ) {
             Row(
                 modifier = Modifier
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .padding(horizontal = 7.dp, vertical = channelPaddingVertical)
                     .fillMaxSize(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -2002,37 +2128,46 @@ fun EpgRow(
                     channelName = channel.name,
                     logoUrl = channel.logoUrl,
                     modifier = Modifier
-                        .width(24.dp)
-                        .height(24.dp),
+                        .width(channelLogoSize)
+                        .height(channelLogoSize),
                     shape = RoundedCornerShape(6.dp)
                 )
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(1.dp)
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
                     Text(
                         text = "${channel.number}. ${channel.name}",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.labelLarge,
                         color = if (isFocused) TextPrimary else OnSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = currentProgram?.title ?: stringResource(R.string.epg_no_schedule_short),
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.labelSmall,
                         color = OnSurfaceDim,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
                 if (isFavorite || channel.catchUpSupported) {
-                    Text(
-                        text = if (channel.catchUpSupported) stringResource(R.string.player_archive_badge) else stringResource(R.string.epg_favorite_badge),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                color = Primary.copy(alpha = 0.16f),
+                                shape = CircleShape
+                            )
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = if (channel.catchUpSupported) stringResource(R.string.player_archive_badge) else stringResource(R.string.epg_favorite_badge),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
@@ -2044,6 +2179,7 @@ fun EpgRow(
                 .width(timelineViewportWidth)
                 .fillMaxHeight()
                 .background(SurfaceElevated, RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(8.dp))
         ) {
             Row(
                 modifier = Modifier
@@ -2092,6 +2228,7 @@ fun EpgRow(
                     programs.forEach { program ->
                         ProgramItem(
                             program = program,
+                            density = density,
                             isCurrent = now in program.startTime until program.endTime,
                             now = now,
                             windowStart = windowStart,
@@ -2111,6 +2248,7 @@ fun EpgRow(
 @Composable
 fun ProgramItem(
     program: Program,
+    density: GuideDensity,
     isCurrent: Boolean,
     now: Long,
     windowStart: Long,
@@ -2131,13 +2269,55 @@ fun ProgramItem(
     val widthRatio = ((visibleEnd - visibleStart).toFloat() / totalDuration.toFloat()).coerceIn(0f, 1f)
     val itemStart = totalTimelineWidth * startRatio
     val itemWidth = (totalTimelineWidth * widthRatio).coerceAtLeast(72.dp)
+    val isCompactCell = itemWidth < 148.dp
+    val isVeryCompactCell = itemWidth < 116.dp
+    val outerVerticalPadding = when (density) {
+        GuideDensity.COMPACT -> 2.dp
+        GuideDensity.COMFORTABLE -> 2.dp
+        GuideDensity.CINEMATIC -> 3.dp
+    }
+    val innerHorizontalPadding = when {
+        isVeryCompactCell -> 5.dp
+        isCompactCell -> 6.dp
+        else -> 8.dp
+    }
+    val innerVerticalPadding = when (density) {
+        GuideDensity.COMPACT -> 2.dp
+        GuideDensity.COMFORTABLE -> 3.dp
+        GuideDensity.CINEMATIC -> 4.dp
+    }
+    val titleStyle = when {
+        isVeryCompactCell -> MaterialTheme.typography.labelSmall.copy(
+            fontSize = 10.sp,
+            lineHeight = 11.sp
+        )
+        isCompactCell || density == GuideDensity.COMPACT -> MaterialTheme.typography.labelMedium.copy(
+            fontSize = 11.sp,
+            lineHeight = 12.sp
+        )
+        else -> MaterialTheme.typography.labelLarge.copy(
+            fontSize = 12.sp,
+            lineHeight = 14.sp
+        )
+    }
+    val timeStyle = when {
+        isCompactCell || density == GuideDensity.COMPACT -> MaterialTheme.typography.labelSmall.copy(
+            fontSize = 9.sp,
+            lineHeight = 10.sp
+        )
+        else -> MaterialTheme.typography.labelSmall.copy(
+            fontSize = 10.sp,
+            lineHeight = 11.sp
+        )
+    }
 
     Surface(
         onClick = onClick,
         modifier = Modifier
-            .padding(start = itemStart, top = 4.dp, bottom = 4.dp)
+            .padding(start = itemStart, top = outerVerticalPadding, bottom = outerVerticalPadding)
             .width(itemWidth)
             .fillMaxHeight()
+            .clip(RoundedCornerShape(8.dp))
             .onFocusChanged {
                 if (it.isFocused && !isFocused) {
                     onFocused()
@@ -2158,25 +2338,26 @@ fun ProgramItem(
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .padding(horizontal = innerHorizontalPadding, vertical = innerVerticalPadding)
                 .fillMaxSize(),
             verticalArrangement = Arrangement.Center
         ) {
             Text(
                 text = program.title,
-                style = MaterialTheme.typography.labelLarge,
+                style = titleStyle,
                 color = if (isFocused) TextPrimary else if (isCurrent) Primary else OnSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = "$startStr - $endStr",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (isFocused) TextSecondary else OnSurfaceDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            if (!isVeryCompactCell) {
+                Text(
+                    text = "$startStr - $endStr",
+                    style = timeStyle,
+                    color = if (isFocused) TextSecondary else OnSurfaceDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -2440,7 +2621,9 @@ private fun GuideCategoryPickerDialog(
     onCategorySelected: (Long) -> Unit
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    var shouldFocusFirstCategory by rememberSaveable { mutableStateOf(true) }
     val searchFocusRequester = remember { FocusRequester() }
+    val firstCategoryFocusRequester = remember { FocusRequester() }
     val filteredCategories = remember(categories, query) {
         val trimmed = query.trim()
         val baseCategories = if (trimmed.isBlank()) {
@@ -2454,10 +2637,6 @@ private fun GuideCategoryPickerDialog(
             addAll(baseCategories.filterNot { it.id == selectedCategoryId })
         }
     }
-    LaunchedEffect(Unit) {
-        searchFocusRequester.requestFocus()
-    }
-
     GuideModalDialog(onDismiss = onDismiss) {
         Surface(
             modifier = Modifier
@@ -2502,7 +2681,10 @@ private fun GuideCategoryPickerDialog(
                     onClear = { query = "" },
                     focusRequester = searchFocusRequester,
                     contentPadding = PaddingValues(0.dp),
-                    showLabel = false
+                    showLabel = false,
+                    onSearchFieldActivated = {
+                        shouldFocusFirstCategory = false
+                    }
                 )
 
                 LazyColumn(
@@ -2516,12 +2698,22 @@ private fun GuideCategoryPickerDialog(
                         val isSelected = category.id == selectedCategoryId
                         Surface(
                             onClick = { onCategorySelected(category.id) },
+                            modifier = if (category.id == filteredCategories.firstOrNull()?.id) {
+                                Modifier.focusRequester(firstCategoryFocusRequester)
+                            } else {
+                                Modifier
+                            },
                             colors = ClickableSurfaceDefaults.colors(
                                 containerColor = if (isSelected) Primary.copy(alpha = 0.18f) else SurfaceHighlight,
-                                focusedContainerColor = SurfaceElevated,
+                                focusedContainerColor = if (isSelected) {
+                                    Primary.copy(alpha = 0.22f)
+                                } else {
+                                    SurfaceHighlight
+                                },
                                 contentColor = if (isSelected) Primary else OnSurface,
-                                focusedContentColor = OnSurface
+                                focusedContentColor = if (isSelected) Primary else OnSurface
                             ),
+                            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
                             shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(14.dp)),
                             border = ClickableSurfaceDefaults.border(
                                 focusedBorder = Border(
@@ -2563,6 +2755,13 @@ private fun GuideCategoryPickerDialog(
                     }
                 }
             }
+        }
+    }
+
+    LaunchedEffect(filteredCategories, shouldFocusFirstCategory) {
+        if (shouldFocusFirstCategory && filteredCategories.isNotEmpty()) {
+            firstCategoryFocusRequester.requestFocus()
+            shouldFocusFirstCategory = false
         }
     }
 }

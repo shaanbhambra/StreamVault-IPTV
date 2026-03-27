@@ -40,39 +40,43 @@ class SeriesDetailViewModel @Inject constructor(
 
     private fun loadSeriesDetails() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true) }
-            
+            try {
+                _uiState.update { it.copy(isLoading = true, error = null) }
 
+                val provider = providerRepository.getActiveProvider().first()
+                if (provider == null) {
+                    _uiState.update { it.copy(isLoading = false, error = "No active provider") }
+                    return@launch
+                }
 
-            // We need providerId first
-            val provider = providerRepository.getActiveProvider().first()
-            if (provider == null) {
-                _uiState.update { it.copy(isLoading = false, error = "No active provider") }
-                return@launch
-            }
+                observeUnwatchedCount(provider.id)
 
-            observeUnwatchedCount(provider.id)
-
-            // Fetch details (repository resolves remote provider IDs internally when needed).
-            val result = seriesRepository.getSeriesDetails(provider.id, seriesId)
-            
-            when (result) {
-                is Result.Success -> {
-                    _uiState.update { 
-                        it.copy(
-                            isLoading = false, 
-                            series = result.data,
-                            selectedSeason = result.data.seasons.firstOrNull()
-                        ) 
+                when (val result = seriesRepository.getSeriesDetails(provider.id, seriesId)) {
+                    is Result.Success -> {
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                series = result.data,
+                                selectedSeason = result.data.seasons.firstOrNull(),
+                                error = null
+                            )
+                        }
+                    }
+                    is Result.Error -> {
+                        _uiState.update {
+                            it.copy(isLoading = false, error = result.message)
+                        }
+                    }
+                    is Result.Loading -> {
+                        _uiState.update { it.copy(isLoading = true) }
                     }
                 }
-                is Result.Error -> {
-                    _uiState.update { 
-                        it.copy(isLoading = false, error = result.message) 
-                    }
-                }
-                is Result.Loading -> {
-                     _uiState.update { it.copy(isLoading = true) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = e.message ?: "Failed to load series details"
+                    )
                 }
             }
         }

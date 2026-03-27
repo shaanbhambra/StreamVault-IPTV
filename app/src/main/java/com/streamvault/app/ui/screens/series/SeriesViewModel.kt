@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.streamvault.app.ui.model.applyProviderCategoryDisplayPreferences
 import com.streamvault.app.ui.model.VodViewMode
 import com.streamvault.data.preferences.PreferencesRepository
+import com.streamvault.domain.manager.ParentalControlManager
 import com.streamvault.domain.model.Category
 import com.streamvault.domain.model.CategorySortMode
 import com.streamvault.domain.model.ContentType
@@ -29,6 +30,7 @@ import com.streamvault.app.ui.screens.vod.buildVodSearchCatalog
 import com.streamvault.app.ui.screens.vod.loadVodDialogSelection
 import com.streamvault.app.ui.screens.vod.loadVodReorderItems
 import com.streamvault.app.ui.screens.vod.markVodFavorites
+import com.streamvault.app.ui.screens.vod.matchesVodGroupMembership
 import com.streamvault.app.ui.screens.vod.moveVodItemDown
 import com.streamvault.app.ui.screens.vod.moveVodItemUp
 import com.streamvault.app.ui.screens.vod.selectVodCategory
@@ -72,7 +74,8 @@ class SeriesViewModel @Inject constructor(
     private val playbackHistoryRepository: PlaybackHistoryRepository,
     private val favoriteRepository: FavoriteRepository,
     private val getContinueWatching: GetContinueWatching,
-    private val getCustomCategories: GetCustomCategories
+    private val getCustomCategories: GetCustomCategories,
+    private val parentalControlManager: ParentalControlManager
 ) : ViewModel() {
     private companion object {
         const val UNCATEGORIZED = "Uncategorized"
@@ -93,7 +96,7 @@ class SeriesViewModel @Inject constructor(
                 .filterNotNull()
                 .flatMapLatest { provider ->
                     combine(
-                        favoriteRepository.getFavorites(ContentType.SERIES),
+                        favoriteRepository.getAllFavorites(ContentType.SERIES),
                         getCustomCategories(ContentType.SERIES),
                         seriesRepository.getCategories(provider.id),
                         seriesRepository.getCategoryItemCounts(provider.id),
@@ -196,7 +199,7 @@ class SeriesViewModel @Inject constructor(
                 .filterNotNull()
                 .flatMapLatest { provider ->
                     combine(
-                        favoriteRepository.getFavorites(ContentType.SERIES),
+                        favoriteRepository.getAllFavorites(ContentType.SERIES),
                         getCustomCategories(ContentType.SERIES),
                         seriesRepository.getCategories(provider.id),
                         seriesRepository.getCategoryItemCounts(provider.id),
@@ -298,7 +301,7 @@ class SeriesViewModel @Inject constructor(
                 .filterNotNull()
                 .flatMapLatest { provider ->
                     combine(
-                        favoriteRepository.getFavorites(ContentType.SERIES),
+                        favoriteRepository.getAllFavorites(ContentType.SERIES),
                         playbackHistoryRepository.getRecentlyWatchedByProvider(provider.id, limit = 24),
                         seriesRepository.getTopRatedPreview(provider.id, VodBrowseDefaults.PREVIEW_ROW_LIMIT),
                         seriesRepository.getFreshPreview(provider.id, VodBrowseDefaults.PREVIEW_ROW_LIMIT)
@@ -376,6 +379,17 @@ class SeriesViewModel @Inject constructor(
             preferencesRepository.parentalControlLevel.collect { level ->
                 _uiState.update { it.copy(parentalControlLevel = level) }
             }
+        }
+
+        viewModelScope.launch {
+            providerRepository.getActiveProvider()
+                .filterNotNull()
+                .flatMapLatest { provider ->
+                    parentalControlManager.unlockedCategoriesForProvider(provider.id)
+                }
+                .collectLatest { unlockedIds ->
+                    _uiState.update { it.copy(unlockedCategoryIds = unlockedIds) }
+                }
         }
 
         viewModelScope.launch {
@@ -463,6 +477,16 @@ class SeriesViewModel @Inject constructor(
 
     suspend fun verifyPin(pin: String): Boolean {
         return preferencesRepository.verifyParentalPin(pin)
+    }
+
+    fun unlockCategory(category: Category) {
+        viewModelScope.launch {
+            val activeProviderId = providerRepository.getActiveProvider().first()?.id ?: return@launch
+            parentalControlManager.unlockCategory(activeProviderId, kotlin.math.abs(category.id))
+            if (_uiState.value.selectedCategory != category.name) {
+                selectCategory(category.name)
+            }
+        }
     }
 
     fun onShowDialog(series: Series) {
@@ -870,7 +894,7 @@ class SeriesViewModel @Inject constructor(
                 if (customCategory != null) {
                     val ids = request.allFavorites
                         .asSequence()
-                        .filter { it.groupId == -customCategory.id }
+                        .filter { matchesVodGroupMembership(it.groupId, customCategory.id) }
                         .sortedBy { it.position }
                         .map { it.contentId }
                         .toList()
@@ -1085,6 +1109,7 @@ data class SeriesUiState(
     val continueWatching: List<PlaybackHistory> = emptyList(),
     val isLoading: Boolean = true,
     val parentalControlLevel: Int = 0,
+    val unlockedCategoryIds: Set<Long> = emptySet(),
     val showDialog: Boolean = false,
     val selectedSeriesForDialog: Series? = null,
     val categories: List<Category> = emptyList(),

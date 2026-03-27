@@ -5,6 +5,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -19,7 +21,8 @@ fun TvKeyboard(
     onDelete: () -> Unit,
     onClear: () -> Unit,
     onDone: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    initialFocusRequester: FocusRequester? = null
 ) {
     val rows = listOf(
         listOf("A", "B", "C", "D", "E", "F", "G"),
@@ -35,16 +38,22 @@ fun TvKeyboard(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        rows.forEach { rowKeys ->
+        rows.forEachIndexed { rowIndex, rowKeys ->
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                rowKeys.forEach { key ->
+                rowKeys.forEachIndexed { keyIndex, key ->
                     KeyboardButton(
                         text = key,
                         onClick = { onKeyPress(key) },
-                        modifier = Modifier.width(48.dp)
+                        modifier = if (rowIndex == 0 && keyIndex == 0 && initialFocusRequester != null) {
+                            Modifier
+                                .width(48.dp)
+                                .focusRequester(initialFocusRequester)
+                        } else {
+                            Modifier.width(48.dp)
+                        }
                     )
                 }
             }

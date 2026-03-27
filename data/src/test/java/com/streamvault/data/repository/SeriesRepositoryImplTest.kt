@@ -7,6 +7,7 @@ import com.streamvault.data.local.dao.FavoriteDao
 import com.streamvault.data.local.dao.PlaybackHistoryDao
 import com.streamvault.data.local.dao.ProviderDao
 import com.streamvault.data.local.dao.SeriesDao
+import com.streamvault.data.local.entity.SeriesEntity
 import com.streamvault.data.local.entity.ProviderEntity
 import com.streamvault.data.preferences.PreferencesRepository
 import com.streamvault.data.remote.dto.XtreamCategory
@@ -75,6 +76,39 @@ class SeriesRepositoryImplTest {
         assertThat(result).isEmpty()
         verify(seriesDao).replaceCategory(eq(7L), eq(77L), any())
         verify(episodeDao).deleteOrphans()
+    }
+
+    @Test
+    fun `getSeriesDetails falls back to remote series id lookup`() = runTest {
+        val seriesEntity = SeriesEntity(
+            id = 15L,
+            seriesId = 301L,
+            name = "Series",
+            providerId = 7L
+        )
+        whenever(seriesDao.getById(301L)).thenReturn(null)
+        whenever(seriesDao.getBySeriesId(7L, 301L)).thenReturn(seriesEntity)
+        whenever(providerDao.getById(7L)).thenReturn(
+            ProviderEntity(
+                id = 7L,
+                name = "Playlist",
+                type = ProviderType.M3U,
+                serverUrl = "http://example.com",
+                username = "user",
+                password = "pass",
+                status = ProviderStatus.ACTIVE
+            )
+        )
+        whenever(episodeDao.getBySeriesSync(15L)).thenReturn(emptyList())
+
+        val repository = createRepository()
+
+        val result = repository.getSeriesDetails(7L, 301L)
+
+        assertThat(result).isInstanceOf(com.streamvault.domain.model.Result.Success::class.java)
+        val series = (result as com.streamvault.domain.model.Result.Success).data
+        assertThat(series.id).isEqualTo(15L)
+        assertThat(series.seriesId).isEqualTo(301L)
     }
 
     private fun createRepository() = SeriesRepositoryImpl(

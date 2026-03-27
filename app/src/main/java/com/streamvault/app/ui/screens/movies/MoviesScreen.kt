@@ -48,6 +48,7 @@ import com.streamvault.app.ui.components.SavedCategoryContextCard
 import com.streamvault.app.ui.components.SavedCategoryShortcut
 import com.streamvault.app.ui.components.SavedCategoryShortcutsRow
 import com.streamvault.app.ui.theme.*
+import com.streamvault.domain.model.Category
 import com.streamvault.domain.model.LibraryFilterType
 import com.streamvault.domain.model.LibrarySortBy
 import com.streamvault.domain.model.Movie
@@ -97,6 +98,7 @@ fun MoviesScreen(
     var showPinDialog by remember { mutableStateOf(false) }
     var pinError by remember { mutableStateOf<String?>(null) }
     var pendingMovie by remember { mutableStateOf<Movie?>(null) }
+    var pendingCategory by remember { mutableStateOf<Category?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
 
     HandleVodUserMessage(
@@ -117,12 +119,15 @@ fun MoviesScreen(
             showPinDialog = false
             pinError = null
             pendingMovie = null
+            pendingCategory = null
         },
         onVerified = {
             showPinDialog = false
             pinError = null
             pendingMovie?.let(onMovieClick)
+            pendingCategory?.let(viewModel::unlockCategory)
             pendingMovie = null
+            pendingCategory = null
         },
         onErrorChange = { pinError = it },
         verifyPin = viewModel::verifyPin
@@ -185,7 +190,13 @@ fun MoviesScreen(
                 onSearchQueryChange = viewModel::setSearchQuery,
                 onMovieClick = onMovieClick,
                 onProtectedMovieClick = { movie ->
+                    pendingCategory = null
                     pendingMovie = movie
+                    showPinDialog = true
+                },
+                onProtectedCategoryClick = { category ->
+                    pendingMovie = null
+                    pendingCategory = category
                     showPinDialog = true
                 },
                 onShowDialog = viewModel::onShowDialog,
@@ -288,6 +299,7 @@ private fun MoviesVodContent(
     onSearchQueryChange: (String) -> Unit,
     onMovieClick: (Movie) -> Unit,
     onProtectedMovieClick: (Movie) -> Unit,
+    onProtectedCategoryClick: (Category) -> Unit,
     onShowDialog: (Movie) -> Unit,
     onShowCategoryOptions: (String) -> Unit,
     onSelectCategory: (String?) -> Unit,
@@ -317,27 +329,56 @@ private fun MoviesVodContent(
     val topRatedMovies = uiState.libraryLensRows[MovieLibraryLens.TOP_RATED].orEmpty()
     val continueWatching = uiState.continueWatching
     val heroMovie = freshMovies.firstOrNull() ?: topRatedMovies.firstOrNull() ?: favoriteMovies.firstOrNull()
-    val categoryOptions = remember(uiState.categoryNames, uiState.categoryCounts) {
-        uiState.categoryNames.map { name ->
-            val matchedCategory = uiState.providerCategories.firstOrNull { it.name == name }
-                ?: uiState.categories.firstOrNull { it.name == name }
-                ?: if (name == uiState.favoriteCategoryName) {
-                    com.streamvault.domain.model.Category(
-                        id = VodBrowseDefaults.FAVORITES_SENTINEL_ID,
-                        name = uiState.favoriteCategoryName,
-                        type = com.streamvault.domain.model.ContentType.MOVIE,
-                        isVirtual = true
-                    )
-                } else {
-                    null
-                }
+    val categoryByName = remember(uiState.providerCategories, uiState.categories, uiState.favoriteCategoryName) {
+        buildMap<String, Category> {
+            uiState.providerCategories.forEach { put(it.name, it) }
+            uiState.categories.forEach { put(it.name, it) }
+            put(
+                uiState.favoriteCategoryName,
+                Category(
+                    id = VodBrowseDefaults.FAVORITES_SENTINEL_ID,
+                    name = uiState.favoriteCategoryName,
+                    type = com.streamvault.domain.model.ContentType.MOVIE,
+                    isVirtual = true
+                )
+            )
+        }
+    }
+    val isCategoryLocked = remember(uiState.parentalControlLevel, uiState.unlockedCategoryIds, categoryByName) {
+        { category: Category ->
+            (category.isAdult || category.isUserProtected) &&
+                uiState.parentalControlLevel == 1 &&
+                kotlin.math.abs(category.id) !in uiState.unlockedCategoryIds
+        }
+    }
+    val isCategoryHidden = remember(uiState.parentalControlLevel, uiState.unlockedCategoryIds, categoryByName) {
+        { category: Category ->
+            (category.isAdult || category.isUserProtected) &&
+                uiState.parentalControlLevel >= 2 &&
+                kotlin.math.abs(category.id) !in uiState.unlockedCategoryIds
+        }
+    }
+    val openProtectedCategory: (Category) -> Unit = onProtectedCategoryClick
+    val visibleCategoryNames = remember(uiState.categoryNames, categoryByName, uiState.parentalControlLevel, uiState.unlockedCategoryIds) {
+        uiState.categoryNames.filter { name ->
+            val category = categoryByName[name]
+            category == null || !isCategoryHidden(category)
+        }
+    }
+    val categoryOptions = remember(visibleCategoryNames, uiState.categoryCounts, categoryByName, uiState.parentalControlLevel, uiState.unlockedCategoryIds) {
+        visibleCategoryNames.map { name ->
+            val matchedCategory = categoryByName[name]
+            val locked = matchedCategory?.let(isCategoryLocked) == true
             VodCategoryOption(
                 name = name,
                 count = uiState.categoryCounts[name] ?: 0,
-                onClick = { onSelectCategory(name) },
-                onLongClick = matchedCategory?.let { category ->
+                onClick = {
+                    if (locked && matchedCategory != null) openProtectedCategory(matchedCategory) else onSelectCategory(name)
+                },
+                onLongClick = matchedCategory?.takeIf { !locked }?.let { category ->
                     { onShowCategoryOptions(category.name) }
-                }
+                },
+                isLocked = locked
             )
         }
     }
@@ -362,6 +403,7 @@ private fun MoviesVodContent(
             onSearchQueryChange = onSearchQueryChange,
             onMovieClick = onMovieClick,
             onProtectedMovieClick = onProtectedMovieClick,
+            onProtectedCategoryClick = onProtectedCategoryClick,
             onShowDialog = onShowDialog,
             onShowCategoryOptions = onShowCategoryOptions,
             onSelectCategory = onSelectCategory,
@@ -541,14 +583,18 @@ private fun MoviesVodContent(
 
             items(
                 items = uiState.moviesByCategory.entries.filter { (name, items) ->
-                    name != uiState.favoriteCategoryName && items.isNotEmpty()
+                    name != uiState.favoriteCategoryName && name in visibleCategoryNames && items.isNotEmpty()
                 }.take(8),
                 key = { it.key }
             ) { (categoryName, movies) ->
+                val matchedCategory = categoryByName[categoryName]
+                val lockedCategory = matchedCategory?.let(isCategoryLocked) == true
                 CategoryRow(
                     title = categoryName,
                     items = movies,
-                    onSeeAll = { onSelectCategory(categoryName) },
+                    onSeeAll = {
+                        if (lockedCategory && matchedCategory != null) openProtectedCategory(matchedCategory) else onSelectCategory(categoryName)
+                    },
                     keySelector = { it.id }
                 ) { movie ->
                     val isLocked = (movie.isAdult || movie.isUserProtected) && uiState.parentalControlLevel == 1
@@ -748,6 +794,7 @@ private fun MoviesVodClassicContent(
     onSearchQueryChange: (String) -> Unit,
     onMovieClick: (Movie) -> Unit,
     onProtectedMovieClick: (Movie) -> Unit,
+    onProtectedCategoryClick: (Category) -> Unit,
     onShowDialog: (Movie) -> Unit,
     onShowCategoryOptions: (String) -> Unit,
     onSelectCategory: (String?) -> Unit,
@@ -760,6 +807,42 @@ private fun MoviesVodClassicContent(
     val allLabel = stringResource(R.string.vod_classic_all)
     val continueLabel = stringResource(R.string.vod_classic_continue_watching)
     val recentLabel = stringResource(R.string.vod_classic_recently_added)
+    val categoryByName = remember(uiState.providerCategories, uiState.categories, uiState.favoriteCategoryName) {
+        buildMap<String, Category> {
+            uiState.providerCategories.forEach { put(it.name, it) }
+            uiState.categories.forEach { put(it.name, it) }
+            put(
+                uiState.favoriteCategoryName,
+                Category(
+                    id = VodBrowseDefaults.FAVORITES_SENTINEL_ID,
+                    name = uiState.favoriteCategoryName,
+                    type = com.streamvault.domain.model.ContentType.MOVIE,
+                    isVirtual = true
+                )
+            )
+        }
+    }
+    val isCategoryLocked = remember(uiState.parentalControlLevel, uiState.unlockedCategoryIds, categoryByName) {
+        { category: Category ->
+            (category.isAdult || category.isUserProtected) &&
+                uiState.parentalControlLevel == 1 &&
+                kotlin.math.abs(category.id) !in uiState.unlockedCategoryIds
+        }
+    }
+    val isCategoryHidden = remember(uiState.parentalControlLevel, uiState.unlockedCategoryIds, categoryByName) {
+        { category: Category ->
+            (category.isAdult || category.isUserProtected) &&
+                uiState.parentalControlLevel >= 2 &&
+                kotlin.math.abs(category.id) !in uiState.unlockedCategoryIds
+        }
+    }
+    val openProtectedCategory: (Category) -> Unit = onProtectedCategoryClick
+    val visibleCategoryNames = remember(uiState.categoryNames, categoryByName, uiState.parentalControlLevel, uiState.unlockedCategoryIds) {
+        uiState.categoryNames.filter { name ->
+            val category = categoryByName[name]
+            category == null || !isCategoryHidden(category)
+        }
+    }
     var categoryQuery by rememberSaveable { mutableStateOf("") }
     var showBrowseOptions by rememberSaveable(uiState.selectedCategory) { mutableStateOf(false) }
     var showSearchBar by rememberSaveable(uiState.selectedCategory) { mutableStateOf(searchQuery.isNotBlank()) }
@@ -771,7 +854,7 @@ private fun MoviesVodClassicContent(
 
     LaunchedEffect(uiState.vodViewMode, uiState.selectedCategory, uiState.isReorderMode) {
         if (uiState.vodViewMode == VodViewMode.CLASSIC && uiState.selectedCategory == null && !uiState.isReorderMode) {
-            onSelectFullLibraryBrowse()
+            onSelectCategory(uiState.favoriteCategoryName)
         }
     }
 
@@ -806,7 +889,7 @@ private fun MoviesVodClassicContent(
     }
     val recentCount = uiState.libraryLensRows[MovieLibraryLens.FRESH]?.size ?: 0
     val railOptions = remember(
-        uiState.categoryNames,
+        visibleCategoryNames,
         uiState.categoryCounts,
         uiState.favoriteCategoryName,
         uiState.selectedCategory,
@@ -814,7 +897,9 @@ private fun MoviesVodClassicContent(
         categoryQuery,
         continueCount,
         recentCount,
-        uiState.libraryCount
+        uiState.libraryCount,
+        uiState.unlockedCategoryIds,
+        uiState.parentalControlLevel
     ) {
         buildList {
             add(
@@ -853,17 +938,22 @@ private fun MoviesVodClassicContent(
                     onClick = onOpenFresh
                 )
             )
-            uiState.categoryNames
+            visibleCategoryNames
                 .filterNot { it == uiState.favoriteCategoryName }
                 .forEach { name ->
+                    val matchedCategory = categoryByName[name]
+                    val locked = matchedCategory?.let(isCategoryLocked) == true
                     add(
                         VodClassicCategoryOption(
                             key = "category:$name",
                             label = name,
                             count = uiState.categoryCounts[name] ?: 0,
                             isSelected = selectedKey == "category:$name",
-                            onClick = { onSelectCategory(name) },
-                            onLongClick = { onShowCategoryOptions(name) }
+                            onClick = {
+                                if (locked && matchedCategory != null) openProtectedCategory(matchedCategory) else onSelectCategory(name)
+                            },
+                            onLongClick = matchedCategory?.takeIf { !locked }?.let { { onShowCategoryOptions(name) } },
+                            isLocked = locked
                         )
                     )
                 }
@@ -892,7 +982,7 @@ private fun MoviesVodClassicContent(
                 },
                 subtitle = stringResource(
                     R.string.vod_classic_results_count,
-                    uiState.selectedCategoryTotalCount.takeIf { it > 0 } ?: filteredGridMovies.size
+                    filteredGridMovies.size
                 ),
                 actions = buildList {
                     add(

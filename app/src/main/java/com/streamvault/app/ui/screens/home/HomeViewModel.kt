@@ -12,6 +12,7 @@ import com.streamvault.data.sync.SyncManager
 import com.streamvault.domain.manager.ParentalControlManager
 import com.streamvault.domain.model.Category
 import com.streamvault.domain.model.CategorySortMode
+import com.streamvault.domain.model.ChannelNumberingMode
 import com.streamvault.domain.model.Channel
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.PlaybackHistory
@@ -435,18 +436,22 @@ class HomeViewModel @Inject constructor(
 
                 combine(
                     channelsFlow,
-                    preferencesRepository.getHiddenCategoryIds(providerId, ContentType.LIVE)
-                ) { channels, hiddenCategoryIds ->
-                    channels.filterNot { channel -> channel.categoryId in hiddenCategoryIds }
-                }.collect { channels ->
-                    val numberedChannels = channels.mapIndexed { index, channel ->
-                        channel.copy(number = index + 1)
+                    preferencesRepository.getHiddenCategoryIds(providerId, ContentType.LIVE),
+                    preferencesRepository.liveChannelNumberingMode
+                ) { channels, hiddenCategoryIds, numberingMode ->
+                    val visibleChannels = channels.filterNot { channel -> channel.categoryId in hiddenCategoryIds }
+                    when (numberingMode) {
+                        ChannelNumberingMode.GROUP -> visibleChannels.mapIndexed { index, channel ->
+                            channel.copy(number = index + 1)
+                        }
+                        ChannelNumberingMode.PROVIDER -> visibleChannels
                     }
-                    _localChannels.value = numberedChannels
+                }.collect { displayedChannels ->
+                    _localChannels.value = displayedChannels
                     _uiState.update {
                         it.copy(
-                            hasChannels = numberedChannels.isNotEmpty(),
-                            isLoading = numberedChannels.isEmpty() && it.isSyncing,
+                            hasChannels = displayedChannels.isNotEmpty(),
+                            isLoading = displayedChannels.isEmpty() && it.isSyncing,
                             errorMessage = null
                         )
                     }

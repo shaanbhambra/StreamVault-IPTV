@@ -36,6 +36,8 @@ import com.streamvault.app.ui.components.dialogs.PinDialog
 import com.streamvault.app.ui.components.dialogs.PremiumDialog
 import com.streamvault.app.ui.components.dialogs.PremiumDialogFooterButton
 import com.streamvault.app.ui.components.TvEmptyState
+import com.streamvault.app.localization.localeForLanguageTag
+import com.streamvault.app.localization.supportedAppLanguageTags
 import com.streamvault.app.ui.components.shell.AppNavigationChrome
 import com.streamvault.app.ui.components.shell.AppScreenScaffold
 import com.streamvault.app.ui.model.LiveTvChannelMode
@@ -44,6 +46,7 @@ import com.streamvault.app.ui.theme.*
 import com.streamvault.domain.manager.BackupConflictStrategy
 import com.streamvault.domain.model.Category
 import com.streamvault.domain.model.CategorySortMode
+import com.streamvault.domain.model.ChannelNumberingMode
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.Provider
 import com.streamvault.domain.model.ProviderType
@@ -127,6 +130,7 @@ fun SettingsScreen(
     var showLevelDialog by rememberSaveable { mutableStateOf(false) }
     var showLanguageDialog by rememberSaveable { mutableStateOf(false) }
     var showLiveTvModeDialog by rememberSaveable { mutableStateOf(false) }
+    var showLiveChannelNumberingDialog by rememberSaveable { mutableStateOf(false) }
     var showVodViewModeDialog by rememberSaveable { mutableStateOf(false) }
     var showPlaybackSpeedDialog by rememberSaveable { mutableStateOf(false) }
     var showAudioLanguageDialog by rememberSaveable { mutableStateOf(false) }
@@ -137,7 +141,6 @@ fun SettingsScreen(
     var showEthernetQualityDialog by rememberSaveable { mutableStateOf(false) }
     var showClearHistoryDialog by rememberSaveable { mutableStateOf(false) }
     var categorySortDialogType by rememberSaveable { mutableStateOf<String?>(null) }
-    var showHiddenCategoriesDialog by rememberSaveable { mutableStateOf(false) }
     var pinError by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingAction by remember { mutableStateOf<ParentalAction?>(null) }
     var pendingProtectionLevel by rememberSaveable { mutableStateOf<Int?>(null) }
@@ -306,9 +309,6 @@ fun SettingsScreen(
                             ParentalAction.SetNewPin
                         }
                         showPinDialog = true
-                    },
-                    onManageProtectedGroups = {
-                        uiState.activeProviderId?.let(onNavigateToParentalControl)
                     }
                 )
             }
@@ -316,8 +316,8 @@ fun SettingsScreen(
             item {
                 Spacer(Modifier.height(16.dp))
                 SettingsSectionHeader(
-                    title = stringResource(R.string.settings_categories_title),
-                    subtitle = stringResource(R.string.settings_categories_subtitle)
+                    title = stringResource(R.string.settings_category_sorting_title),
+                    subtitle = stringResource(R.string.settings_category_sorting_subtitle)
                 )
                 ClickableSettingsRow(
                     label = stringResource(R.string.settings_category_sort_live),
@@ -342,15 +342,6 @@ fun SettingsScreen(
                         context
                     ),
                     onClick = { categorySortDialogType = ContentType.SERIES.name }
-                )
-                ClickableSettingsRow(
-                    label = stringResource(R.string.settings_hidden_categories_title),
-                    value = if (uiState.hiddenCategories.isEmpty()) {
-                        stringResource(R.string.settings_hidden_categories_none)
-                    } else {
-                        stringResource(R.string.settings_hidden_categories_count, uiState.hiddenCategories.size)
-                    },
-                    onClick = { showHiddenCategoriesDialog = true }
                 )
             }
 
@@ -498,6 +489,11 @@ fun SettingsScreen(
                     label = stringResource(R.string.settings_live_tv_channel_mode),
                     value = stringResource(uiState.liveTvChannelMode.labelResId()),
                     onClick = { showLiveTvModeDialog = true }
+                )
+                ClickableSettingsRow(
+                    label = stringResource(R.string.settings_live_channel_numbering_mode),
+                    value = stringResource(uiState.liveChannelNumberingMode.labelResId()),
+                    onClick = { showLiveChannelNumberingDialog = true }
                 )
                 ClickableSettingsRow(
                     label = stringResource(R.string.settings_vod_view_mode),
@@ -713,6 +709,17 @@ fun SettingsScreen(
             )
         }
 
+        if (showLiveChannelNumberingDialog) {
+            LiveChannelNumberingModeDialog(
+                selectedMode = uiState.liveChannelNumberingMode,
+                onDismiss = { showLiveChannelNumberingDialog = false },
+                onModeSelected = { mode ->
+                    viewModel.setLiveChannelNumberingMode(mode)
+                    showLiveChannelNumberingDialog = false
+                }
+            )
+        }
+
         if (showVodViewModeDialog) {
             VodViewModeDialog(
                 selectedMode = uiState.vodViewMode,
@@ -862,14 +869,6 @@ fun SettingsScreen(
                     }
                 )
             }
-        }
-
-        if (showHiddenCategoriesDialog) {
-            HiddenCategoriesDialog(
-                hiddenCategories = uiState.hiddenCategories,
-                onDismiss = { showHiddenCategoriesDialog = false },
-                onUnhide = viewModel::unhideCategory
-            )
         }
 
         if (showPinDialog) {
@@ -1186,92 +1185,12 @@ private fun CategorySortModeDialog(
 }
 
 @Composable
-private fun HiddenCategoriesDialog(
-    hiddenCategories: List<Category>,
-    onDismiss: () -> Unit,
-    onUnhide: (Category) -> Unit
-) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    PremiumDialog(
-        title = stringResource(R.string.settings_hidden_categories_title),
-        subtitle = stringResource(R.string.settings_hidden_categories_subtitle),
-        onDismissRequest = onDismiss,
-        widthFraction = 0.58f,
-        content = {
-            if (hiddenCategories.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.settings_hidden_categories_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = OnSurfaceDim
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 420.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(hiddenCategories, key = { "${it.type.name}:${it.id}" }) { category ->
-                        Surface(
-                            onClick = { onUnhide(category) },
-                            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(14.dp)),
-                            colors = ClickableSurfaceDefaults.colors(
-                                containerColor = SurfaceElevated,
-                                focusedContainerColor = Primary.copy(alpha = 0.22f)
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Text(
-                                        text = category.name,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = OnBackground
-                                    )
-                                    Text(
-                                        text = categoryTypeLabel(category.type, context),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = OnSurfaceDim
-                                    )
-                                }
-                                Text(
-                                    text = stringResource(R.string.settings_unhide_category),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = Primary,
-                                    textAlign = TextAlign.End
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        footer = {
-            PremiumDialogFooterButton(
-                label = stringResource(R.string.action_done),
-                onClick = onDismiss
-            )
-        }
-    )
-}
-
-@Composable
 private fun ParentalControlCard(
     level: Int,
     hasParentalPin: Boolean,
     hasActiveProvider: Boolean,
     onChangeLevel: () -> Unit,
-    onChangePin: () -> Unit,
-    onManageProtectedGroups: () -> Unit
+    onChangePin: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1602,7 +1521,7 @@ private fun ProviderSettingsCard(
                     scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
                 ) {
                     Text(
-                        text = stringResource(R.string.settings_parental_groups_action),
+                        text = stringResource(R.string.settings_provider_category_controls_action),
                         style = MaterialTheme.typography.labelMedium,
                         color = Primary,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
@@ -2000,6 +1919,57 @@ private fun VodViewModeDialog(
         content = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 VodViewMode.entries.forEach { mode ->
+                    Surface(
+                        onClick = { onModeSelected(mode) },
+                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(14.dp)),
+                        colors = ClickableSurfaceDefaults.colors(
+                            containerColor = if (mode == selectedMode) Primary.copy(alpha = 0.18f) else SurfaceElevated,
+                            focusedContainerColor = Primary.copy(alpha = 0.28f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = stringResource(mode.labelResId()),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = if (mode == selectedMode) Primary else OnBackground
+                            )
+                            Text(
+                                text = stringResource(mode.descriptionResId()),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OnSurfaceDim
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        footer = {
+            PremiumDialogFooterButton(
+                label = stringResource(R.string.settings_cancel),
+                onClick = onDismiss
+            )
+        }
+    )
+}
+
+@Composable
+private fun LiveChannelNumberingModeDialog(
+    selectedMode: ChannelNumberingMode,
+    onDismiss: () -> Unit,
+    onModeSelected: (ChannelNumberingMode) -> Unit
+) {
+    PremiumDialog(
+        title = stringResource(R.string.settings_live_channel_numbering_mode),
+        subtitle = stringResource(R.string.settings_live_channel_numbering_mode_subtitle),
+        onDismissRequest = onDismiss,
+        widthFraction = 0.52f,
+        content = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                ChannelNumberingMode.entries.forEach { mode ->
                     Surface(
                         onClick = { onModeSelected(mode) },
                         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(14.dp)),
@@ -2555,35 +2525,7 @@ private data class AppLanguageOption(
 )
 
 private fun supportedAppLanguages(systemDefaultLabel: String): List<AppLanguageOption> {
-    val localeTags = listOf(
-        "system",
-        "en",
-        "ar",
-        "cs",
-        "da",
-        "de",
-        "el",
-        "es",
-        "fi",
-        "fr",
-        "he",
-        "hu",
-        "id",
-        "it",
-        "ja",
-        "ko",
-        "nb",
-        "nl",
-        "pl",
-        "pt",
-        "ro",
-        "ru",
-        "sv",
-        "tr",
-        "uk",
-        "vi",
-        "zh"
-    )
+    val localeTags = listOf("system") + supportedAppLanguageTags()
 
     return localeTags.map { tag ->
         AppLanguageOption(
@@ -2591,7 +2533,7 @@ private fun supportedAppLanguages(systemDefaultLabel: String): List<AppLanguageO
             label = if (tag == "system") {
                 systemDefaultLabel
             } else {
-                val locale = Locale.forLanguageTag(tag)
+                val locale = localeForLanguageTag(tag)
                 locale.getDisplayLanguage(locale)
                     .replaceFirstChar { character ->
                         if (character.isLowerCase()) {
@@ -2651,7 +2593,7 @@ private fun subtitleBackgroundColorOptions(context: android.content.Context): Li
 
 private fun displayLanguageLabel(languageTag: String, defaultLabel: String): String {
     if (languageTag.isBlank() || languageTag == "system" || languageTag == "auto") return defaultLabel
-    val locale = Locale.forLanguageTag(languageTag)
+    val locale = localeForLanguageTag(languageTag)
     if (locale.language.isBlank()) return defaultLabel
     return locale.getDisplayLanguage(Locale.getDefault())
         .replaceFirstChar { character ->
@@ -2759,5 +2701,15 @@ private fun VodViewMode.labelResId(): Int = when (this) {
 private fun VodViewMode.descriptionResId(): Int = when (this) {
     VodViewMode.MODERN -> R.string.settings_vod_view_mode_modern_desc
     VodViewMode.CLASSIC -> R.string.settings_vod_view_mode_classic_desc
+}
+
+private fun ChannelNumberingMode.labelResId(): Int = when (this) {
+    ChannelNumberingMode.GROUP -> R.string.settings_live_channel_numbering_group
+    ChannelNumberingMode.PROVIDER -> R.string.settings_live_channel_numbering_provider
+}
+
+private fun ChannelNumberingMode.descriptionResId(): Int = when (this) {
+    ChannelNumberingMode.GROUP -> R.string.settings_live_channel_numbering_group_desc
+    ChannelNumberingMode.PROVIDER -> R.string.settings_live_channel_numbering_provider_desc
 }
 

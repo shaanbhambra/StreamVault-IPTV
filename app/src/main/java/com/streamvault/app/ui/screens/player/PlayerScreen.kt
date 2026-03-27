@@ -333,9 +333,19 @@ fun PlayerScreen(
             } else {
                 playButtonFocusRequester.requestFocusSafely(tag = "PlayerScreen", target = "Player transport")
             }
-            viewModel.hideControlsAfterDelay()
         } else {
+            viewModel.cancelControlsAutoHide()
             focusRequester.requestFocusSafely(tag = "PlayerScreen", target = "Player root")
+        }
+    }
+
+    LaunchedEffect(showControls, showTrackSelection, showSpeedSelection, showProgramHistory, showSplitDialog) {
+        if (!showControls) {
+            viewModel.cancelControlsAutoHide()
+        } else if (showTrackSelection != null || showSpeedSelection || showProgramHistory || showSplitDialog) {
+            viewModel.cancelControlsAutoHide()
+        } else {
+            viewModel.hideControlsAfterDelay()
         }
     }
 
@@ -720,7 +730,8 @@ fun PlayerScreen(
             onSeekToPosition = viewModel::seekTo,
             onSetScrubbingMode = viewModel::setScrubbingMode,
             seekPreview = seekPreview,
-            onSeekPreviewPositionChanged = viewModel::updateSeekPreview
+            onSeekPreviewPositionChanged = viewModel::updateSeekPreview,
+            onUserInteraction = viewModel::refreshControlsAutoHide
         )
 
         PlayerNumericInputOverlay(

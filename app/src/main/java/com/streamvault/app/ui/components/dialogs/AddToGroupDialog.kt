@@ -232,8 +232,7 @@ fun AddToGroupDialog(
                         }
 
                         items(groups) { group ->
-                            val groupId = -group.id
-                            val isMember = memberOfGroups.contains(groupId)
+                            val isMember = memberOfGroups.contains(group.id)
                             var isFocused by remember { mutableStateOf(false) }
 
                             Row(

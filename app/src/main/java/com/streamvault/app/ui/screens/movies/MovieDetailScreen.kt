@@ -237,7 +237,7 @@ private fun MovieDetailHeroText(
             StatusPill(label = stringResource(R.string.nav_movies), containerColor = AppColors.BrandMuted)
             movie.rating.takeIf { it > 0f }?.let {
                 StatusPill(
-                    label = "RTG ${String.format("%.1f", it)}",
+                    label = stringResource(R.string.label_rating, String.format("%.1f", it)),
                     containerColor = AppColors.Warning,
                     contentColor = Color.Black
                 )

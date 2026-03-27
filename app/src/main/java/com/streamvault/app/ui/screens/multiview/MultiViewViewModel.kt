@@ -60,6 +60,7 @@ class MultiViewViewModel @Inject constructor(
     private val slotStartupJobs = mutableMapOf<Int, kotlinx.coroutines.Job>()
     private val slotErrorJobs = mutableMapOf<Int, kotlinx.coroutines.Job>()
     private var slotInitVersion: Long = 0L
+    private var playbackSessionActive: Boolean = false
 
     /** Flow of the current 4 slot channels from the manager */
     val slotsFlow = multiViewManager.slots
@@ -119,7 +120,7 @@ class MultiViewViewModel @Inject constructor(
                 if (activeProviderConnectionLimit != nextConnectionLimit) {
                     activeProviderConnectionLimit = nextConnectionLimit
                     if (multiViewManager.hasAnyChannel) {
-                        initSlots()
+                        restartPlaybackIfActive()
                     }
                 }
             }
@@ -130,28 +131,18 @@ class MultiViewViewModel @Inject constructor(
     }
 
     fun releasePlayersForBackground() {
-        cancelSlotStartupJobs()
-        cancelSlotErrorJobs()
-        playerEngines.values.forEach { engine ->
-            runCatching { engine.stop() }
-            runCatching { engine.setVolume(0f) }
-            runCatching { engine.release() }
-        }
-        playerEngines.clear()
-        _uiState.value = _uiState.value.copy(
-            slots = _uiState.value.slots.map { slot ->
-                if (slot.isEmpty) slot else slot.copy(isLoading = false, playerEngine = null)
-            }
-        )
+        playbackSessionActive = false
+        releaseActivePlayers()
     }
 
     /** Called when MultiViewScreen is opened — spins up player engines for occupied slots */
     fun initSlots() {
+        playbackSessionActive = true
         val initVersion = ++slotInitVersion
         telemetryJob?.cancel()
         cancelSlotStartupJobs()
         cancelSlotErrorJobs()
-        releasePlayersForBackground()
+        releaseActivePlayers()
         lastDroppedFramesBySlot.clear()
         val channels = multiViewManager.slots.value
         val deviceActiveSlotLimit = runtimeActiveSlotLimit
@@ -325,12 +316,12 @@ class MultiViewViewModel @Inject constructor(
     fun replaceFocusedSlot(channel: Channel) {
         val slotIndex = _uiState.value.focusedSlotIndex
         multiViewManager.setChannel(slotIndex, channel)
-        initSlots()
+        restartPlaybackIfActive()
     }
 
     fun removeFocusedSlot() {
         clearSlot(_uiState.value.focusedSlotIndex)
-        initSlots()
+        restartPlaybackIfActive()
     }
 
     fun pinAudioToFocusedSlot() {
@@ -361,7 +352,7 @@ class MultiViewViewModel @Inject constructor(
     fun setPerformanceMode(mode: MultiViewPerformanceMode) {
         viewModelScope.launch {
             preferencesRepository.setMultiViewPerformanceMode(mode.name)
-            initSlots()
+            restartPlaybackIfActive()
         }
     }
 
@@ -377,7 +368,7 @@ class MultiViewViewModel @Inject constructor(
                     multiViewManager.setChannel(index, channel)
                 }
             }
-            initSlots()
+            restartPlaybackIfActive()
         }
     }
 
@@ -389,6 +380,28 @@ class MultiViewViewModel @Inject constructor(
             updated[index] = transform(updated[index])
             _uiState.value = _uiState.value.copy(slots = updated)
         }
+    }
+
+    private fun restartPlaybackIfActive() {
+        if (playbackSessionActive) {
+            initSlots()
+        }
+    }
+
+    private fun releaseActivePlayers() {
+        cancelSlotStartupJobs()
+        cancelSlotErrorJobs()
+        playerEngines.values.forEach { engine ->
+            runCatching { engine.stop() }
+            runCatching { engine.setVolume(0f) }
+            runCatching { engine.release() }
+        }
+        playerEngines.clear()
+        _uiState.value = _uiState.value.copy(
+            slots = _uiState.value.slots.map { slot ->
+                if (slot.isEmpty) slot else slot.copy(isLoading = false, playerEngine = null)
+            }
+        )
     }
 
     private fun observeReplacementCandidates() {
@@ -597,7 +610,7 @@ class MultiViewViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(
                     telemetry = _uiState.value.telemetry.copy(throttledReason = throttledReason)
                 )
-                initSlots()
+                restartPlaybackIfActive()
                 return
             }
         } else if (shouldRecover(policy)) {
@@ -607,7 +620,7 @@ class MultiViewViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(
                 telemetry = _uiState.value.telemetry.copy(throttledReason = null)
             )
-            initSlots()
+            restartPlaybackIfActive()
             return
         }
 

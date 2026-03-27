@@ -14,6 +14,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.streamvault.data.local.dao.ChannelPreferenceDao
 import com.streamvault.data.local.entity.ChannelPreferenceEntity
+import com.streamvault.domain.model.ChannelNumberingMode
 import com.streamvault.domain.model.CategorySortMode
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.manager.ParentalPinVerifier
@@ -59,6 +60,7 @@ class PreferencesRepository @Inject constructor(
         val DEFAULT_CATEGORY_ID = longPreferencesKey("default_category_id")
         val APP_LANGUAGE = stringPreferencesKey("app_language")
         val LIVE_TV_CHANNEL_MODE = stringPreferencesKey("live_tv_channel_mode")
+        val LIVE_CHANNEL_NUMBERING_MODE = stringPreferencesKey("live_channel_numbering_mode")
         val VOD_VIEW_MODE = stringPreferencesKey("vod_view_mode")
         val GUIDE_DENSITY = stringPreferencesKey("guide_density")
         val GUIDE_CHANNEL_MODE = stringPreferencesKey("guide_channel_mode")
@@ -469,6 +471,16 @@ class PreferencesRepository @Inject constructor(
     suspend fun setLiveTvChannelMode(mode: String) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.LIVE_TV_CHANNEL_MODE] = mode
+        }
+    }
+
+    val liveChannelNumberingMode: Flow<ChannelNumberingMode> = context.dataStore.data.map { preferences ->
+        ChannelNumberingMode.fromStorage(preferences[PreferencesKeys.LIVE_CHANNEL_NUMBERING_MODE])
+    }
+
+    suspend fun setLiveChannelNumberingMode(mode: ChannelNumberingMode) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.LIVE_CHANNEL_NUMBERING_MODE] = mode.storageValue
         }
     }
 

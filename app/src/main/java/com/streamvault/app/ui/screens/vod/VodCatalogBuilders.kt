@@ -2,6 +2,7 @@ package com.streamvault.app.ui.screens.vod
 
 import com.streamvault.domain.model.Category
 import com.streamvault.domain.model.Favorite
+import com.streamvault.app.ui.screens.vod.matchesVodGroupMembership
 
 data class VodCatalogSnapshot<Item>(
     val grouped: Map<String, List<Item>>,
@@ -53,7 +54,7 @@ suspend fun <Item> buildVodPreviewCatalog(
         .associateWith { category ->
             allFavorites
                 .asSequence()
-                .filter { it.groupId == -category.id }
+                .filter { matchesVodGroupMembership(it.groupId, category.id) }
                 .sortedBy(Favorite::position)
                 .map(Favorite::contentId)
                 .take(VodBrowseDefaults.PREVIEW_ROW_LIMIT)
@@ -77,7 +78,7 @@ suspend fun <Item> buildVodPreviewCatalog(
                 .let { items -> markVodFavorites(items, globalFavoriteIds, itemId, copyWithFavorite) }
             if (preview.isNotEmpty()) {
                 previewRows[category.name] = preview
-                countMap[category.name] = allFavorites.count { favorite -> favorite.groupId == -category.id }
+                countMap[category.name] = allFavorites.count { favorite -> matchesVodGroupMembership(favorite.groupId, category.id) }
             }
         }
     }
@@ -136,7 +137,7 @@ fun <Item> buildVodSearchCatalog(
         .forEach { customCategory ->
             val itemIdsInGroup = allFavorites
                 .asSequence()
-                .filter { it.groupId == -customCategory.id }
+                .filter { matchesVodGroupMembership(it.groupId, customCategory.id) }
                 .map(Favorite::contentId)
                 .toSet()
             grouped[customCategory.name] = enrichedItems.filter { itemId(it) in itemIdsInGroup }

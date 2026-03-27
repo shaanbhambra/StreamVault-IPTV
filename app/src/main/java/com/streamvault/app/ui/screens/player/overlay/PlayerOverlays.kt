@@ -640,6 +640,11 @@ fun ChannelListOverlay(
         }
         focused ?: currentIndex
     }
+    val channelNumbersById = remember(channels) {
+        channels.mapIndexed { index, channel ->
+            channel.id to (channel.number.takeIf { it > 0 } ?: (index + 1))
+        }.toMap()
+    }
     val canScrollUp by remember { derivedStateOf { listState.canScrollBackward } }
     val canScrollDown by remember { derivedStateOf { listState.canScrollForward } }
     val scope = rememberCoroutineScope()
@@ -791,7 +796,14 @@ fun ChannelListOverlay(
                                                 verticalAlignment = Alignment.CenterVertically,
                                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                                             ) {
-                                                val recentNumber = (index + 1).toString().padStart(2, '0')
+                                                val recentNumber = channelNumbersById[channel.id]
+                                                    ?.toString()
+                                                    ?.padStart(2, '0')
+                                                    ?: channel.number
+                                                        .takeIf { it > 0 }
+                                                        ?.toString()
+                                                        ?.padStart(2, '0')
+                                                    ?: "--"
                                                 Text(
                                                     text = recentNumber,
                                                     style = MaterialTheme.typography.labelMedium,
@@ -815,7 +827,7 @@ fun ChannelListOverlay(
                         val channel = channels[index]
                         val isSelected = channel.id == currentChannelId
                         val shouldRequestFocus = preferredFocusedChannelId?.let { it == channel.id } ?: isSelected
-                        val channelNumber = index + 1
+                        val channelNumber = channel.number.takeIf { it > 0 } ?: (index + 1)
                         var isFocused by remember { mutableStateOf(false) }
                         val bgColor = when {
                             isFocused -> Primary

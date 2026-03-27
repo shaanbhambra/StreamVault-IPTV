@@ -24,7 +24,6 @@ import com.streamvault.data.util.rankSearchResults
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import com.streamvault.data.preferences.PreferencesRepository
-import com.streamvault.domain.util.isPlaybackComplete
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import javax.inject.Singleton
@@ -212,7 +211,12 @@ class SeriesRepositoryImpl @Inject constructor(
                     val inProgressIds = history
                         .asSequence()
                         .filter { it.contentType == ContentType.SERIES || it.contentType == ContentType.SERIES_EPISODE }
-                        .filter { it.resumePositionMs > 0L && (it.totalDurationMs <= 0L || !isPlaybackComplete(it.resumePositionMs, it.totalDurationMs)) }
+                        .filter {
+                            it.resumePositionMs > 0L && (
+                                it.totalDurationMs <= 0L ||
+                                    it.resumePositionMs < (it.totalDurationMs * 0.95f).toLong()
+                                )
+                        }
                         .mapNotNull { it.seriesId ?: it.contentId }
                         .toSet()
                     val watchCounts = history
@@ -264,13 +268,14 @@ class SeriesRepositoryImpl @Inject constructor(
 
     override suspend fun getSeriesDetails(providerId: Long, seriesId: Long): Result<Series> {
         val seriesEntity = seriesDao.getById(seriesId)
+            ?: seriesDao.getBySeriesId(providerId, seriesId)
             ?: return Result.error("Series not found")
 
         val provider = providerDao.getById(providerId)
             ?: return Result.error("Provider not found")
 
         // M3U and other non-Xtream providers have no standardized series-detail endpoint.
-        if (provider.type != ProviderType.XTREAM_CODES) {
+        if (provider.type != ProviderType.XTREAM_CODES || seriesEntity.seriesId <= 0L) {
             return Result.success(buildSeriesWithPersistedEpisodes(seriesEntity))
         }
 
