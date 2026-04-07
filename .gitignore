@@ -51,3 +51,4 @@ out.txt
 localization_audit.txt
 tmp/*.txt
 tmp/*_HEAD.kt
+releases/*.apk

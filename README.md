@@ -33,8 +33,8 @@ Add your own screenshots to `docs/images/` and update this section with the fina
 
 ## Download
 
-- [Download StreamVault.apk](https://github.com/Davidona/StreamVault-IPTV/raw/refs/heads/master/releases/StreamVault.apk)
-- This link points to GitHub's raw file endpoint so clicking it starts the APK download instead of opening the broken preview page.
+- [Download latest StreamVault.apk](https://github.com/Davidona/StreamVault-IPTV/releases/latest/download/StreamVault.apk)
+- Every push to `master` now triggers GitHub Actions to build a fresh APK and publish it as the latest GitHub Release asset.
 
 ## Project Structure
 
