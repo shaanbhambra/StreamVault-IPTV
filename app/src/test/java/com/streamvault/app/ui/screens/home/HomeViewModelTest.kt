@@ -30,6 +30,7 @@ import org.junit.Test
 import org.mockito.kotlin.*
 import com.google.common.truth.Truth.assertThat
 import javax.inject.Provider as InjectProvider
+import kotlinx.coroutines.runBlocking
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HomeViewModelTest {
@@ -79,6 +80,9 @@ class HomeViewModelTest {
         whenever(favoriteRepository.getFavoritesByGroup(any())).thenReturn(flowOf(emptyList()))
         whenever(parentalControlManager.unlockedCategoriesForProvider(any())).thenReturn(flowOf(emptySet()))
         whenever(syncManager.syncStateForProvider(any())).thenReturn(flowOf(SyncState.Idle))
+        runBlocking {
+            whenever(epgRepository.getResolvedProgramsForChannels(any(), any(), any(), any())).thenReturn(emptyMap())
+        }
         whenever(playerEngineProvider.get()).thenReturn(playerEngine)
 
         viewModel = createViewModel()
