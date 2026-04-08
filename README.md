@@ -40,12 +40,14 @@ Built for Android TV first, StreamVault focuses on the things generic IPTV apps 
 
 - Android TV-first interface with D-pad-friendly focus, navigation, and playback flows
 - Playlist support for `Xtream Codes` and `M3U` sources, including local playlist files
+- Combined M3U live-source support with optional in-browser source switching for merged Live TV setups
 - Fast live-TV browsing with preview mode, favorites, recent channels, custom groups, and pinned categories
 - Movie and series libraries with detailed info pages, resume support, episode switching, and auto-play for next episodes
 - Full EPG support with guide search, XMLTV support, and provider archive or catch-up when available
+- Built-in DVR with scheduled recording, background capture, recording playback, and app-managed default storage
 - Multi-view split-screen playback for watching multiple channels at once
 - Strong parental controls with PIN-protected categories and automatic adult-category detection
-- TV integrations including Watch Next, launcher recommendations, TV input sync, and Cast support
+- TV integrations including Watch Next, launcher recommendations, TV input sync, Cast support, and in-app update delivery
 
 ## Features
 
@@ -55,6 +57,7 @@ Built for Android TV first, StreamVault focuses on the things generic IPTV apps 
 - `M3U` playlists from URLs plus local files
 - Separate onboarding and sync flows for live channels, movies, series, and guide data
 - Fast switching between providers with provider-scoped settings
+- Combined M3U profiles for merging multiple M3U providers into a single Live TV source
 
 ### Navigation And TV UX
 
@@ -69,6 +72,7 @@ Built for Android TV first, StreamVault focuses on the things generic IPTV apps 
 - Favorites and recently watched channels
 - Custom groups for personal channel collections
 - Pinned categories surfaced near the top of the live guide rail
+- Optional Live TV provider or source browser for M3U-based setups
 - Long-press live categories for actions like pin, hide, lock or unlock, and custom-group management
 - Channel reordering for favorites and custom groups
 - Channel numbering modes by group or across the full provider lineup
@@ -79,10 +83,19 @@ Built for Android TV first, StreamVault focuses on the things generic IPTV apps 
 - Full EPG grid view
 - Program search inside the guide
 - XMLTV guide support with built-in EPG source management
+- Manual EPG match overrides and source-priority controls from inside Settings and Guide flows
 - Provider archive or catch-up support when the source exposes replay streams
 - Global search across live TV, movies, and series
 - Multi-view for watching multiple live streams at once
 - Player controls for subtitles, audio tracks, aspect ratio, playback speed, video quality, and Cast
+
+### Recording And Playback
+
+- Scheduled and background DVR recording for live channels
+- Conflict detection, persistence, and repair support for recording jobs
+- App-managed default recording folder with optional custom storage selection
+- In-app playback for completed recordings with a visible on-player recording indicator during active capture
+- Playback troubleshooting controls for decoder mode, media session behavior, and timeout tuning
 
 ### Movies And Series
 
@@ -127,6 +140,7 @@ Built for Android TV first, StreamVault focuses on the things generic IPTV apps 
 ## Download
 
 - [Download latest StreamVault.apk](https://github.com/Davidona/StreamVault-IPTV/releases/latest/download/StreamVault.apk)
+- The app can also detect and download newer releases in-app through GitHub Releases.
 - GitHub Actions still runs build and test validation on pushes and pull requests.
 - GitHub Releases are now published only when the workflow is started manually with `workflow_dispatch`, so versioned releases do not get created by mistake on every push.
 
