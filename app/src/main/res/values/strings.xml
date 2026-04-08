@@ -14,7 +14,7 @@
     <string name="welcome_enter_app">Enter App</string>
     <string name="welcome_manage_providers">Manage Providers</string>
     <string name="welcome_setup_provider">Setup Provider</string>
-    <string name="welcome_version">v1.0.0</string>
+    <string name="welcome_version">v1.0.3</string>
     <string name="welcome_loading_title">Preparing your library</string>
     <string name="welcome_loading_subtitle">Opening the right screen for this device.</string>
     <string name="welcome_tagline">Premium IPTV for the living room</string>
@@ -167,6 +167,13 @@
     <string name="continue_watching_season_episode">S%1$d E%2$d</string>
 
     <string name="playlist_no_provider">No Provider</string>
+    <string name="live_source_label">SOURCE</string>
+    <string name="live_source_filter_label">Playlist Filter</string>
+    <string name="live_source_filter_all">All Sources</string>
+    <string name="live_source_unavailable_short">Unavailable</string>
+    <string name="live_source_empty_short">Empty</string>
+    <string name="settings_show_live_source_switcher">Show Live Source Browser</string>
+    <string name="settings_show_live_source_switcher_subtitle">Display the M3U source switcher inside Live TV browsing.</string>
 
     
     <string name="movies_incorrect_pin">Incorrect PIN</string>
@@ -1224,3 +1231,4 @@
     <string name="tv_input_setup_retry_scan">Retry Auto Scan</string>
     <string name="tv_input_setup_success_hint">Android TV Live TV can now open your StreamVault channels.</string>
 </resources>
+

@@ -200,6 +200,10 @@ class MainActivity : ComponentActivity() {
         _externalNavigationRequestFlow.value = null
     }
 
+    fun openPlayer(request: PlayerNavigationRequest) {
+        _externalNavigationRequestFlow.value = ExternalNavigationRequest.Player(request)
+    }
+
     fun enterPlayerPictureInPictureModeFromPlayer(): Boolean {
         return enterPlayerPictureInPictureModeIfEligible(requirePlaying = false)
     }

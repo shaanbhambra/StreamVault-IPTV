@@ -2,8 +2,10 @@ package com.streamvault.app.ui.screens.provider
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.streamvault.domain.model.ActiveLiveSource
 import com.streamvault.domain.model.ProviderEpgSyncMode
 import com.streamvault.domain.model.ProviderType
+import com.streamvault.domain.repository.CombinedM3uRepository
 import com.streamvault.domain.repository.ProviderRepository
 import com.streamvault.domain.usecase.M3uProviderSetupCommand
 import com.streamvault.domain.usecase.ValidateAndAddProvider
@@ -14,12 +16,14 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 @HiltViewModel
 class ProviderSetupViewModel @Inject constructor(
     private val providerRepository: ProviderRepository,
+    private val combinedM3uRepository: CombinedM3uRepository,
     private val validateAndAddProvider: ValidateAndAddProvider
 ) : ViewModel() {
 
@@ -111,6 +115,7 @@ class ProviderSetupViewModel @Inject constructor(
                         it.copy(
                             isLoading = false,
                             loginSuccess = true,
+                            createdProviderId = result.provider.id,
                             error = null,
                             validationError = null,
                             syncProgress = null
@@ -176,10 +181,19 @@ class ProviderSetupViewModel @Inject constructor(
                 onProgress = { msg -> _uiState.update { it.copy(syncProgress = msg) } }
             )) {
                 is ValidateAndAddProviderResult.Success -> {
+                    val activeCombinedProfileId = (combinedM3uRepository.getActiveLiveSource().first()
+                        as? ActiveLiveSource.CombinedM3uSource)?.profileId
+                    val activeCombinedProfileName = activeCombinedProfileId?.let { profileId ->
+                        combinedM3uRepository.getProfile(profileId)?.name
+                    }
                     _uiState.update {
                         it.copy(
                             isLoading = false,
-                            loginSuccess = true,
+                            loginSuccess = activeCombinedProfileId == null,
+                            createdProviderId = result.provider.id,
+                            createdProviderName = result.provider.name,
+                            pendingCombinedAttachProfileId = activeCombinedProfileId,
+                            pendingCombinedAttachProfileName = activeCombinedProfileName,
                             error = null,
                             validationError = null,
                             syncProgress = null
@@ -204,6 +218,32 @@ class ProviderSetupViewModel @Inject constructor(
             }
         }
     }
+
+    fun attachCreatedProviderToCombined() {
+        val profileId = _uiState.value.pendingCombinedAttachProfileId ?: return
+        val providerId = _uiState.value.createdProviderId ?: return
+        viewModelScope.launch {
+            combinedM3uRepository.addProvider(profileId, providerId)
+            combinedM3uRepository.setActiveLiveSource(ActiveLiveSource.CombinedM3uSource(profileId))
+            _uiState.update {
+                it.copy(
+                    pendingCombinedAttachProfileId = null,
+                    pendingCombinedAttachProfileName = null,
+                    loginSuccess = true
+                )
+            }
+        }
+    }
+
+    fun skipCreatedProviderCombinedAttach() {
+        _uiState.update {
+            it.copy(
+                pendingCombinedAttachProfileId = null,
+                pendingCombinedAttachProfileName = null,
+                loginSuccess = true
+            )
+        }
+    }
 }
 
 data class ProviderSetupState(
@@ -222,6 +262,10 @@ data class ProviderSetupState(
     val username: String = "",
     val password: String = "",
     val m3uUrl: String = "",
+    val createdProviderId: Long? = null,
+    val createdProviderName: String? = null,
+    val pendingCombinedAttachProfileId: Long? = null,
+    val pendingCombinedAttachProfileName: String? = null,
     val epgSyncMode: ProviderEpgSyncMode = ProviderEpgSyncMode.UPFRONT,
     val xtreamFastSyncEnabled: Boolean = true,
     val m3uVodClassificationEnabled: Boolean = true

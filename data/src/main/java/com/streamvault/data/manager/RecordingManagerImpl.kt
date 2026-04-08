@@ -161,7 +161,11 @@ class RecordingManagerImpl @Inject constructor(
             )
             recordingRunDao.insert(run)
             alarmScheduler.scheduleStop(recordingId, request.scheduledEndMs)
-            RecordingForegroundService.startCapture(context, recordingId)
+            when (val startResult = startCapture(run)) {
+                is Result.Success -> Unit
+                is Result.Error -> throw IllegalStateException(startResult.message, startResult.exception)
+                Result.Loading -> Unit
+            }
             run.toStandaloneDomain()
         }.fold(
             onSuccess = { Result.success(it) },

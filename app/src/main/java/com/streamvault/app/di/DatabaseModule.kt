@@ -53,7 +53,8 @@ object DatabaseModule {
                 StreamVaultDatabase.MIGRATION_25_26,
                 StreamVaultDatabase.MIGRATION_26_27,
                 StreamVaultDatabase.MIGRATION_27_28,
-                StreamVaultDatabase.MIGRATION_28_29
+                StreamVaultDatabase.MIGRATION_28_29,
+                StreamVaultDatabase.MIGRATION_29_30
             )
             // NOTE: fallbackToDestructiveMigration() intentionally removed.
             // All future schema changes MUST add a corresponding Migration in StreamVaultDatabase.
@@ -79,6 +80,8 @@ object DatabaseModule {
     @Provides fun provideEpgChannelDao(db: StreamVaultDatabase): EpgChannelDao = db.epgChannelDao()
     @Provides fun provideEpgProgrammeDao(db: StreamVaultDatabase): EpgProgrammeDao = db.epgProgrammeDao()
     @Provides fun provideChannelEpgMappingDao(db: StreamVaultDatabase): ChannelEpgMappingDao = db.channelEpgMappingDao()
+    @Provides fun provideCombinedM3uProfileDao(db: StreamVaultDatabase): CombinedM3uProfileDao = db.combinedM3uProfileDao()
+    @Provides fun provideCombinedM3uProfileMemberDao(db: StreamVaultDatabase): CombinedM3uProfileMemberDao = db.combinedM3uProfileMemberDao()
     @Provides fun provideRecordingScheduleDao(db: StreamVaultDatabase): RecordingScheduleDao = db.recordingScheduleDao()
     @Provides fun provideRecordingRunDao(db: StreamVaultDatabase): RecordingRunDao = db.recordingRunDao()
     @Provides fun provideRecordingStorageDao(db: StreamVaultDatabase): RecordingStorageDao = db.recordingStorageDao()

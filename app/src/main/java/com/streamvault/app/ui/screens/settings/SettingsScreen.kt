@@ -2,8 +2,10 @@ package com.streamvault.app.ui.screens.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,6 +35,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.tv.material3.*
@@ -74,6 +78,8 @@ import com.streamvault.domain.model.CategorySortMode
 import com.streamvault.domain.model.ChannelNumberingMode
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.DecoderMode
+import com.streamvault.domain.model.ActiveLiveSource
+import com.streamvault.domain.model.CombinedM3uProfile
 import com.streamvault.domain.model.Provider
 import com.streamvault.domain.model.ProviderType
 import com.streamvault.domain.model.ProviderStatus
@@ -88,11 +94,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.style.TextAlign
 import com.streamvault.app.R
+import com.streamvault.app.MainActivity
+import com.streamvault.app.navigation.Routes
 import java.util.Locale
 import com.streamvault.app.BuildConfig
 import com.streamvault.app.ui.screens.settings.AppUpdateUiModel
 import com.streamvault.app.ui.interaction.mouseClickable
 import java.text.DateFormat
+import com.streamvault.app.ui.design.FocusSpec
 
 
 @Composable
@@ -109,6 +118,7 @@ fun SettingsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
+    val mainActivity = context.findMainActivity()
     val appLanguageLabel = remember(uiState.appLanguage, context) {
         displayLanguageLabel(uiState.appLanguage, context.getString(R.string.settings_system_default))
     }
@@ -193,6 +203,10 @@ fun SettingsScreen(
     var showWifiQualityDialog by rememberSaveable { mutableStateOf(false) }
     var showProviderSyncDialog by rememberSaveable { mutableStateOf(false) }
     var showCustomProviderSyncDialog by rememberSaveable { mutableStateOf(false) }
+    var showCreateCombinedDialog by rememberSaveable { mutableStateOf(false) }
+    var showAddCombinedMemberDialog by rememberSaveable { mutableStateOf(false) }
+    var showRenameCombinedDialog by rememberSaveable { mutableStateOf(false) }
+    var selectedCombinedProfileId by rememberSaveable { mutableStateOf<Long?>(null) }
     var pendingSyncProviderId by rememberSaveable { mutableStateOf<Long?>(null) }
     var customSyncSelections by rememberSaveable {
         mutableStateOf(
@@ -372,6 +386,40 @@ fun SettingsScreen(
                                         viewModel.refreshProviderClassification(selectedProvider.id)
                                     }
                                 )
+
+                                Spacer(modifier = Modifier.height(18.dp))
+                                CombinedM3uProfilesCard(
+                                    profiles = uiState.combinedProfiles,
+                                    availableProviders = uiState.availableM3uProviders,
+                                    selectedProfileId = selectedCombinedProfileId,
+                                    activeLiveSource = uiState.activeLiveSource,
+                                    onSelectProfile = { selectedCombinedProfileId = it },
+                                    onCreateProfile = { showCreateCombinedDialog = true },
+                                    onActivateProfile = { profileId -> viewModel.setActiveCombinedProfile(profileId) },
+                                    onDeleteProfile = { profileId ->
+                                        if (selectedCombinedProfileId == profileId) {
+                                            selectedCombinedProfileId = null
+                                        }
+                                        viewModel.deleteCombinedProfile(profileId)
+                                    },
+                                    onRenameProfile = { profileId ->
+                                        selectedCombinedProfileId = profileId
+                                        showRenameCombinedDialog = true
+                                    },
+                                    onAddProvider = { profileId ->
+                                        selectedCombinedProfileId = profileId
+                                        showAddCombinedMemberDialog = true
+                                    },
+                                    onRemoveProvider = { profileId, providerId ->
+                                        viewModel.removeProviderFromCombinedProfile(profileId, providerId)
+                                    },
+                                    onToggleProviderEnabled = { profileId, providerId, enabled ->
+                                        viewModel.setCombinedProviderEnabled(profileId, providerId, enabled)
+                                    },
+                                    onMoveProvider = { profileId, providerId, moveUp ->
+                                        viewModel.moveCombinedProvider(profileId, providerId, moveUp)
+                                    }
+                                )
                             }
                         }
                         item {
@@ -461,6 +509,28 @@ fun SettingsScreen(
                                 value = stringResource(uiState.liveTvChannelMode.labelResId()),
                                 onClick = { showLiveTvModeDialog = true }
                             )
+                            TvClickableSurface(
+                                onClick = { viewModel.setShowLiveSourceSwitcher(!uiState.showLiveSourceSwitcher) },
+                                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                                colors = ClickableSurfaceDefaults.colors(
+                                    containerColor = Color.Transparent,
+                                    focusedContainerColor = Primary.copy(alpha = 0.15f)
+                                ),
+                                scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(text = stringResource(R.string.settings_show_live_source_switcher), style = MaterialTheme.typography.bodyMedium, color = OnSurface)
+                                        Text(text = stringResource(R.string.settings_show_live_source_switcher_subtitle), style = MaterialTheme.typography.bodySmall, color = OnBackground.copy(alpha = 0.6f))
+                                    }
+                                    Switch(checked = uiState.showLiveSourceSwitcher, onCheckedChange = { viewModel.setShowLiveSourceSwitcher(it) })
+                                }
+                            }
                             ClickableSettingsRow(
                                 label = stringResource(R.string.settings_live_tv_quick_filters),
                                 value = formatLiveTvQuickFiltersValue(uiState.liveTvCategoryFilters, context),
@@ -731,6 +801,21 @@ fun SettingsScreen(
                             items(uiState.recordingItems, key = { it.id }) { item ->
                                 RecordingItemCard(
                                     item = item,
+                                    onPlay = {
+                                        val playbackUrl = item.playbackUrl()
+                                        if (!playbackUrl.isNullOrBlank()) {
+                                            mainActivity?.openPlayer(
+                                                Routes.player(
+                                                    streamUrl = playbackUrl,
+                                                    title = item.programTitle ?: item.channelName,
+                                                    internalId = item.channelId,
+                                                    providerId = item.providerId,
+                                                    contentType = "MOVIE",
+                                                    returnRoute = currentRoute
+                                                )
+                                            )
+                                        }
+                                    },
                                     onStop = { viewModel.stopRecording(item.id) },
                                     onCancel = { viewModel.cancelRecording(item.id) },
                                     onDelete = { viewModel.deleteRecording(item.id) },
@@ -1686,6 +1771,43 @@ fun SettingsScreen(
     val pendingSyncProvider = pendingSyncProviderId?.let { providerId ->
         uiState.providers.firstOrNull { it.id == providerId }
     }
+    if (showCreateCombinedDialog) {
+        CreateCombinedM3uDialog(
+            providers = uiState.availableM3uProviders,
+            onDismiss = { showCreateCombinedDialog = false },
+            onCreate = { name, providerIds ->
+                showCreateCombinedDialog = false
+                viewModel.createCombinedProfile(name, providerIds)
+            }
+        )
+    }
+    if (showRenameCombinedDialog) {
+        val selectedProfile = uiState.combinedProfiles.firstOrNull { it.id == selectedCombinedProfileId }
+        if (selectedProfile != null) {
+            RenameCombinedM3uDialog(
+                profile = selectedProfile,
+                onDismiss = { showRenameCombinedDialog = false },
+                onRename = { name ->
+                    showRenameCombinedDialog = false
+                    viewModel.renameCombinedProfile(selectedProfile.id, name)
+                }
+            )
+        }
+    }
+    if (showAddCombinedMemberDialog) {
+        val selectedProfile = uiState.combinedProfiles.firstOrNull { it.id == selectedCombinedProfileId }
+        if (selectedProfile != null) {
+            AddCombinedProviderDialog(
+                profile = selectedProfile,
+                availableProviders = uiState.availableM3uProviders,
+                onDismiss = { showAddCombinedMemberDialog = false },
+                onAddProvider = { providerId ->
+                    showAddCombinedMemberDialog = false
+                    viewModel.addProviderToCombinedProfile(selectedProfile.id, providerId)
+                }
+            )
+        }
+    }
     if (showProviderSyncDialog && pendingSyncProvider != null) {
         ProviderSyncOptionsDialog(
             provider = pendingSyncProvider,
@@ -1728,6 +1850,442 @@ fun SettingsScreen(
                 pendingSyncProviderId = null
             }
         )
+    }
+}
+
+@Composable
+private fun CombinedM3uProfilesCard(
+    profiles: List<CombinedM3uProfile>,
+    availableProviders: List<Provider>,
+    selectedProfileId: Long?,
+    activeLiveSource: ActiveLiveSource?,
+    onSelectProfile: (Long) -> Unit,
+    onCreateProfile: () -> Unit,
+    onActivateProfile: (Long) -> Unit,
+    onDeleteProfile: (Long) -> Unit,
+    onRenameProfile: (Long) -> Unit,
+    onAddProvider: (Long) -> Unit,
+    onRemoveProvider: (Long, Long) -> Unit,
+    onToggleProviderEnabled: (Long, Long, Boolean) -> Unit,
+    onMoveProvider: (Long, Long, Boolean) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        colors = SurfaceDefaults.colors(containerColor = SurfaceElevated),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Combined M3U", style = MaterialTheme.typography.titleMedium, color = OnSurface)
+                    Text(
+                        "Merge selected M3U playlists into one Live TV and EPG source.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OnSurfaceDim
+                    )
+                }
+                CompactSettingsActionChip(
+                    label = "Create Combined",
+                    accent = Primary,
+                    onClick = onCreateProfile
+                )
+            }
+
+            if (profiles.isEmpty()) {
+                Text("No combined M3U sources yet.", style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+            } else {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(profiles, key = { it.id }) { profile ->
+                        val isActive = (activeLiveSource as? ActiveLiveSource.CombinedM3uSource)?.profileId == profile.id
+                        ProviderChip(
+                            title = profile.name,
+                            subtitle = buildString {
+                                append("${profile.members.count { it.enabled }}/${profile.members.size} playlist(s)")
+                                if (isActive) append(" • Active")
+                                if (profile.members.none { it.enabled }) append(" • Empty")
+                            },
+                            isSelected = selectedProfileId == profile.id,
+                            isActive = isActive,
+                            onClick = { onSelectProfile(profile.id) }
+                        )
+                    }
+                }
+
+                val selectedProfile = profiles.firstOrNull { it.id == selectedProfileId } ?: profiles.first()
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CompactSettingsActionChip(
+                            label = "Use For Live TV",
+                            accent = Primary,
+                            onClick = { onActivateProfile(selectedProfile.id) }
+                        )
+                        CompactSettingsActionChip(
+                            label = "Rename",
+                            accent = OnBackground,
+                            onClick = { onRenameProfile(selectedProfile.id) }
+                        )
+                        CompactSettingsActionChip(
+                            label = "Add Playlist",
+                            accent = OnBackground,
+                            onClick = { onAddProvider(selectedProfile.id) }
+                        )
+                        CompactSettingsActionChip(
+                            label = "Delete",
+                            accent = ErrorColor,
+                            onClick = { onDeleteProfile(selectedProfile.id) }
+                        )
+                    }
+
+                    Text(
+                        text = "${selectedProfile.members.count { it.enabled }} of ${selectedProfile.members.size} playlists enabled",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OnSurfaceDim
+                    )
+
+                    if (selectedProfile.members.isEmpty()) {
+                        Text(
+                            text = "This combined source has no playlists yet. Add at least one M3U playlist before using it.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = OnSurfaceDim
+                        )
+                    } else if (selectedProfile.members.none { it.enabled }) {
+                        Text(
+                            text = "All playlists in this combined source are disabled. Enable at least one to use it in Live TV.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = OnSurfaceDim
+                        )
+                    }
+
+                    selectedProfile.members
+                        .sortedBy { it.priority }
+                        .forEachIndexed { index, member ->
+                        val providerName = member.providerName.ifBlank {
+                            availableProviders.firstOrNull { it.id == member.providerId }?.name ?: "Playlist ${member.providerId}"
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(providerName, style = MaterialTheme.typography.bodyMedium, color = OnSurface)
+                                Text(
+                                    if (member.enabled) "Enabled in merged source" else "Disabled in merged source",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = OnSurfaceDim
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                CompactSettingsActionChip(
+                                    label = "Up",
+                                    accent = OnBackground,
+                                    enabled = index > 0,
+                                    onClick = { onMoveProvider(selectedProfile.id, member.providerId, true) }
+                                )
+                                CompactSettingsActionChip(
+                                    label = "Down",
+                                    accent = OnBackground,
+                                    enabled = index < selectedProfile.members.lastIndex,
+                                    onClick = { onMoveProvider(selectedProfile.id, member.providerId, false) }
+                                )
+                                Switch(
+                                    checked = member.enabled,
+                                    onCheckedChange = { onToggleProviderEnabled(selectedProfile.id, member.providerId, it) }
+                                )
+                                CompactSettingsActionChip(
+                                    label = "Remove",
+                                    accent = ErrorColor,
+                                    onClick = { onRemoveProvider(selectedProfile.id, member.providerId) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RenameCombinedM3uDialog(
+    profile: CombinedM3uProfile,
+    onDismiss: () -> Unit,
+    onRename: (String) -> Unit
+) {
+    var name by rememberSaveable(profile.id) { mutableStateOf(profile.name) }
+
+    PremiumDialog(
+        title = "Rename Combined M3U",
+        subtitle = "Update the name shown in Live TV and provider settings.",
+        onDismissRequest = onDismiss,
+        widthFraction = 0.48f,
+        content = {
+            EpgSourceTextField(
+                value = name,
+                onValueChange = { updated -> name = updated },
+                placeholder = "Combined source name"
+            )
+        },
+        footer = {
+            PremiumDialogFooterButton(
+                label = stringResource(R.string.settings_cancel),
+                onClick = onDismiss
+            )
+            PremiumDialogFooterButton(
+                label = "Save",
+                onClick = { onRename(name.trim()) },
+                enabled = name.isNotBlank(),
+                emphasized = true
+            )
+        }
+    )
+}
+
+@Composable
+private fun CreateCombinedM3uDialog(
+    providers: List<Provider>,
+    onDismiss: () -> Unit,
+    onCreate: (String, List<Long>) -> Unit
+) {
+    var name by rememberSaveable { mutableStateOf("") }
+    var selectedProviderIds by rememberSaveable { mutableStateOf(setOf<Long>()) }
+    val m3uProviders = remember(providers) { providers.filter { it.type == ProviderType.M3U } }
+    val effectiveName = remember(name, selectedProviderIds, m3uProviders) {
+        val manualName = name.trim()
+        if (manualName.isNotBlank()) {
+            manualName
+        } else {
+            val selectedProviders = m3uProviders.filter { it.id in selectedProviderIds }
+            when {
+                selectedProviders.isEmpty() -> ""
+                selectedProviders.size == 1 -> "${selectedProviders.first().name} Mix"
+                selectedProviders.size == 2 -> "${selectedProviders[0].name} + ${selectedProviders[1].name}"
+                else -> "${selectedProviders.first().name} + ${selectedProviders.size - 1} More"
+            }
+        }
+    }
+
+    PremiumDialog(
+        title = "Create Combined M3U",
+        subtitle = "Pick the M3U playlists you want to browse together in Live TV and guide.",
+        onDismissRequest = onDismiss,
+        widthFraction = 0.52f,
+        content = {
+            EpgSourceTextField(
+                value = name,
+                onValueChange = { updated -> name = updated },
+                placeholder = effectiveName.ifBlank { "Combined source name" }
+            )
+
+            if (m3uProviders.isEmpty()) {
+                Text(
+                    text = "No M3U playlists are available yet. Add at least one playlist first.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OnSurfaceDim
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    m3uProviders.forEach { provider ->
+                        val isSelected = provider.id in selectedProviderIds
+                        TvClickableSurface(
+                            onClick = {
+                                selectedProviderIds = if (isSelected) {
+                                    selectedProviderIds - provider.id
+                                } else {
+                                    selectedProviderIds + provider.id
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+                            colors = ClickableSurfaceDefaults.colors(
+                                containerColor = if (isSelected) Primary.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.04f),
+                                focusedContainerColor = Primary.copy(alpha = 0.24f)
+                            ),
+                            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        text = provider.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = OnSurface
+                                    )
+                                    Text(
+                                        text = if (isSelected) "Included in this combined source" else "Press to include this playlist",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = OnSurfaceDim
+                                    )
+                                }
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = null
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        footer = {
+            PremiumDialogFooterButton(
+                label = stringResource(R.string.settings_cancel),
+                onClick = onDismiss
+            )
+            PremiumDialogFooterButton(
+                label = "Create",
+                onClick = { onCreate(effectiveName, selectedProviderIds.toList()) },
+                enabled = selectedProviderIds.isNotEmpty() && effectiveName.isNotBlank(),
+                emphasized = true
+            )
+        }
+    )
+}
+
+@Composable
+private fun AddCombinedProviderDialog(
+    profile: CombinedM3uProfile,
+    availableProviders: List<Provider>,
+    onDismiss: () -> Unit,
+    onAddProvider: (Long) -> Unit
+) {
+    val candidateProviders = remember(profile, availableProviders) {
+        availableProviders.filter { provider -> profile.members.none { it.providerId == provider.id } }
+    }
+    var selectedProviderId by rememberSaveable(profile.id) { mutableStateOf(candidateProviders.firstOrNull()?.id) }
+    PremiumDialog(
+        title = "Add Playlist To ${profile.name}",
+        subtitle = "Select another M3U playlist to include in this combined source.",
+        onDismissRequest = onDismiss,
+        widthFraction = 0.52f,
+        content = {
+            if (candidateProviders.isEmpty()) {
+                Text(
+                    text = "All M3U playlists are already in this combined source.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OnSurfaceDim
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    candidateProviders.forEach { provider ->
+                        val isSelected = selectedProviderId == provider.id
+                        TvClickableSurface(
+                            onClick = { selectedProviderId = provider.id },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+                            colors = ClickableSurfaceDefaults.colors(
+                                containerColor = if (isSelected) Primary.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.04f),
+                                focusedContainerColor = Primary.copy(alpha = 0.22f)
+                            ),
+                            border = ClickableSurfaceDefaults.border(
+                                border = Border(
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isSelected) Primary.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.08f)
+                                    ),
+                                    shape = RoundedCornerShape(12.dp)
+                                ),
+                                focusedBorder = Border(
+                                    border = BorderStroke(FocusSpec.BorderWidth, Color.White),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                            ),
+                            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = provider.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = OnSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { selectedProviderId = provider.id }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        footer = {
+            PremiumDialogFooterButton(
+                label = stringResource(R.string.settings_cancel),
+                onClick = onDismiss
+            )
+            PremiumDialogFooterButton(
+                label = "Add",
+                onClick = { selectedProviderId?.let(onAddProvider) },
+                enabled = selectedProviderId != null && candidateProviders.isNotEmpty(),
+                emphasized = true
+            )
+        }
+    )
+}
+
+@Composable
+private fun ProviderChip(
+    title: String,
+    subtitle: String,
+    isSelected: Boolean,
+    isActive: Boolean,
+    onClick: () -> Unit
+) {
+    TvClickableSurface(
+        onClick = onClick,
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (isSelected) Primary.copy(alpha = 0.16f) else Color.Transparent,
+            focusedContainerColor = Primary.copy(alpha = 0.24f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = OnSurface)
+            Text(
+                if (isActive) "$subtitle • Active" else subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (isActive) Primary else OnSurfaceDim
+            )
+        }
     }
 }
 
@@ -2512,6 +3070,12 @@ private fun ProviderSettingsCard(
                         focusedContainerColor = Primary.copy(alpha = 0.8f),
                         contentColor = Color.White
                     ),
+                    border = ClickableSurfaceDefaults.border(
+                        focusedBorder = Border(
+                            border = BorderStroke(FocusSpec.BorderWidth, Color.White),
+                            shape = RoundedCornerShape(6.dp)
+                        )
+                    ),
                     scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
                 ) {
                     Text(
@@ -2528,6 +3092,12 @@ private fun ProviderSettingsCard(
                     colors = ClickableSurfaceDefaults.colors(
                         containerColor = Primary.copy(alpha = 0.2f),
                         focusedContainerColor = Primary.copy(alpha = 0.5f)
+                    ),
+                    border = ClickableSurfaceDefaults.border(
+                        focusedBorder = Border(
+                            border = BorderStroke(FocusSpec.BorderWidth, Color.White),
+                            shape = RoundedCornerShape(6.dp)
+                        )
                     ),
                     scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
                 ) {
@@ -2547,6 +3117,12 @@ private fun ProviderSettingsCard(
                     containerColor = Secondary.copy(alpha = 0.2f),
                     focusedContainerColor = Secondary.copy(alpha = 0.5f)
                 ),
+                border = ClickableSurfaceDefaults.border(
+                    focusedBorder = Border(
+                        border = BorderStroke(FocusSpec.BorderWidth, Color.White),
+                        shape = RoundedCornerShape(6.dp)
+                    )
+                ),
                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
             ) {
                 Text(
@@ -2563,6 +3139,12 @@ private fun ProviderSettingsCard(
                 colors = ClickableSurfaceDefaults.colors(
                     containerColor = ErrorColor.copy(alpha = 0.2f),
                     focusedContainerColor = ErrorColor.copy(alpha = 0.5f)
+                ),
+                border = ClickableSurfaceDefaults.border(
+                    focusedBorder = Border(
+                        border = BorderStroke(FocusSpec.BorderWidth, Color.White),
+                        shape = RoundedCornerShape(6.dp)
+                    )
                 ),
                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
             ) {
@@ -2581,6 +3163,12 @@ private fun ProviderSettingsCard(
                     colors = ClickableSurfaceDefaults.colors(
                         containerColor = Primary.copy(alpha = 0.15f),
                         focusedContainerColor = Primary.copy(alpha = 0.3f)
+                    ),
+                    border = ClickableSurfaceDefaults.border(
+                        focusedBorder = Border(
+                            border = BorderStroke(FocusSpec.BorderWidth, Color.White),
+                            shape = RoundedCornerShape(6.dp)
+                        )
                     ),
                     scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
                 ) {
@@ -3554,6 +4142,7 @@ private fun BackupToggleRow(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RecordingOverviewCard(
     treeLabel: String?,
@@ -3572,30 +4161,19 @@ private fun RecordingOverviewCard(
     onChangeConcurrency: () -> Unit,
     onRepairSchedule: () -> Unit
 ) {
-    TvClickableSurface(
-        onClick = {},
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        colors = ClickableSurfaceDefaults.colors(
-            containerColor = SurfaceElevated,
-            focusedContainerColor = SurfaceElevated,
-            focusedContentColor = OnBackground
-        ),
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(16.dp)),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
+        colors = SurfaceDefaults.colors(containerColor = SurfaceElevated),
+        shape = RoundedCornerShape(16.dp)
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Text(
                 text = stringResource(R.string.settings_recording_storage_title),
-                style = MaterialTheme.typography.titleSmall,
+                style = MaterialTheme.typography.titleMedium,
                 color = Primary
-            )
-            Text(
-                text = outputDirectory ?: stringResource(R.string.settings_recording_storage_unknown),
-                style = MaterialTheme.typography.bodySmall,
-                color = OnSurfaceDim
             )
             treeLabel?.takeIf { it.isNotBlank() }?.let {
                 Text(
@@ -3604,7 +4182,15 @@ private fun RecordingOverviewCard(
                     color = Secondary
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = outputDirectory ?: stringResource(R.string.settings_recording_storage_unknown),
+                style = MaterialTheme.typography.bodySmall,
+                color = OnSurfaceDim
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 SettingsOverviewStat(
                     label = stringResource(R.string.settings_recording_active_label),
                     value = activeCount.toString(),
@@ -3626,7 +4212,10 @@ private fun RecordingOverviewCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = if (isWritable) Primary else ErrorColor
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 RecordingMetaPill(
                     label = stringResource(R.string.settings_recording_pattern_title),
                     value = fileNamePattern
@@ -3642,9 +4231,11 @@ private fun RecordingOverviewCard(
                     value = maxSimultaneousRecordings.toString()
                 )
             }
-            Row(
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxWidth()
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                maxItemsInEachRow = 3
             ) {
                 RecordingActionButton(stringResource(R.string.settings_recording_choose_folder), Primary, onChooseFolder)
                 RecordingActionButton(stringResource(R.string.settings_recording_use_app_storage), Secondary, onUseAppStorage)
@@ -3660,6 +4251,7 @@ private fun RecordingOverviewCard(
 @Composable
 private fun RecordingItemCard(
     item: RecordingItem,
+    onPlay: () -> Unit,
     onStop: () -> Unit,
     onCancel: () -> Unit,
     onDelete: () -> Unit,
@@ -3672,8 +4264,8 @@ private fun RecordingItemCard(
         shape = RoundedCornerShape(12.dp)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -3681,8 +4273,22 @@ private fun RecordingItemCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(item.programTitle ?: item.channelName, style = MaterialTheme.typography.titleSmall, color = OnBackground)
-                    Text(item.channelName, style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+                    Text(
+                        item.programTitle ?: item.channelName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OnBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (item.programTitle != null && item.programTitle != item.channelName) {
+                        Text(
+                            item.channelName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = OnSurfaceDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
                 Text(
                     text = when (item.status) {
@@ -3702,30 +4308,46 @@ private fun RecordingItemCard(
                     }
                 )
             }
-            Text(
-                text = stringResource(
-                    R.string.settings_recording_time_window,
-                    formatTimestamp(item.scheduledStartMs),
-                    formatTimestamp(item.scheduledEndMs)
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = OnSurface
-            )
-            if (item.recurrence != RecordingRecurrence.NONE) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    text = when (item.recurrence) {
-                        RecordingRecurrence.DAILY -> stringResource(R.string.settings_recording_recurrence_daily)
-                        RecordingRecurrence.WEEKLY -> stringResource(R.string.settings_recording_recurrence_weekly)
-                        RecordingRecurrence.NONE -> stringResource(R.string.settings_recording_recurrence_none)
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Secondary
+                    text = stringResource(
+                        R.string.settings_recording_time_window,
+                        formatTimestamp(item.scheduledStartMs),
+                        formatTimestamp(item.scheduledEndMs)
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OnSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
+                if (item.recurrence != RecordingRecurrence.NONE) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = when (item.recurrence) {
+                            RecordingRecurrence.DAILY -> stringResource(R.string.settings_recording_recurrence_daily)
+                            RecordingRecurrence.WEEKLY -> stringResource(R.string.settings_recording_recurrence_weekly)
+                            RecordingRecurrence.NONE -> stringResource(R.string.settings_recording_recurrence_none)
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Secondary,
+                        maxLines = 1
+                    )
+                }
             }
             item.failureReason?.takeIf { it.isNotBlank() }?.let { reason ->
                 Text(reason, style = MaterialTheme.typography.bodySmall, color = ErrorColor)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+                maxItemsInEachRow = 4
+            ) {
                 RecordingMetaPill(
                     label = stringResource(R.string.settings_recording_source_label),
                     value = formatRecordingSourceType(item.sourceType)
@@ -3751,103 +4373,161 @@ private fun RecordingItemCard(
             }
             item.outputDisplayPath?.takeIf { it.isNotBlank() }?.let { output ->
                 Text(
-                    text = "${stringResource(R.string.settings_recording_output_label)}: $output",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = OnSurfaceDim
+                    text = "${stringResource(R.string.settings_recording_output_label)}: ${summarizeRecordingOutputPath(output)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OnSurfaceDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             if (item.failureCategory != RecordingFailureCategory.NONE) {
                 Text(
                     text = "${stringResource(R.string.settings_recording_failure_label)}: ${formatRecordingFailureCategory(item.failureCategory)}",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     color = ErrorColor
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+                maxItemsInEachRow = 4
+            ) {
+                if (item.status == RecordingStatus.COMPLETED && (!item.outputUri.isNullOrBlank() || !item.outputPath.isNullOrBlank())) {
+                    CompactRecordingActionChip(
+                        label = "Play",
+                        accent = Primary,
+                        onClick = onPlay
+                    )
+                }
                 if (item.status == RecordingStatus.RECORDING) {
-                    TvClickableSurface(
-                        onClick = onStop,
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = ErrorColor.copy(alpha = 0.2f),
-                            focusedContainerColor = ErrorColor.copy(alpha = 0.35f)
-                        )
-                    ) {
-                        Text(
-                            text = stringResource(R.string.settings_recording_stop),
-                            color = ErrorColor,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                        )
-                    }
+                    CompactRecordingActionChip(
+                        label = stringResource(R.string.settings_recording_stop),
+                        accent = ErrorColor,
+                        onClick = onStop
+                    )
                 }
                 if (item.status == RecordingStatus.SCHEDULED) {
-                    TvClickableSurface(
-                        onClick = { onToggleSchedule(!item.scheduleEnabled) },
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = Secondary.copy(alpha = 0.16f),
-                            focusedContainerColor = Secondary.copy(alpha = 0.3f)
-                        )
-                    ) {
-                        Text(
-                            text = stringResource(
-                                if (item.scheduleEnabled) R.string.settings_recording_disable
-                                else R.string.settings_recording_enable
-                            ),
-                            color = Secondary,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                        )
-                    }
-                    TvClickableSurface(
-                        onClick = onCancel,
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = SurfaceHighlight,
-                            focusedContainerColor = Primary.copy(alpha = 0.2f)
-                        )
-                    ) {
-                        Text(
-                            text = stringResource(R.string.settings_recording_cancel),
-                            color = OnBackground,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                        )
-                    }
+                    CompactRecordingActionChip(
+                        label = stringResource(
+                            if (item.scheduleEnabled) R.string.settings_recording_disable
+                            else R.string.settings_recording_enable
+                        ),
+                        accent = Secondary,
+                        onClick = { onToggleSchedule(!item.scheduleEnabled) }
+                    )
+                    CompactRecordingActionChip(
+                        label = stringResource(R.string.settings_recording_cancel),
+                        accent = OnBackground,
+                        onClick = onCancel
+                    )
                 }
                 if (item.status == RecordingStatus.COMPLETED || item.status == RecordingStatus.FAILED || item.status == RecordingStatus.CANCELLED) {
                     if (item.status == RecordingStatus.FAILED) {
-                        TvClickableSurface(
-                            onClick = onRetry,
-                            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                            colors = ClickableSurfaceDefaults.colors(
-                                containerColor = Primary.copy(alpha = 0.16f),
-                                focusedContainerColor = Primary.copy(alpha = 0.3f)
-                            )
-                        ) {
-                            Text(
-                                text = stringResource(R.string.settings_recording_retry),
-                                color = Primary,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                            )
-                        }
-                    }
-                    TvClickableSurface(
-                        onClick = onDelete,
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = SurfaceHighlight,
-                            focusedContainerColor = Primary.copy(alpha = 0.2f)
-                        )
-                    ) {
-                        Text(
-                            text = stringResource(R.string.settings_recording_delete),
-                            color = OnBackground,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        CompactRecordingActionChip(
+                            label = stringResource(R.string.settings_recording_retry),
+                            accent = Primary,
+                            onClick = onRetry
                         )
                     }
+                    CompactRecordingActionChip(
+                        label = stringResource(R.string.settings_recording_delete),
+                        accent = OnBackground,
+                        onClick = onDelete
+                    )
                 }
             }
         }
     }
+}
+
+@Composable
+private fun CompactRecordingActionChip(label: String, accent: Color, onClick: () -> Unit) {
+    TvClickableSurface(
+        onClick = onClick,
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = accent.copy(alpha = 0.14f),
+            focusedContainerColor = accent.copy(alpha = 0.3f)
+        ),
+        border = ClickableSurfaceDefaults.border(
+            focusedBorder = Border(
+                border = BorderStroke(FocusSpec.BorderWidth, Color.White),
+                shape = RoundedCornerShape(8.dp)
+            )
+        ),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
+    ) {
+        Text(
+            text = label,
+            color = accent,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+        )
+    }
+}
+
+@Composable
+private fun CompactSettingsActionChip(
+    label: String,
+    accent: Color,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    TvClickableSurface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = accent.copy(alpha = if (enabled) 0.14f else 0.08f),
+            contentColor = accent.copy(alpha = if (enabled) 1f else 0.42f),
+            focusedContainerColor = accent.copy(alpha = if (enabled) 0.28f else 0.08f),
+            focusedContentColor = accent.copy(alpha = if (enabled) 1f else 0.42f),
+            disabledContainerColor = accent.copy(alpha = 0.08f),
+            disabledContentColor = accent.copy(alpha = 0.42f)
+        ),
+        border = ClickableSurfaceDefaults.border(
+            border = Border(
+                border = BorderStroke(1.dp, Color.White.copy(alpha = if (enabled) 0.08f else 0.04f)),
+                shape = RoundedCornerShape(8.dp)
+            ),
+            focusedBorder = Border(
+                border = BorderStroke(FocusSpec.BorderWidth, Color.White),
+                shape = RoundedCornerShape(8.dp)
+            )
+        ),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
+    ) {
+        Text(
+            text = label,
+            color = accent.copy(alpha = if (enabled) 1f else 0.42f),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        )
+    }
+}
+
+private fun RecordingItem.playbackUrl(): String? {
+    val persistedUri = outputUri?.trim()?.takeIf { it.isNotBlank() }
+    if (persistedUri != null) {
+        return persistedUri
+    }
+    val localPath = outputPath?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    val parsed = runCatching { android.net.Uri.parse(localPath) }.getOrNull()
+    return if (parsed?.scheme.isNullOrBlank()) {
+        android.net.Uri.fromFile(java.io.File(localPath)).toString()
+    } else {
+        localPath
+    }
+}
+
+private fun android.content.Context.findMainActivity(): MainActivity? {
+    var current: android.content.Context? = this
+    while (current is android.content.ContextWrapper) {
+        if (current is MainActivity) return current
+        current = current.baseContext
+    }
+    return null
 }
 
 private fun displayableEpgUrl(url: String): String = when {
@@ -4272,30 +4952,47 @@ private fun formatPlaybackSpeedLabel(speed: Float): String {
 private fun RecordingMetaPill(label: String, value: String) {
     Column(
         modifier = Modifier
+            .widthIn(min = 92.dp, max = 160.dp)
             .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp))
-            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .padding(horizontal = 7.dp, vertical = 5.dp)
     ) {
         Text(text = label, style = MaterialTheme.typography.labelSmall, color = OnSurfaceDim)
-        Text(text = value, style = MaterialTheme.typography.bodySmall, color = OnBackground)
+        Text(text = value, style = MaterialTheme.typography.labelMedium, color = OnBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
+}
+
+private fun summarizeRecordingOutputPath(path: String): String {
+    val trimmed = path.trim()
+    if (trimmed.isBlank()) return trimmed
+    val decoded = runCatching { android.net.Uri.decode(trimmed) }.getOrDefault(trimmed)
+    return decoded
+        .substringAfterLast('/')
+        .substringAfterLast('\\')
+        .ifBlank { decoded }
 }
 
 @Composable
 private fun RecordingActionButton(label: String, accent: Color, onClick: () -> Unit) {
-    TvClickableSurface(
+    TvButton(
         onClick = onClick,
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-        colors = ClickableSurfaceDefaults.colors(
+        modifier = Modifier
+            .widthIn(min = 190.dp, max = 260.dp)
+            .heightIn(min = 52.dp),
+        shape = ButtonDefaults.shape(RoundedCornerShape(10.dp)),
+        colors = ButtonDefaults.colors(
             containerColor = accent.copy(alpha = 0.14f),
-            focusedContainerColor = accent.copy(alpha = 0.28f)
+            focusedContainerColor = accent.copy(alpha = 0.28f),
+            contentColor = accent,
+            focusedContentColor = accent
         ),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
+        scale = ButtonDefaults.scale(focusedScale = 1f)
     ) {
         Text(
             text = label,
             color = accent,
             style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+            maxLines = 2,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
         )
     }
 }

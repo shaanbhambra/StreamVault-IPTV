@@ -27,6 +27,10 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.animation.*
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
@@ -759,6 +763,40 @@ fun PlayerScreen(
                 onDismiss = viewModel::dismissPlayerNotice,
                 onAction = handlePlayerNoticeAction
             )
+        }
+
+        if (currentChannelRecording?.status == com.streamvault.domain.model.RecordingStatus.RECORDING) {
+            val recordingPulse = rememberInfiniteTransition(label = "recordingPulse")
+            val recordingAlpha by recordingPulse.animateFloat(
+                initialValue = 1f,
+                targetValue = 0.2f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 750),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "recordingAlpha"
+            )
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 18.dp, top = 18.dp)
+                    .background(Color.Black.copy(alpha = 0.58f), RoundedCornerShape(999.dp))
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .background(Color(0xFFFF4D4F).copy(alpha = recordingAlpha), RoundedCornerShape(999.dp))
+                )
+                Text(
+                    text = stringResource(R.string.settings_recording_status_recording),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
         // Error overlay

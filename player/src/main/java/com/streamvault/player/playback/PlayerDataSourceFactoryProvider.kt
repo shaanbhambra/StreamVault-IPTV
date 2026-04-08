@@ -1,5 +1,7 @@
 package com.streamvault.player.playback
 
+import android.content.Context
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import com.streamvault.domain.model.StreamInfo
@@ -8,6 +10,7 @@ import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 
 class PlayerDataSourceFactoryProvider(
+    private val context: Context,
     private val baseClient: OkHttpClient
 ) {
     private val clientsByProfile = ConcurrentHashMap<PlayerTimeoutProfile, OkHttpClient>()
@@ -29,11 +32,12 @@ class PlayerDataSourceFactoryProvider(
                 .writeTimeout(profile.writeTimeoutMs, TimeUnit.MILLISECONDS)
                 .build()
         }
-        val factory = OkHttpDataSource.Factory(client).apply {
+        val upstreamFactory = OkHttpDataSource.Factory(client).apply {
             if (headers.isNotEmpty()) {
                 setDefaultRequestProperties(headers)
             }
         }
+        val factory = DefaultDataSource.Factory(context, upstreamFactory)
         return profile to factory
     }
 }

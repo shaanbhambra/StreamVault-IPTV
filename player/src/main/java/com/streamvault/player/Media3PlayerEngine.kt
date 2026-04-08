@@ -167,7 +167,7 @@ class Media3PlayerEngine @Inject constructor(
     ).also {
         it.bind { exoPlayer }
     }
-    private val dataSourceFactoryProvider = PlayerDataSourceFactoryProvider(okHttpClient)
+    private val dataSourceFactoryProvider = PlayerDataSourceFactoryProvider(context, okHttpClient)
     private val mediaSourceFactory = PlayerMediaSourceFactory(dataSourceFactoryProvider)
     private val preloadCoordinator = PreloadCoordinator()
     private val compatibilityProfile: PlaybackCompatibilityProfile = DefaultPlaybackCompatibilityProfile

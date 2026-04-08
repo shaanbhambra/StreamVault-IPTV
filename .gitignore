@@ -25,6 +25,7 @@ secrets.properties
 secret.properties
 .env
 .env.*
+.openai*
 keystore/
 release-signing-info.local.txt
 *.jks
@@ -44,6 +45,8 @@ domain/bin/
 hs_err_pid*.log
 gradle_build.log
 ksp.log
+__pycache__/
+*.pyc
 
 # Local scratch outputs
 capture.txt
@@ -51,4 +54,6 @@ out.txt
 localization_audit.txt
 tmp/*.txt
 tmp/*_HEAD.kt
+tmp/gha-artifact-inspect/
+translations/
 releases/*.apk

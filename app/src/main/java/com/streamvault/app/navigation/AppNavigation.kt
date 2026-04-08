@@ -178,11 +178,11 @@ object Routes {
     fun parentalControlGroups(providerId: Long) = "parental_control_groups/$providerId"
 }
 
-/** Accepts only media streaming schemes; rejects javascript:, file://, data:, etc. */
+/** Accepts app-supported media schemes while still rejecting obviously unsafe ones. */
 private fun isStreamUrlSafe(url: String?): Boolean {
     if (url.isNullOrBlank()) return false
     val scheme = url.substringBefore("://").lowercase()
-    return scheme in setOf("http", "https", "rtsp", "rtmp", "rtsps", "mms", "xtream")
+    return scheme in setOf("http", "https", "rtsp", "rtmp", "rtsps", "mms", "xtream", "content", "file")
 }
 
 /** Navigate only when the current destination is fully resumed – prevents double-navigation during transitions. */

@@ -6,9 +6,9 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.darkColorScheme
 import com.streamvault.app.ui.design.AppColors
 import com.streamvault.app.ui.design.AppShapes
-import com.streamvault.app.ui.design.AppTypography
 import com.streamvault.app.ui.design.LocalAppShapes
 import com.streamvault.app.ui.design.LocalAppSpacing
+import com.streamvault.app.ui.design.rememberAppTypography
 
 private val DarkColorScheme = darkColorScheme(
     primary = AppColors.Brand,
@@ -25,13 +25,14 @@ private val DarkColorScheme = darkColorScheme(
 
 @Composable
 fun StreamVaultTheme(content: @Composable () -> Unit) {
+    val typography = rememberAppTypography()
     CompositionLocalProvider(
         LocalAppSpacing provides com.streamvault.app.ui.design.AppSpacing(),
         LocalAppShapes provides AppShapes()
     ) {
         MaterialTheme(
             colorScheme = DarkColorScheme,
-            typography = AppTypography,
+            typography = typography,
             content = content
         )
     }

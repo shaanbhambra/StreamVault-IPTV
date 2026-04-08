@@ -23,6 +23,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -173,6 +174,35 @@ fun ProviderSetupScreen(
             cleanupOldImportedM3uFilesAsync(context.filesDir, protectedUris, 20)
             onProviderAdded()
         }
+    }
+
+    if (uiState.pendingCombinedAttachProfileId != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { viewModel.skipCreatedProviderCombinedAttach() },
+            title = { Text("Add Playlist To Combined M3U?") },
+            text = {
+                Text(
+                    buildString {
+                        append("Add ")
+                        append(uiState.createdProviderName ?: "this playlist")
+                        append(" to ")
+                        append(uiState.pendingCombinedAttachProfileName ?: "the active combined source")
+                        append(" and keep that combined source active for Live TV?")
+                    },
+                    color = OnSurface
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.attachCreatedProviderToCombined() }) {
+                    Text("Add To Combined", color = Primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.skipCreatedProviderCombinedAttach() }) {
+                    Text("Not Now", color = OnSurface)
+                }
+            }
+        )
     }
 
     LaunchedEffect(editProviderId) {

@@ -37,6 +37,7 @@ object StreamTypeResolver {
     fun resolve(url: String, mimeType: String? = null, isLive: Boolean = false): ResolvedStreamType {
         val normalizedMimeType = mimeType?.trim()?.lowercase(Locale.ROOT)
         val uri = runCatching { URI(url) }.getOrNull()
+        val scheme = uri?.scheme?.lowercase(Locale.ROOT)
         val path = uri?.path.orEmpty().ifBlank { url }
             .substringBefore('?')
             .substringBefore('#')
@@ -48,6 +49,8 @@ object StreamTypeResolver {
                 .lowercase(Locale.ROOT)
         val lastSegment = path.substringAfterLast('/').trim()
         return when {
+            scheme in setOf("file", "content") && path.endsWith(".m3u8") -> ResolvedStreamType.HLS
+            scheme in setOf("file", "content") -> ResolvedStreamType.PROGRESSIVE
             normalizedMimeType != null && hlsMimeHints.any(normalizedMimeType::contains) -> ResolvedStreamType.HLS
             normalizedMimeType != null && dashMimeHints.any(normalizedMimeType::contains) -> ResolvedStreamType.DASH
             hlsQueryHints.any(query::contains) -> ResolvedStreamType.HLS

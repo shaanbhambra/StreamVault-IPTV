@@ -5,13 +5,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamvault.app.ui.model.applyProviderCategoryDisplayPreferences
 import com.streamvault.domain.manager.ParentalControlManager
+import com.streamvault.domain.model.ActiveLiveSource
 import com.streamvault.domain.model.Category
 import com.streamvault.domain.model.ChannelEpgMapping
 import com.streamvault.domain.model.Channel
+import com.streamvault.domain.model.CombinedCategory
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.EpgOverrideCandidate
 import com.streamvault.domain.model.Program
 import com.streamvault.domain.repository.ChannelRepository
+import com.streamvault.domain.repository.CombinedM3uRepository
 import com.streamvault.domain.repository.EpgRepository
 import com.streamvault.domain.repository.EpgSourceRepository
 import com.streamvault.domain.repository.FavoriteRepository
@@ -28,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -153,6 +157,7 @@ private data class GuideSelectionRequest(
 @HiltViewModel
 class EpgViewModel @Inject constructor(
     private val providerRepository: ProviderRepository,
+    private val combinedM3uRepository: CombinedM3uRepository,
     private val channelRepository: ChannelRepository,
     private val epgRepository: EpgRepository,
     private val epgSourceRepository: EpgSourceRepository,
@@ -189,6 +194,7 @@ class EpgViewModel @Inject constructor(
     private val _overrideUiState = MutableStateFlow(EpgOverrideUiState())
     val overrideUiState: StateFlow<EpgOverrideUiState> = _overrideUiState.asStateFlow()
     private var overrideSearchJob: Job? = null
+    private var combinedCategoriesById: Map<Long, CombinedCategory> = emptyMap()
 
     init {
         restoreGuidePreferences()
@@ -198,7 +204,7 @@ class EpgViewModel @Inject constructor(
 
     fun selectCategory(categoryId: Long) {
         if (selectedCategoryId.value == categoryId) return
-        baseGuideSnapshot.value?.providerId?.let { providerId ->
+        baseGuideSnapshot.value?.providerId?.takeIf { it > 0L }?.let { providerId ->
             parentalControlManager.retainUnlockedCategory(
                 providerId = providerId,
                 categoryId = categoryId.takeIf { it > 0L && it != ChannelRepository.ALL_CHANNELS_ID }
@@ -220,7 +226,7 @@ class EpgViewModel @Inject constructor(
         preferencesRepository.verifyParentalPin(pin)
 
     fun unlockCategory(categoryId: Long) {
-        val providerId = baseGuideSnapshot.value?.providerId ?: return
+        val providerId = baseGuideSnapshot.value?.providerId?.takeIf { it > 0L } ?: return
         parentalControlManager.unlockCategory(providerId, categoryId)
     }
 
@@ -390,8 +396,15 @@ class EpgViewModel @Inject constructor(
 
     private fun observeGuideBase() {
         viewModelScope.launch {
-            providerRepository.getActiveProvider().collectLatest { provider ->
-                if (provider == null) {
+            combine(
+                combinedM3uRepository.getActiveLiveSource(),
+                providerRepository.getActiveProvider()
+            ) { activeSource, activeProvider ->
+                Pair(activeSource ?: activeProvider?.id?.let { ActiveLiveSource.ProviderSource(it) }, activeProvider)
+            }.distinctUntilChanged { old, new ->
+                old.first == new.first && old.second?.id == new.second?.id
+            }.collectLatest { (activeSource, activeProvider) ->
+                if (activeSource == null && activeProvider == null) {
                     baseGuideSnapshot.value = null
                     _uiState.update {
                         it.copy(
@@ -417,159 +430,281 @@ class EpgViewModel @Inject constructor(
                     return@collectLatest
                 }
 
-                channelRepository.getCategories(provider.id)
-                    .combine(preferencesRepository.getHiddenCategoryIds(provider.id, ContentType.LIVE)) { providerCategories, hiddenCategoryIds ->
-                        providerCategories to hiddenCategoryIds
+                when (activeSource) {
+                    is ActiveLiveSource.ProviderSource -> {
+                        val provider = activeProvider?.takeIf { it.id == activeSource.providerId }
+                            ?: providerRepository.getProvider(activeSource.providerId)
+                            ?: return@collectLatest
+                        observeSingleProviderGuide(provider)
                     }
-                    .combine(preferencesRepository.getCategorySortMode(provider.id, ContentType.LIVE)) { (providerCategories, hiddenCategoryIds), sortMode ->
-                        Triple(providerCategories, hiddenCategoryIds, sortMode)
+                    is ActiveLiveSource.CombinedM3uSource -> {
+                        observeCombinedGuide(activeSource.profileId)
                     }
-                    .combine(
-                        combine(
-                            selectedCategoryId,
-                            guideAnchorTime,
-                            showFavoritesOnly,
-                            refreshNonce
-                        ) { requestedCategoryId, anchorTime, favoritesOnly, _ ->
-                            Triple(requestedCategoryId, anchorTime, favoritesOnly)
-                        }.combine(preferencesRepository.parentalControlLevel) { selection, parentalControlLevel ->
-                            selection to parentalControlLevel
-                        }.combine(parentalControlManager.unlockedCategoriesForProvider(provider.id)) { (selection, parentalControlLevel), unlockedCategoryIds ->
-                            GuideSelectionRequest(
-                                requestedCategoryId = selection.first,
-                                anchorTime = selection.second,
-                                favoritesOnly = selection.third,
-                                parentalControlLevel = parentalControlLevel,
-                                unlockedCategoryIds = unlockedCategoryIds
-                            )
-                        }
-                    ) { (providerCategories, hiddenCategoryIds, sortMode), selection ->
-                        val requestedCategoryId = selection.requestedCategoryId
-                        val anchorTime = selection.anchorTime
-                        val favoritesOnly = selection.favoritesOnly
-                        val visibleProviderCategories = applyProviderCategoryDisplayPreferences(
-                            categories = providerCategories.filter { it.id != ChannelRepository.ALL_CHANNELS_ID },
-                            hiddenCategoryIds = hiddenCategoryIds,
-                            sortMode = sortMode
-                        )
-                        val resolvedCategoryId = resolveGuideCategorySelection(
-                            requestedCategoryId = requestedCategoryId,
-                            categories = visibleProviderCategories,
-                            parentalControlLevel = selection.parentalControlLevel,
-                            unlockedCategoryIds = selection.unlockedCategoryIds
-                        )
-                        GuideBaseRequest(
-                            categories = visibleProviderCategories,
-                            hiddenCategoryIds = hiddenCategoryIds,
-                            resolvedCategoryId = resolvedCategoryId,
-                            parentalControlLevel = selection.parentalControlLevel,
-                            anchorTime = anchorTime,
-                            favoritesOnly = favoritesOnly,
-                            windowStart = anchorTime - LOOKBACK_MS,
-                            windowEnd = anchorTime + LOOKAHEAD_MS
-                        )
-                    }.collectLatest { request ->
-                    val providerCategories = request.categories
-                    val categories = buildList {
-                        add(Category(id = ChannelRepository.ALL_CHANNELS_ID, name = "All Channels"))
-                        addAll(providerCategories)
-                    }
-                    val hasVisibleGuide = _uiState.value.channels.isNotEmpty() || _uiState.value.programsByChannel.isNotEmpty()
-
-                    _uiState.update {
-                        it.copy(
-                            currentProviderName = provider.name,
-                            providerSourceLabel = when (provider.type) {
-                                com.streamvault.domain.model.ProviderType.XTREAM_CODES -> "Xtream Codes"
-                                com.streamvault.domain.model.ProviderType.M3U -> "M3U Playlist"
-                            },
-                            providerArchiveSummary = buildProviderArchiveSummary(provider),
-                            categories = categories,
-                            parentalControlLevel = request.parentalControlLevel,
-                            showFavoritesOnly = request.favoritesOnly,
-                            selectedCategoryId = request.resolvedCategoryId,
-                            guideAnchorTime = request.anchorTime,
-                            guideWindowStart = request.windowStart,
-                            guideWindowEnd = request.windowEnd,
-                            isInitialLoading = !hasVisibleGuide,
-                            isRefreshing = hasVisibleGuide,
-                            error = null
-                        )
-                    }
-
-                    combine(
-                        channelRepository.getChannelsByNumber(provider.id, request.resolvedCategoryId),
-                        channelRepository.getChannelsWithoutErrors(provider.id, request.resolvedCategoryId),
-                        favoriteRepository.getFavorites(ContentType.LIVE)
-                    ) { channelsByNumber, healthyChannels, favorites ->
-                        val favoriteIds = favorites.map { it.contentId }.toSet()
-                        val preferredChannels = if (request.favoritesOnly) {
-                            healthyChannels.filter { it.id in favoriteIds }
-                                .ifEmpty { channelsByNumber.filter { it.id in favoriteIds } }
-                        } else {
-                            healthyChannels.ifEmpty { channelsByNumber }
-                        }
-                        GuideChannelSelection(
-                            channels = preferredChannels.filterNot { channel -> channel.categoryId in request.hiddenCategoryIds },
-                            favoriteChannelIds = favoriteIds
-                        )
-                    }.collectLatest { channelSelection ->
-                        val allChannels = channelSelection.channels
-                        val visibleChannels = allChannels.take(MAX_CHANNELS)
-                        val guideComputation = withContext(Dispatchers.Default) {
-                            val loadedGuideResult = loadGuidePrograms(
-                                provider = provider,
-                                providerId = provider.id,
-                                channels = visibleChannels,
-                                categoryId = request.resolvedCategoryId,
-                                favoritesOnly = request.favoritesOnly,
-                                windowStart = request.windowStart,
-                                windowEnd = request.windowEnd
-                            )
-                            val computedNow = System.currentTimeMillis()
-                            val computedChannelsWithSchedule = visibleChannels.count { channel ->
-                                channel.guideLookupKey()
-                                    ?.let { lookupKey -> loadedGuideResult.programsByChannel[lookupKey].orEmpty().isNotEmpty() }
-                                    ?: false
-                            }
-                            val computedHasUpcomingData = loadedGuideResult.programsByChannel.values.any { programs ->
-                                programs.any { program -> program.endTime > request.windowStart }
-                            }
-                            GuideBaseComputation(
-                                guideResult = loadedGuideResult,
-                                now = computedNow,
-                                channelsWithSchedule = computedChannelsWithSchedule,
-                                hasUpcomingData = computedHasUpcomingData
-                            )
-                        }
-                        baseGuideSnapshot.value = GuideBaseSnapshot(
-                            providerId = provider.id,
-                            currentProviderName = provider.name,
-                            providerSourceLabel = when (provider.type) {
-                                com.streamvault.domain.model.ProviderType.XTREAM_CODES -> "Xtream Codes"
-                                com.streamvault.domain.model.ProviderType.M3U -> "M3U Playlist"
-                            },
-                            providerArchiveSummary = buildProviderArchiveSummary(provider),
-                            categories = categories,
-                            selectedCategoryId = request.resolvedCategoryId,
-                            parentalControlLevel = request.parentalControlLevel,
-                            showFavoritesOnly = request.favoritesOnly,
-                            favoriteChannelIds = channelSelection.favoriteChannelIds,
-                            allChannels = allChannels,
-                            visibleChannels = visibleChannels,
-                            baseProgramsByChannel = guideComputation.guideResult.programsByChannel,
-                            failedScheduleCount = guideComputation.guideResult.failedCount,
-                            lastUpdatedAt = guideComputation.now,
-                            baseChannelsWithSchedule = guideComputation.channelsWithSchedule,
-                            baseGuideStale = visibleChannels.isNotEmpty() && (guideComputation.channelsWithSchedule == 0 || !guideComputation.hasUpcomingData),
-                            guideAnchorTime = request.anchorTime,
-                            guideWindowStart = request.windowStart,
-                            guideWindowEnd = request.windowEnd
-                        )
-                    }
+                    null -> Unit
                 }
             }
         }
+    }
+
+    private suspend fun observeSingleProviderGuide(provider: com.streamvault.domain.model.Provider) {
+        channelRepository.getCategories(provider.id)
+            .combine(preferencesRepository.getHiddenCategoryIds(provider.id, ContentType.LIVE)) { providerCategories, hiddenCategoryIds ->
+                providerCategories to hiddenCategoryIds
+            }
+            .combine(preferencesRepository.getCategorySortMode(provider.id, ContentType.LIVE)) { (providerCategories, hiddenCategoryIds), sortMode ->
+                Triple(providerCategories, hiddenCategoryIds, sortMode)
+            }
+            .combine(
+                combine(
+                    selectedCategoryId,
+                    guideAnchorTime,
+                    showFavoritesOnly,
+                    refreshNonce
+                ) { requestedCategoryId, anchorTime, favoritesOnly, _ ->
+                    Triple(requestedCategoryId, anchorTime, favoritesOnly)
+                }.combine(preferencesRepository.parentalControlLevel) { selection, parentalControlLevel ->
+                    selection to parentalControlLevel
+                }.combine(parentalControlManager.unlockedCategoriesForProvider(provider.id)) { (selection, parentalControlLevel), unlockedCategoryIds ->
+                    GuideSelectionRequest(
+                        requestedCategoryId = selection.first,
+                        anchorTime = selection.second,
+                        favoritesOnly = selection.third,
+                        parentalControlLevel = parentalControlLevel,
+                        unlockedCategoryIds = unlockedCategoryIds
+                    )
+                }
+            ) { (providerCategories, hiddenCategoryIds, sortMode), selection ->
+                val visibleProviderCategories = applyProviderCategoryDisplayPreferences(
+                    categories = providerCategories.filter { it.id != ChannelRepository.ALL_CHANNELS_ID },
+                    hiddenCategoryIds = hiddenCategoryIds,
+                    sortMode = sortMode
+                )
+                val resolvedCategoryId = resolveGuideCategorySelection(
+                    requestedCategoryId = selection.requestedCategoryId,
+                    categories = visibleProviderCategories,
+                    parentalControlLevel = selection.parentalControlLevel,
+                    unlockedCategoryIds = selection.unlockedCategoryIds
+                )
+                GuideBaseRequest(
+                    categories = visibleProviderCategories,
+                    hiddenCategoryIds = hiddenCategoryIds,
+                    resolvedCategoryId = resolvedCategoryId,
+                    parentalControlLevel = selection.parentalControlLevel,
+                    anchorTime = selection.anchorTime,
+                    favoritesOnly = selection.favoritesOnly,
+                    windowStart = selection.anchorTime - LOOKBACK_MS,
+                    windowEnd = selection.anchorTime + LOOKAHEAD_MS
+                )
+            }.collectLatest { request ->
+                val categories = buildList {
+                    add(Category(id = ChannelRepository.ALL_CHANNELS_ID, name = "All Channels"))
+                    addAll(request.categories)
+                }
+                val hasVisibleGuide = _uiState.value.channels.isNotEmpty() || _uiState.value.programsByChannel.isNotEmpty()
+                _uiState.update {
+                    it.copy(
+                        currentProviderName = provider.name,
+                        providerSourceLabel = when (provider.type) {
+                            com.streamvault.domain.model.ProviderType.XTREAM_CODES -> "Xtream Codes"
+                            com.streamvault.domain.model.ProviderType.M3U -> "M3U Playlist"
+                        },
+                        providerArchiveSummary = buildProviderArchiveSummary(provider),
+                        categories = categories,
+                        parentalControlLevel = request.parentalControlLevel,
+                        showFavoritesOnly = request.favoritesOnly,
+                        selectedCategoryId = request.resolvedCategoryId,
+                        guideAnchorTime = request.anchorTime,
+                        guideWindowStart = request.windowStart,
+                        guideWindowEnd = request.windowEnd,
+                        isInitialLoading = !hasVisibleGuide,
+                        isRefreshing = hasVisibleGuide,
+                        error = null
+                    )
+                }
+
+                combine(
+                    channelRepository.getChannelsByNumber(provider.id, request.resolvedCategoryId),
+                    channelRepository.getChannelsWithoutErrors(provider.id, request.resolvedCategoryId),
+                    favoriteRepository.getFavorites(ContentType.LIVE)
+                ) { channelsByNumber, healthyChannels, favorites ->
+                    val favoriteIds = favorites.map { it.contentId }.toSet()
+                    val preferredChannels = if (request.favoritesOnly) {
+                        healthyChannels.filter { it.id in favoriteIds }
+                            .ifEmpty { channelsByNumber.filter { it.id in favoriteIds } }
+                    } else {
+                        healthyChannels.ifEmpty { channelsByNumber }
+                    }
+                    GuideChannelSelection(
+                        channels = preferredChannels.filterNot { channel -> channel.categoryId in request.hiddenCategoryIds },
+                        favoriteChannelIds = favoriteIds
+                    )
+                }.collectLatest { channelSelection ->
+                    publishGuideSnapshot(
+                        providerId = provider.id,
+                        providerName = provider.name,
+                        providerSourceLabel = when (provider.type) {
+                            com.streamvault.domain.model.ProviderType.XTREAM_CODES -> "Xtream Codes"
+                            com.streamvault.domain.model.ProviderType.M3U -> "M3U Playlist"
+                        },
+                        providerArchiveSummary = buildProviderArchiveSummary(provider),
+                        categories = categories,
+                        request = request,
+                        channelSelection = channelSelection,
+                        guideResult = loadGuidePrograms(
+                            provider = provider,
+                            providerId = provider.id,
+                            channels = channelSelection.channels.take(MAX_CHANNELS),
+                            categoryId = request.resolvedCategoryId,
+                            favoritesOnly = request.favoritesOnly,
+                            windowStart = request.windowStart,
+                            windowEnd = request.windowEnd
+                        )
+                    )
+                }
+            }
+    }
+
+    private suspend fun observeCombinedGuide(profileId: Long) {
+        combine(
+            combinedM3uRepository.getCombinedCategories(profileId),
+            combine(
+                selectedCategoryId,
+                guideAnchorTime,
+                showFavoritesOnly,
+                refreshNonce
+            ) { requestedCategoryId, anchorTime, favoritesOnly, _ ->
+                Triple(requestedCategoryId, anchorTime, favoritesOnly)
+            }.combine(preferencesRepository.parentalControlLevel) { selection, parentalControlLevel ->
+                selection to parentalControlLevel
+            }
+        ) { combinedCategories, selection ->
+            combinedCategoriesById = combinedCategories.associateBy { it.category.id }
+            val categories = buildList {
+                add(Category(id = ChannelRepository.ALL_CHANNELS_ID, name = "All Channels"))
+                addAll(combinedCategories.map { it.category })
+            }
+            val resolvedCategoryId = if (selection.first.first == ChannelRepository.ALL_CHANNELS_ID || combinedCategoriesById.containsKey(selection.first.first)) {
+                selection.first.first
+            } else {
+                categories.firstOrNull()?.id ?: ChannelRepository.ALL_CHANNELS_ID
+            }
+            GuideBaseRequest(
+                categories = categories.filter { it.id != ChannelRepository.ALL_CHANNELS_ID },
+                hiddenCategoryIds = emptySet(),
+                resolvedCategoryId = resolvedCategoryId,
+                parentalControlLevel = selection.second,
+                anchorTime = selection.first.second,
+                favoritesOnly = selection.first.third,
+                windowStart = selection.first.second - LOOKBACK_MS,
+                windowEnd = selection.first.second + LOOKAHEAD_MS
+            )
+        }.collectLatest { request ->
+            val categories = buildList {
+                add(Category(id = ChannelRepository.ALL_CHANNELS_ID, name = "All Channels"))
+                addAll(request.categories)
+            }
+            val profile = combinedM3uRepository.getProfile(profileId)
+            val profileName = profile?.name ?: "Combined M3U"
+            val hasVisibleGuide = _uiState.value.channels.isNotEmpty() || _uiState.value.programsByChannel.isNotEmpty()
+            _uiState.update {
+                it.copy(
+                    currentProviderName = profileName,
+                    providerSourceLabel = "Combined M3U",
+                    providerArchiveSummary = "Guide data is merged from each member playlist's own EPG sources.",
+                    categories = categories,
+                    parentalControlLevel = request.parentalControlLevel,
+                    showFavoritesOnly = request.favoritesOnly,
+                    selectedCategoryId = request.resolvedCategoryId,
+                    guideAnchorTime = request.anchorTime,
+                    guideWindowStart = request.windowStart,
+                    guideWindowEnd = request.windowEnd,
+                    isInitialLoading = !hasVisibleGuide,
+                    isRefreshing = hasVisibleGuide,
+                    error = null
+                )
+            }
+
+            combine(
+                combinedGuideChannels(profileId, request.resolvedCategoryId),
+                favoriteRepository.getFavorites(ContentType.LIVE)
+            ) { channels, favorites ->
+                val favoriteIds = favorites.map { it.contentId }.toSet()
+                val preferredChannels = if (request.favoritesOnly) channels.filter { it.id in favoriteIds } else channels
+                GuideChannelSelection(
+                    channels = preferredChannels,
+                    favoriteChannelIds = favoriteIds
+                )
+            }.collectLatest { channelSelection ->
+                publishGuideSnapshot(
+                    providerId = 0L,
+                    providerName = profileName,
+                    providerSourceLabel = "Combined M3U",
+                    providerArchiveSummary = "Guide data is merged from each member playlist's own EPG sources.",
+                    categories = categories,
+                    request = request,
+                    channelSelection = channelSelection,
+                    guideResult = loadCombinedGuidePrograms(
+                        channels = channelSelection.channels.take(MAX_CHANNELS),
+                        windowStart = request.windowStart,
+                        windowEnd = request.windowEnd
+                    )
+                )
+            }
+        }
+    }
+
+    private fun combinedGuideChannels(profileId: Long, categoryId: Long) =
+        if (categoryId == ChannelRepository.ALL_CHANNELS_ID) {
+            val flows = combinedCategoriesById.values.map { combinedM3uRepository.getCombinedChannels(profileId, it) }
+            if (flows.isEmpty()) kotlinx.coroutines.flow.flowOf(emptyList())
+            else combine(flows) { arrays -> arrays.toList().flatMap { it } }
+        } else {
+            val combinedCategory = combinedCategoriesById[categoryId]
+            if (combinedCategory == null) kotlinx.coroutines.flow.flowOf(emptyList())
+            else combinedM3uRepository.getCombinedChannels(profileId, combinedCategory)
+        }
+
+    private suspend fun publishGuideSnapshot(
+        providerId: Long,
+        providerName: String,
+        providerSourceLabel: String,
+        providerArchiveSummary: String,
+        categories: List<Category>,
+        request: GuideBaseRequest,
+        channelSelection: GuideChannelSelection,
+        guideResult: GuideProgramsResult
+    ) {
+        val visibleChannels = channelSelection.channels.take(MAX_CHANNELS)
+        val computedNow = System.currentTimeMillis()
+        val computedChannelsWithSchedule = visibleChannels.count { channel ->
+            channel.guideLookupKey()
+                ?.let { lookupKey -> guideResult.programsByChannel[lookupKey].orEmpty().isNotEmpty() }
+                ?: false
+        }
+        val computedHasUpcomingData = guideResult.programsByChannel.values.any { programs ->
+            programs.any { program -> program.endTime > request.windowStart }
+        }
+        baseGuideSnapshot.value = GuideBaseSnapshot(
+            providerId = providerId,
+            currentProviderName = providerName,
+            providerSourceLabel = providerSourceLabel,
+            providerArchiveSummary = providerArchiveSummary,
+            categories = categories,
+            selectedCategoryId = request.resolvedCategoryId,
+            parentalControlLevel = request.parentalControlLevel,
+            showFavoritesOnly = request.favoritesOnly,
+            favoriteChannelIds = channelSelection.favoriteChannelIds,
+            allChannels = channelSelection.channels,
+            visibleChannels = visibleChannels,
+            baseProgramsByChannel = guideResult.programsByChannel,
+            failedScheduleCount = guideResult.failedCount,
+            lastUpdatedAt = computedNow,
+            baseChannelsWithSchedule = computedChannelsWithSchedule,
+            baseGuideStale = visibleChannels.isNotEmpty() && (computedChannelsWithSchedule == 0 || !computedHasUpcomingData),
+            guideAnchorTime = request.anchorTime,
+            guideWindowStart = request.windowStart,
+            guideWindowEnd = request.windowEnd
+        )
     }
 
     private fun loadEpgOverrideCandidates(channel: Channel, query: String, refreshMapping: Boolean) {
@@ -768,6 +903,47 @@ class EpgViewModel @Inject constructor(
                 failedCount = guideKeys.count { lookupKey -> mergedProgramsByChannel[lookupKey].isNullOrEmpty() }
             )
         }
+    }
+
+    private suspend fun loadCombinedGuidePrograms(
+        channels: List<Channel>,
+        windowStart: Long,
+        windowEnd: Long
+    ): GuideProgramsResult {
+        if (channels.isEmpty()) {
+            return GuideProgramsResult(emptyMap(), failedCount = 0)
+        }
+        val groupedPrograms = channels.groupBy { it.providerId }
+            .mapValues { (_, providerChannels) ->
+                providerChannels
+            }
+
+        val mergedProgramsByChannel = buildMap<String, List<Program>> {
+            groupedPrograms.forEach { (providerId, providerChannels) ->
+                val provider = providerRepository.getProvider(providerId)
+                    ?: com.streamvault.domain.model.Provider(
+                        id = providerId,
+                        name = "M3U Provider",
+                        type = com.streamvault.domain.model.ProviderType.M3U,
+                        serverUrl = ""
+                    )
+                val result = loadGuidePrograms(
+                    provider = provider,
+                    providerId = providerId,
+                    channels = providerChannels,
+                    categoryId = ChannelRepository.ALL_CHANNELS_ID,
+                    favoritesOnly = false,
+                    windowStart = windowStart,
+                    windowEnd = windowEnd
+                )
+                putAll(result.programsByChannel)
+            }
+        }
+        val guideKeys = channels.mapNotNull(Channel::guideLookupKey).distinct()
+        return GuideProgramsResult(
+            programsByChannel = mergedProgramsByChannel,
+            failedCount = guideKeys.count { lookupKey -> mergedProgramsByChannel[lookupKey].isNullOrEmpty() }
+        )
     }
 
     private suspend fun fetchXtreamGuideFallback(

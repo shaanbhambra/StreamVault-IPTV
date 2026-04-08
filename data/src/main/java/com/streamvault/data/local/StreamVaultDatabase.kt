@@ -36,11 +36,13 @@ import com.streamvault.data.local.entity.*
         EpgChannelEntity::class,
         EpgProgrammeEntity::class,
         ChannelEpgMappingEntity::class,
+        CombinedM3uProfileEntity::class,
+        CombinedM3uProfileMemberEntity::class,
         RecordingScheduleEntity::class,
         RecordingRunEntity::class,
         RecordingStorageEntity::class
     ],
-    version = 29,
+    version = 30,
     exportSchema = true   // ← was false; schema JSON now tracked in version control
 )
 @TypeConverters(RoomEnumConverters::class)
@@ -65,6 +67,8 @@ abstract class StreamVaultDatabase : RoomDatabase() {
     abstract fun epgChannelDao(): EpgChannelDao
     abstract fun epgProgrammeDao(): EpgProgrammeDao
     abstract fun channelEpgMappingDao(): ChannelEpgMappingDao
+    abstract fun combinedM3uProfileDao(): CombinedM3uProfileDao
+    abstract fun combinedM3uProfileMemberDao(): CombinedM3uProfileMemberDao
     abstract fun recordingScheduleDao(): RecordingScheduleDao
     abstract fun recordingRunDao(): RecordingRunDao
     abstract fun recordingStorageDao(): RecordingStorageDao
@@ -1321,6 +1325,44 @@ abstract class StreamVaultDatabase : RoomDatabase() {
                         1, NULL, NULL, NULL, NULL, 0, 'ChannelName_yyyy-MM-dd_HH-mm_ProgramTitle.ts', NULL, 2, $now
                     )
                     """.trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_29_30 = object : Migration(29, 30) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS combined_m3u_profiles (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS combined_m3u_profile_members (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        profile_id INTEGER NOT NULL,
+                        provider_id INTEGER NOT NULL,
+                        priority INTEGER NOT NULL,
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        FOREIGN KEY(profile_id) REFERENCES combined_m3u_profiles(id) ON DELETE CASCADE,
+                        FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_combined_m3u_profile_members_profile_id ON combined_m3u_profile_members(profile_id)"
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_combined_m3u_profile_members_provider_id ON combined_m3u_profile_members(provider_id)"
+                )
+                database.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_combined_m3u_profile_members_profile_id_provider_id ON combined_m3u_profile_members(profile_id, provider_id)"
                 )
             }
         }

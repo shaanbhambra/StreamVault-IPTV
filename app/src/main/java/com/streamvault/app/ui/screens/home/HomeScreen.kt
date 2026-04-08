@@ -49,6 +49,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.streamvault.app.ui.components.CategoryRow
 import com.streamvault.app.ui.components.ChannelCard
+import com.streamvault.app.ui.components.LiveSourceSwitcher
 import com.streamvault.app.ui.components.shell.ContentMetadataStrip
 import com.streamvault.app.ui.components.shell.LiveChannelRowSurface
 import com.streamvault.app.ui.components.shell.StatusPill
@@ -135,6 +136,13 @@ fun HomeScreen(
     multiViewViewModel: MultiViewViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val providerNameById = remember(uiState.allProviders) {
+        uiState.allProviders.associateBy({ it.id }, { it.name })
+    }
+    val resolveProviderForChannel: (Channel) -> Provider? = remember(uiState.allProviders, uiState.provider) {
+        { channel -> uiState.allProviders.firstOrNull { it.id == channel.providerId } ?: uiState.provider }
+    }
+    val shouldShowLiveSourceSwitcher = uiState.showLiveSourceSwitcher && uiState.liveSourceOptions.isNotEmpty()
     val isReorderMode = uiState.isChannelReorderMode
     val isProMode = uiState.liveTvChannelMode == LiveTvChannelMode.PRO
     val isDenseMode = uiState.liveTvChannelMode != LiveTvChannelMode.COMFORTABLE
@@ -270,7 +278,7 @@ fun HomeScreen(
 
                         pendingUnlockChannel?.let { channel ->
                              viewModel.clearPreview()
-                             onChannelClick(channel, uiState.selectedCategory, uiState.provider)
+                             onChannelClick(channel, uiState.selectedCategory, resolveProviderForChannel(channel))
                              pendingUnlockChannel = null
                         }
 
@@ -374,7 +382,7 @@ fun HomeScreen(
             currentRoute = currentRoute,
             onNavigate = onNavigate,
             title = stringResource(R.string.nav_live_tv),
-            subtitle = uiState.provider?.name,
+            subtitle = uiState.activeLiveSourceTitle.ifBlank { uiState.provider?.name },
             navigationChrome = AppNavigationChrome.TopBar,
             compactHeader = true,
             showScreenHeader = false
@@ -669,12 +677,30 @@ fun HomeScreen(
                             var showQuickFiltersDrawer by rememberSaveable(uiState.savedCategoryFilters) {
                                 mutableStateOf(false)
                             }
-                            Text(
-                                text = stringResource(R.string.home_categories_title),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = OnSurface,
-                                modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp, start = 4.dp, end = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.home_categories_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = OnSurface,
+                                    maxLines = 1,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (shouldShowLiveSourceSwitcher) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    LiveSourceSwitcher(
+                                        currentSource = uiState.activeLiveSource,
+                                        options = uiState.liveSourceOptions,
+                                        onSourceSelected = viewModel::switchLiveSource,
+                                        compact = true
+                                    )
+                                }
+                            }
                             SearchInput(
                                 value = uiState.categorySearchQuery,
                                 onValueChange = {
@@ -938,12 +964,6 @@ fun HomeScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = stringResource(R.string.label_colon_value_format, stringResource(R.string.live_shell_provider), uiState.provider?.name ?: stringResource(R.string.playlist_no_provider)),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = OnSurfaceDim,
-                                        maxLines = 1
-                                    )
-                                    Text(
                                         text = stringResource(R.string.live_channel_results, uiState.filteredChannels.size),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = OnSurfaceDim,
@@ -953,7 +973,6 @@ fun HomeScreen(
                             } else {
                                 ContentMetadataStrip(
                                     values = buildList {
-                                        add(stringResource(R.string.label_colon_value_format, stringResource(R.string.live_shell_provider), uiState.provider?.name ?: stringResource(R.string.playlist_no_provider)))
                                         add(stringResource(R.string.live_channel_results, uiState.filteredChannels.size))
                                         uiState.lastVisitedCategory?.name?.let {
                                             add(stringResource(R.string.label_colon_value_format, stringResource(R.string.live_shell_last_group), it))
@@ -1158,6 +1177,11 @@ fun HomeScreen(
 
                                     LiveChannelRowSurface(
                                         channel = channel,
+                                        sourceBadgeLabel = uiState.currentCombinedProfileMembers
+                                            .firstOrNull { it.providerId == channel.providerId }
+                                            ?.providerName
+                                            ?.ifBlank { providerNameById[channel.providerId] }
+                                            ?.takeIf { uiState.isCombinedLiveSource },
                                         isLocked = isLocked,
                                         isReorderMode = uiState.isChannelReorderMode,
                                         isDragging = isDraggingThis,
@@ -1174,12 +1198,12 @@ fun HomeScreen(
                                                 } else if (isProMode) {
                                                     if (uiState.previewChannelId == channel.id) {
                                                         viewModel.clearPreview()
-                                                        onChannelClick(channel, uiState.selectedCategory, uiState.provider)
+                                                        onChannelClick(channel, uiState.selectedCategory, resolveProviderForChannel(channel))
                                                     } else {
                                                         viewModel.previewChannel(channel)
                                                     }
                                                 } else {
-                                                    onChannelClick(channel, uiState.selectedCategory, uiState.provider)
+                                                    onChannelClick(channel, uiState.selectedCategory, resolveProviderForChannel(channel))
                                                 }
                                             }
                                         },

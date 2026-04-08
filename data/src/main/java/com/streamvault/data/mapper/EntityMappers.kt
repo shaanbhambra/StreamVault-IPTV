@@ -55,6 +55,26 @@ fun Provider.toEntity() = ProviderEntity(
     createdAt = createdAt
 )
 
+fun CombinedM3uProfileEntity.toDomain(
+    members: List<CombinedM3uProfileMember> = emptyList()
+) = CombinedM3uProfile(
+    id = id,
+    name = name,
+    enabled = enabled,
+    members = members,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
+
+fun CombinedM3uProfileMemberWithProvider.toDomain() = CombinedM3uProfileMember(
+    id = id,
+    profileId = profileId,
+    providerId = providerId,
+    priority = priority,
+    enabled = enabled,
+    providerName = providerName
+)
+
 // ── Channel ────────────────────────────────────────────────────────
 
 fun ChannelEntity.toDomain(): Channel {

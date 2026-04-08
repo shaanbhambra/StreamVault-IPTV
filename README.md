@@ -2,7 +2,7 @@
 
 <p align="center">
 	<a href="https://github.com/Davidona/StreamVault-IPTV/releases/latest/download/StreamVault.apk"><img src="https://img.shields.io/badge/Download-StreamVault.apk-2ea44f?style=for-the-badge&logo=android" alt="Download StreamVault APK" /></a>
-	<a href="https://github.com/Davidona/StreamVault-IPTV/releases/tag/v1.0.1"><img src="https://img.shields.io/badge/Version-1.0.1-0f766e?style=for-the-badge" alt="Current version 1.0.1" /></a>
+	<a href="https://github.com/Davidona/StreamVault-IPTV/releases/tag/v1.0.3"><img src="https://img.shields.io/badge/Version-1.0.3-0f766e?style=for-the-badge" alt="Current version 1.0.3" /></a>
 	<a href="https://github.com/Davidona/StreamVault-IPTV/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/Davidona/StreamVault-IPTV/release.yml?branch=master&style=for-the-badge&label=CI" alt="GitHub Actions status" /></a>
 	<a href="https://ko-fi.com/davidona"><img src="https://img.shields.io/badge/Support-Ko--fi-ff5f5f?style=for-the-badge&logo=kofi" alt="Support on Ko-fi" /></a>
 </p>
@@ -104,7 +104,7 @@ Built for Android TV first, StreamVault focuses on the things generic IPTV apps 
 ### Languages And Device Support
 
 - English plus 25 translated locale packs currently ship with the app
-- Translation coverage is broad, but some locales are still machine-assisted and may need cleanup
+- Locale coverage is broader and rendering is more reliable across supported languages
 - Built for TV first; phones and tablets are supported, but not the primary design target
 
 ### Platform Integrations

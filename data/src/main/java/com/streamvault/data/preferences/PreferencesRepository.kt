@@ -18,6 +18,7 @@ import com.streamvault.domain.model.ChannelNumberingMode
 import com.streamvault.domain.model.CategorySortMode
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.DecoderMode
+import com.streamvault.domain.model.ActiveLiveSource
 import com.streamvault.domain.manager.ParentalPinVerifier
 import com.streamvault.domain.manager.ParentalControlSessionState
 import com.streamvault.domain.manager.ParentalControlSessionStore
@@ -53,6 +54,8 @@ class PreferencesRepository @Inject constructor(
 
     private object PreferencesKeys {
         val LAST_ACTIVE_PROVIDER_ID = longPreferencesKey("last_active_provider_id")
+        val ACTIVE_LIVE_SOURCE_TYPE = stringPreferencesKey("active_live_source_type")
+        val ACTIVE_LIVE_SOURCE_ID = longPreferencesKey("active_live_source_id")
         val DEFAULT_VIEW_MODE = stringPreferencesKey("default_view_mode")
         val PARENTAL_CONTROL_LEVEL = intPreferencesKey("parental_control_level")
         val LEGACY_PARENTAL_PIN = stringPreferencesKey("parental_pin")
@@ -61,6 +64,7 @@ class PreferencesRepository @Inject constructor(
         val DEFAULT_CATEGORY_ID = longPreferencesKey("default_category_id")
         val APP_LANGUAGE = stringPreferencesKey("app_language")
         val LIVE_TV_CHANNEL_MODE = stringPreferencesKey("live_tv_channel_mode")
+        val SHOW_LIVE_SOURCE_SWITCHER = booleanPreferencesKey("show_live_source_switcher")
         val LIVE_TV_CATEGORY_FILTERS = stringPreferencesKey("live_tv_category_filters")
         val LIVE_TV_QUICK_FILTER_VISIBILITY = stringPreferencesKey("live_tv_quick_filter_visibility")
         val LIVE_CHANNEL_NUMBERING_MODE = stringPreferencesKey("live_channel_numbering_mode")
@@ -133,6 +137,15 @@ class PreferencesRepository @Inject constructor(
 
     val lastActiveProviderId: Flow<Long?> = context.dataStore.data.map { preferences ->
         preferences[PreferencesKeys.LAST_ACTIVE_PROVIDER_ID]
+    }
+
+    val activeLiveSource: Flow<ActiveLiveSource?> = context.dataStore.data.map { preferences ->
+        val sourceId = preferences[PreferencesKeys.ACTIVE_LIVE_SOURCE_ID] ?: return@map null
+        when (preferences[PreferencesKeys.ACTIVE_LIVE_SOURCE_TYPE]) {
+            "provider" -> ActiveLiveSource.ProviderSource(sourceId)
+            "combined_m3u" -> ActiveLiveSource.CombinedM3uSource(sourceId)
+            else -> null
+        }
     }
 
     val defaultViewMode: Flow<String?> = context.dataStore.data.map { preferences ->
@@ -252,6 +265,26 @@ class PreferencesRepository @Inject constructor(
     suspend fun setLastActiveProviderId(id: Long) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.LAST_ACTIVE_PROVIDER_ID] = id
+        }
+    }
+
+    suspend fun setActiveLiveSource(source: ActiveLiveSource?) {
+        context.dataStore.edit { preferences ->
+            if (source == null) {
+                preferences.remove(PreferencesKeys.ACTIVE_LIVE_SOURCE_TYPE)
+                preferences.remove(PreferencesKeys.ACTIVE_LIVE_SOURCE_ID)
+                return@edit
+            }
+            when (source) {
+                is ActiveLiveSource.ProviderSource -> {
+                    preferences[PreferencesKeys.ACTIVE_LIVE_SOURCE_TYPE] = "provider"
+                    preferences[PreferencesKeys.ACTIVE_LIVE_SOURCE_ID] = source.providerId
+                }
+                is ActiveLiveSource.CombinedM3uSource -> {
+                    preferences[PreferencesKeys.ACTIVE_LIVE_SOURCE_TYPE] = "combined_m3u"
+                    preferences[PreferencesKeys.ACTIVE_LIVE_SOURCE_ID] = source.profileId
+                }
+            }
         }
     }
 
@@ -683,6 +716,16 @@ class PreferencesRepository @Inject constructor(
     suspend fun setLiveTvChannelMode(mode: String) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.LIVE_TV_CHANNEL_MODE] = mode
+        }
+    }
+
+    val showLiveSourceSwitcher: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.SHOW_LIVE_SOURCE_SWITCHER] ?: false
+    }
+
+    suspend fun setShowLiveSourceSwitcher(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.SHOW_LIVE_SOURCE_SWITCHER] = enabled
         }
     }
 

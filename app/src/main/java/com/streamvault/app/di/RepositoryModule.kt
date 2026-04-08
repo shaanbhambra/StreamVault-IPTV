@@ -29,6 +29,9 @@ abstract class RepositoryModule {
     abstract fun bindChannelRepository(impl: ChannelRepositoryImpl): ChannelRepository
 
     @Binds @Singleton
+    abstract fun bindCombinedM3uRepository(impl: CombinedM3uRepositoryImpl): CombinedM3uRepository
+
+    @Binds @Singleton
     abstract fun bindMovieRepository(impl: MovieRepositoryImpl): MovieRepository
 
     @Binds @Singleton

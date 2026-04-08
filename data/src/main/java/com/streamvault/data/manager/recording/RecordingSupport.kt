@@ -3,6 +3,7 @@ package com.streamvault.data.manager.recording
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.os.Environment
 import android.os.StatFs
 import androidx.documentfile.provider.DocumentFile
 import com.google.gson.Gson
@@ -19,6 +20,8 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private const val DEFAULT_RECORDINGS_DIR_NAME = "recordings"
 
 internal fun RecordingRunWithSchedule.toDomain(): RecordingItem = RecordingItem(
     id = id,
@@ -123,7 +126,7 @@ internal fun resolveStorageDetails(
     treeUriString: String?
 ): Triple<String?, Long?, Boolean> {
     if (treeUriString.isNullOrBlank()) {
-        val recordingsDir = File(context.filesDir, "recordings").apply { mkdirs() }
+        val recordingsDir = defaultRecordingDirectory(context)
         val available = runCatching { StatFs(recordingsDir.absolutePath).availableBytes }.getOrNull()
         return Triple(recordingsDir.absolutePath, available, recordingsDir.canWrite())
     }
@@ -146,7 +149,11 @@ internal fun createOutputTarget(
 ): RecordingOutputTarget {
     val treeUri = storage.treeUri
     if (treeUri.isNullOrBlank()) {
-        val outputFile = File(storage.outputDirectory ?: File(context.filesDir, "recordings").absolutePath, fileName)
+        val baseDirectory = storage.outputDirectory
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::File)
+            ?: defaultRecordingDirectory(context)
+        val outputFile = File(baseDirectory, fileName)
         outputFile.parentFile?.mkdirs()
         return RecordingOutputTarget.FileTarget(outputFile)
     }
@@ -187,4 +194,14 @@ internal fun RecordingOutputTarget.asPersistenceValues(): Pair<String?, String?>
 internal fun RecordingOutputTarget.openOutputStream(contentResolver: ContentResolver, append: Boolean = false) = when (this) {
     is RecordingOutputTarget.FileTarget -> FileOutputStream(file, append).buffered()
     is RecordingOutputTarget.DocumentTarget -> contentResolver.openOutputStream(uri, if (append) "wa" else "w")
+}
+
+private fun defaultRecordingDirectory(context: Context): File {
+    val externalAppMoviesDir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+        ?.let { File(it, DEFAULT_RECORDINGS_DIR_NAME) }
+    val targetDir = externalAppMoviesDir ?: File(context.filesDir, DEFAULT_RECORDINGS_DIR_NAME)
+    if (!targetDir.exists()) {
+        targetDir.mkdirs()
+    }
+    return targetDir
 }

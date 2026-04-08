@@ -89,6 +89,7 @@ private object LiveChannelRowTicker {
 @Composable
 fun LiveChannelRowCard(
     channel: Channel,
+    sourceBadgeLabel: String? = null,
     modifier: Modifier = Modifier,
     rowHeight: Dp = 68.dp
 ) {
@@ -142,6 +143,13 @@ fun LiveChannelRowCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         StatusPill(label = stringResource(R.string.card_live_badge), containerColor = AppColors.Live)
+                        sourceBadgeLabel?.takeIf { it.isNotBlank() }?.let { label ->
+                            StatusPill(
+                                label = label,
+                                containerColor = AppColors.SurfaceEmphasis,
+                                contentColor = AppColors.TextPrimary
+                            )
+                        }
                         if (channel.isFavorite) {
                             StatusPill(label = stringResource(R.string.badge_saved), containerColor = AppColors.Warning, contentColor = Color.Black)
                         }
@@ -200,6 +208,7 @@ fun LiveChannelRowCard(
 fun LiveChannelRowSurface(
     channel: Channel,
     onClick: () -> Unit,
+    sourceBadgeLabel: String? = null,
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
     isLocked: Boolean = false,
@@ -290,6 +299,7 @@ fun LiveChannelRowSurface(
         Box {
             LiveChannelRowCard(
                 channel = channel,
+                sourceBadgeLabel = sourceBadgeLabel,
                 modifier = Modifier.fillMaxWidth(),
                 rowHeight = rowHeight
             )

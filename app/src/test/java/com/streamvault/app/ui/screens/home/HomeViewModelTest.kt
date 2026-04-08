@@ -6,6 +6,7 @@ import com.streamvault.app.ui.screens.multiview.MultiViewManager
 import com.streamvault.data.preferences.PreferencesRepository
 import com.streamvault.data.sync.SyncManager
 import com.streamvault.domain.manager.ParentalControlManager
+import com.streamvault.domain.model.ActiveLiveSource
 import com.streamvault.domain.model.Category
 import com.streamvault.domain.model.CategorySortMode
 import com.streamvault.domain.model.Channel
@@ -36,6 +37,7 @@ import kotlinx.coroutines.runBlocking
 class HomeViewModelTest {
 
     private val providerRepository: ProviderRepository = mock()
+    private val combinedM3uRepository: CombinedM3uRepository = mock()
     private val channelRepository: ChannelRepository = mock()
     private val categoryRepository: CategoryRepository = mock()
     private val favoriteRepository: FavoriteRepository = mock()
@@ -63,6 +65,8 @@ class HomeViewModelTest {
         // Mock default flows to prevent exceptions during init
         whenever(providerRepository.getProviders()).thenReturn(flowOf(emptyList()))
         whenever(providerRepository.getActiveProvider()).thenReturn(flowOf(null))
+        whenever(combinedM3uRepository.getActiveLiveSource()).thenReturn(flowOf(null))
+        whenever(combinedM3uRepository.getActiveLiveSourceOptions()).thenReturn(flowOf(emptyList()))
         whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
         whenever(favoriteRepository.getFavorites(any())).thenReturn(flowOf(emptyList()))
         whenever(preferencesRepository.defaultCategoryId).thenReturn(flowOf(null))
@@ -98,6 +102,7 @@ class HomeViewModelTest {
         HomeViewModel(
             application = application,
             providerRepository = providerRepository,
+            combinedM3uRepository = combinedM3uRepository,
             channelRepository = channelRepository,
             categoryRepository = categoryRepository,
             favoriteRepository = favoriteRepository,
@@ -118,6 +123,7 @@ class HomeViewModelTest {
         viewModel.switchProvider(1L)
         runCurrent()
         verify(providerRepository).setActiveProvider(1L)
+        verify(combinedM3uRepository).setActiveLiveSource(ActiveLiveSource.ProviderSource(1L))
     }
 
     @Test

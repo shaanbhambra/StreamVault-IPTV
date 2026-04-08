@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -42,7 +43,13 @@ class RecordingForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification(activeCount = 0))
+        runCatching {
+            startForeground(NOTIFICATION_ID, buildNotification(activeCount = 0))
+        }.onFailure { error ->
+            Log.e("RecordingFgService", "Unable to enter foreground", error)
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         ensureNotificationObserver()
         val manager = entryPoint().recordingManager()
         when (intent?.action) {

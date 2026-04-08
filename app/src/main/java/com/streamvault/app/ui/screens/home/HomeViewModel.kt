@@ -12,20 +12,26 @@ import com.streamvault.app.ui.model.LiveTvQuickFilterVisibilityMode
 import com.streamvault.data.preferences.PreferencesRepository
 import com.streamvault.data.sync.SyncManager
 import com.streamvault.domain.manager.ParentalControlManager
+import com.streamvault.domain.model.ActiveLiveSource
+import com.streamvault.domain.model.ActiveLiveSourceOption
 import com.streamvault.domain.model.Category
 import com.streamvault.domain.model.CategorySortMode
-import com.streamvault.domain.model.ChannelNumberingMode
 import com.streamvault.domain.model.Channel
+import com.streamvault.domain.model.ChannelNumberingMode
+import com.streamvault.domain.model.CombinedCategory
+import com.streamvault.domain.model.CombinedM3uProfileMember
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.PlaybackHistory
 import com.streamvault.domain.model.Program
 import com.streamvault.domain.model.Provider
+import com.streamvault.domain.model.ProviderType
 import com.streamvault.domain.model.Result
 import com.streamvault.domain.model.StreamInfo
 import com.streamvault.domain.model.SyncState
 import com.streamvault.domain.model.VirtualCategoryIds
 import com.streamvault.domain.repository.CategoryRepository
 import com.streamvault.domain.repository.ChannelRepository
+import com.streamvault.domain.repository.CombinedM3uRepository
 import com.streamvault.domain.repository.EpgRepository
 import com.streamvault.domain.repository.FavoriteRepository
 import com.streamvault.domain.repository.PlaybackHistoryRepository
@@ -55,6 +61,7 @@ import javax.inject.Provider as InjectProvider
 class HomeViewModel @Inject constructor(
     application: Application,
     private val providerRepository: ProviderRepository,
+    private val combinedM3uRepository: CombinedM3uRepository,
     private val channelRepository: ChannelRepository,
     private val categoryRepository: CategoryRepository,
     private val favoriteRepository: FavoriteRepository,
@@ -91,6 +98,7 @@ class HomeViewModel @Inject constructor(
     private var previewErrorJob: Job? = null
     private var previewPlayerEngine: PlayerEngine? = null
     private var previewSessionVersion: Long = 0L
+    private var combinedCategoriesById: Map<Long, CombinedCategory> = emptyMap()
 
     init {
         loadAllProviders()
@@ -100,30 +108,93 @@ class HomeViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            providerRepository.getActiveProvider()
-                .filterNotNull()
-                .distinctUntilChangedBy { it.id }
-                .collectLatest { provider ->
-                    parentalControlManager.clearUnlockedCategories(provider.id)
-                    _uiState.update {
-                        it.copy(
-                            provider = provider,
-                            categories = emptyList(),
-                            recentChannels = emptyList(),
-                            lastVisitedCategory = null,
-                            selectedCategory = null,
-                            filteredChannels = emptyList(),
-                            hasChannels = false,
-                            isLoading = false,
-                            isCategoriesLoading = true,
-                            errorMessage = null
-                        )
+            combine(
+                combinedM3uRepository.getActiveLiveSource(),
+                providerRepository.getActiveProvider()
+            ) { activeSource, activeProvider ->
+                Pair(
+                    activeSource ?: activeProvider?.id?.let { ActiveLiveSource.ProviderSource(it) },
+                    activeProvider
+                )
+            }.distinctUntilChanged { old, new ->
+                old.first == new.first && old.second?.id == new.second?.id
+            }.collectLatest { (activeSource, activeProvider) ->
+                when (activeSource) {
+                    is ActiveLiveSource.CombinedM3uSource -> {
+                        val profile = combinedM3uRepository.getProfile(activeSource.profileId)
+                        combinedCategoriesById = emptyMap()
+                        _uiState.update {
+                            it.copy(
+                                provider = null,
+                                activeLiveSource = activeSource,
+                                activeLiveSourceTitle = profile?.name ?: "Combined M3U",
+                                isCombinedLiveSource = true,
+                                categories = emptyList(),
+                                recentChannels = emptyList(),
+                                lastVisitedCategory = null,
+                                selectedCategory = null,
+                                filteredChannels = emptyList(),
+                                hasChannels = false,
+                                isLoading = false,
+                                isCategoriesLoading = true,
+                                errorMessage = null,
+                                currentCombinedProfileMembers = profile?.members.orEmpty(),
+                                selectedCombinedSourceProviderId = null
+                            )
+                        }
+                        _localChannels.value = emptyList()
+                        loadCombinedCategoriesAndChannels(activeSource.profileId)
                     }
-                    _localChannels.value = emptyList()
-                    loadCategoriesAndChannels(provider.id)
-                    observeRecentChannels(provider.id)
-                    preferencesRepository.setLastActiveProviderId(provider.id)
+                    is ActiveLiveSource.ProviderSource -> {
+                        val provider = activeProvider?.takeIf { it.id == activeSource.providerId }
+                            ?: providerRepository.getProvider(activeSource.providerId)
+                            ?: return@collectLatest
+                        parentalControlManager.clearUnlockedCategories(provider.id)
+                        combinedCategoriesById = emptyMap()
+                        _uiState.update {
+                            it.copy(
+                                provider = provider,
+                                activeLiveSource = activeSource,
+                                activeLiveSourceTitle = provider.name,
+                                isCombinedLiveSource = false,
+                                categories = emptyList(),
+                                recentChannels = emptyList(),
+                                lastVisitedCategory = null,
+                                selectedCategory = null,
+                                filteredChannels = emptyList(),
+                                hasChannels = false,
+                                isLoading = false,
+                                isCategoriesLoading = true,
+                                errorMessage = null,
+                                currentCombinedProfileMembers = emptyList(),
+                                selectedCombinedSourceProviderId = null
+                            )
+                        }
+                        _localChannels.value = emptyList()
+                        loadCategoriesAndChannels(provider.id)
+                        observeRecentChannels(provider.id)
+                        preferencesRepository.setLastActiveProviderId(provider.id)
+                    }
+                    null -> Unit
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            combinedM3uRepository.getActiveLiveSourceOptions().collectLatest { options ->
+                _uiState.update { state ->
+                    state.copy(
+                        liveSourceOptions = options.filter { option ->
+                            when (val source = option.source) {
+                                is ActiveLiveSource.ProviderSource -> {
+                                    state.allProviders.firstOrNull { it.id == source.providerId }?.type == ProviderType.M3U
+                                }
+                                is ActiveLiveSource.CombinedM3uSource -> true
+                            }
+                        }
+                    )
+                }
+            }
         }
 
         // Observe channels, search query, and favorites to update UI
@@ -161,13 +232,12 @@ class HomeViewModel @Inject constructor(
 
         viewModelScope.launch {
             combine(
-                _uiState.map { it.provider?.id }.distinctUntilChanged(),
+                _uiState.map { it.filteredChannels.map(Channel::providerId).toSet() }.distinctUntilChanged(),
                 _uiState.map { it.filteredChannels }.distinctUntilChanged(),
                 _visibleChannelWindow.debounce(120)
-            ) { providerId, channels, visibleIds ->
-                Triple(providerId, channels, visibleIds)
-            }.collectLatest { (providerId, channels, visibleIds) ->
-                val resolvedProviderId = providerId ?: return@collectLatest
+            ) { providerIds, channels, visibleIds ->
+                Triple(providerIds, channels, visibleIds)
+            }.collectLatest { (_, channels, visibleIds) ->
                 if (channels.isEmpty()) {
                     epgJob?.cancel()
                     _epgProgramMap.value = emptyMap()
@@ -180,10 +250,7 @@ class HomeViewModel @Inject constructor(
                     visibleIds
                 }
 
-                fetchEpgForChannels(
-                    providerId = resolvedProviderId,
-                    channels = channels.filter { it.id in candidateIds }
-                )
+                fetchEpgForChannels(channels.filter { it.id in candidateIds })
             }
         }
 
@@ -240,6 +307,14 @@ class HomeViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            preferencesRepository.showLiveSourceSwitcher
+                .distinctUntilChanged()
+                .collectLatest { enabled ->
+                    _uiState.update { it.copy(showLiveSourceSwitcher = enabled) }
+                }
+        }
+
+        viewModelScope.launch {
             _uiState.map { it.provider?.id }
                 .distinctUntilChanged()
                 .flatMapLatest { providerId ->
@@ -264,14 +339,33 @@ class HomeViewModel @Inject constructor(
     private fun loadAllProviders() {
         viewModelScope.launch {
             providerRepository.getProviders().collect { providers ->
-                _uiState.update { it.copy(allProviders = providers) }
+                _uiState.update { state ->
+                    state.copy(
+                        allProviders = providers,
+                        liveSourceOptions = state.liveSourceOptions.filter { option ->
+                            when (val source = option.source) {
+                                is ActiveLiveSource.ProviderSource ->
+                                    providers.firstOrNull { it.id == source.providerId }?.type == ProviderType.M3U
+                                is ActiveLiveSource.CombinedM3uSource -> true
+                            }
+                        }
+                    )
+                }
             }
         }
     }
 
     fun switchProvider(providerId: Long) {
+        switchLiveSource(ActiveLiveSource.ProviderSource(providerId))
+    }
+
+    fun switchLiveSource(source: ActiveLiveSource) {
         viewModelScope.launch {
-            providerRepository.setActiveProvider(providerId)
+            combinedM3uRepository.setActiveLiveSource(source)
+            when (source) {
+                is ActiveLiveSource.ProviderSource -> providerRepository.setActiveProvider(source.providerId)
+                is ActiveLiveSource.CombinedM3uSource -> Unit
+            }
         }
     }
 
@@ -401,13 +495,84 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    private fun loadCombinedCategoriesAndChannels(profileId: Long) {
+        categoriesJob?.cancel()
+        categoriesJob = viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isCategoriesLoading = true, errorMessage = null, pinnedCategoryIds = emptySet()) }
+                combine(
+                    combinedM3uRepository.getCombinedCategories(profileId),
+                    getCustomCategories()
+                ) { combinedCategories, customCats ->
+                    combinedCategoriesById = combinedCategories.associateBy { it.category.id }
+                    val recentCategory = Category(
+                        id = VirtualCategoryIds.RECENT,
+                        name = "Recent",
+                        type = ContentType.LIVE,
+                        isVirtual = true,
+                        count = 0
+                    )
+                    val allChannelsCategory = Category(
+                        id = ChannelRepository.ALL_CHANNELS_ID,
+                        name = "All Channels",
+                        type = ContentType.LIVE,
+                        count = combinedCategories.sumOf { it.category.count }
+                    )
+                    CategorySelectionContext(
+                        categories = buildList {
+                            val favoritesCategory = customCats.find { it.id == VirtualCategoryIds.FAVORITES }
+                            if (favoritesCategory != null) add(favoritesCategory)
+                            add(recentCategory)
+                            addAll(customCats.filter { it.id != VirtualCategoryIds.FAVORITES })
+                            add(allChannelsCategory)
+                            addAll(combinedCategories.map { it.category })
+                        },
+                        defaultCategoryId = null,
+                        lastVisitedCategoryId = null,
+                        pinnedCategoryIds = emptySet()
+                    )
+                }.collect { selectionContext ->
+                    val categories = selectionContext.categories
+                    _uiState.update {
+                        it.copy(
+                            categories = categories,
+                            lastVisitedCategory = null,
+                            isCategoriesLoading = false,
+                            pinnedCategoryIds = emptySet()
+                        )
+                    }
+
+                    val currentSelected = _uiState.value.selectedCategory
+                    if (currentSelected == null && categories.isNotEmpty()) {
+                        val favoritesCat = categories.find { it.id == VirtualCategoryIds.FAVORITES }
+                        if (favoritesCat != null) selectCategory(favoritesCat) else selectCategory(categories.first())
+                    } else if (currentSelected != null && categories.none { it.id == currentSelected.id }) {
+                        val favoritesCat = categories.find { it.id == VirtualCategoryIds.FAVORITES }
+                        if (favoritesCat != null) selectCategory(favoritesCat) else if (categories.isNotEmpty()) selectCategory(categories.first())
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isCategoriesLoading = false,
+                        errorMessage = appContext.getString(R.string.home_error_load_failed)
+                    )
+                }
+            }
+        }
+    }
+
     fun selectCategory(category: Category) {
         if (_uiState.value.selectedCategory?.id == category.id) return
-        _uiState.value.provider?.id?.let { providerId ->
-            parentalControlManager.retainUnlockedCategory(
-                providerId = providerId,
-                categoryId = category.id.takeIf { !category.isVirtual && it > 0L }
-            )
+        if (!_uiState.value.isCombinedLiveSource) {
+            _uiState.value.provider?.id?.let { providerId ->
+                parentalControlManager.retainUnlockedCategory(
+                    providerId = providerId,
+                    categoryId = category.id.takeIf { !category.isVirtual && it > 0L }
+                )
+            }
         }
         clearPreview()
         _localChannels.value = emptyList()
@@ -421,7 +586,7 @@ class HomeViewModel @Inject constructor(
             )
         }
         _preferredInitialCategoryId.value = null
-        if (category.id != VirtualCategoryIds.RECENT) {
+        if (!_uiState.value.isCombinedLiveSource && category.id != VirtualCategoryIds.RECENT) {
             val providerId = _uiState.value.provider?.id
             if (providerId != null) {
                 viewModelScope.launch {
@@ -449,7 +614,6 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun loadChannelsForCategory(category: Category) {
-        val providerId = _uiState.value.provider?.id ?: return
         loadChannelsJob?.cancel()
         loadChannelsJob = viewModelScope.launch {
             try {
@@ -464,7 +628,37 @@ class HomeViewModel @Inject constructor(
                     .debounce(150)
                     .distinctUntilChanged()
 
-                val channelsFlow = if (category.isVirtual) {
+                val channelsFlow = if (_uiState.value.isCombinedLiveSource) {
+                    val profileId = (_uiState.value.activeLiveSource as? ActiveLiveSource.CombinedM3uSource)?.profileId
+                    if (profileId == null) {
+                        flowOf(emptyList())
+                    } else if (category.id == ChannelRepository.ALL_CHANNELS_ID) {
+                        val allFlows = combinedCategoriesById.values.map { combinedCategory ->
+                            combinedM3uRepository.getCombinedChannels(profileId, combinedCategory)
+                        }
+                        if (allFlows.isEmpty()) flowOf(emptyList())
+                        else combine(allFlows) { arrays -> arrays.toList().flatMap { it } }
+                    } else if (category.isVirtual) {
+                        flowOf(emptyList())
+                    } else {
+                        val combinedCategory = combinedCategoriesById[category.id]
+                        if (combinedCategory == null) {
+                            flowOf(emptyList())
+                        } else {
+                            queryFlow.flatMapLatest { query ->
+                                val trimmedQuery = query.trim()
+                                if (trimmedQuery.isBlank()) {
+                                    combinedM3uRepository.getCombinedChannels(profileId, combinedCategory)
+                                } else if (trimmedQuery.length < MIN_CHANNEL_SEARCH_QUERY_LENGTH) {
+                                    flowOf(emptyList())
+                                } else {
+                                    combinedM3uRepository.searchCombinedChannels(profileId, combinedCategory, trimmedQuery)
+                                }
+                            }
+                        }
+                    }
+                } else if (category.isVirtual) {
+                    val providerId = _uiState.value.provider?.id ?: return@launch
                     val orderedFlow = if (category.id == VirtualCategoryIds.RECENT) {
                         playbackHistoryRepository.getRecentlyWatchedByProvider(providerId, limit = 24)
                             .map { it.toRecentLiveContentIds() }
@@ -491,6 +685,7 @@ class HomeViewModel @Inject constructor(
                         }
                     }
                 } else {
+                    val providerId = _uiState.value.provider?.id ?: return@launch
                     queryFlow.flatMapLatest { query ->
                         val trimmedQuery = query.trim()
                         if (trimmedQuery.isBlank()) {
@@ -505,10 +700,12 @@ class HomeViewModel @Inject constructor(
 
                 combine(
                     channelsFlow,
-                    preferencesRepository.getHiddenCategoryIds(providerId, ContentType.LIVE),
-                    preferencesRepository.liveChannelNumberingMode
-                ) { channels, hiddenCategoryIds, numberingMode ->
-                    val visibleChannels = channels.filterNot { channel -> channel.categoryId in hiddenCategoryIds }
+                    preferencesRepository.liveChannelNumberingMode,
+                    _uiState.map { it.selectedCombinedSourceProviderId }.distinctUntilChanged()
+                ) { channels, numberingMode, selectedCombinedSourceProviderId ->
+                    val visibleChannels = selectedCombinedSourceProviderId?.let { selectedProviderId ->
+                        channels.filter { it.providerId == selectedProviderId }
+                    } ?: channels
                     when (numberingMode) {
                         ChannelNumberingMode.GROUP -> visibleChannels.mapIndexed { index, channel ->
                             channel.copy(number = index + 1)
@@ -569,6 +766,10 @@ class HomeViewModel @Inject constructor(
                 activeCategoryFilter = null
             )
         }
+    }
+
+    fun setCombinedSourceFilter(providerId: Long?) {
+        _uiState.update { it.copy(selectedCombinedSourceProviderId = providerId) }
     }
 
     fun addLiveTvCategoryFilter(filter: String) {
@@ -718,29 +919,35 @@ class HomeViewModel @Inject constructor(
     private fun isActivePreviewSession(version: Long, channelId: Long): Boolean =
         version == previewSessionVersion && _uiState.value.previewChannelId == channelId
 
-    private fun fetchEpgForChannels(providerId: Long, channels: List<Channel>) {
+    private fun fetchEpgForChannels(channels: List<Channel>) {
         epgJob?.cancel()
         val lookupKeys = channels.mapNotNull(Channel::guideLookupKey).distinct()
 
         epgJob = viewModelScope.launch {
             val now = System.currentTimeMillis()
-            val freshProgramMap = epgRepository.getResolvedProgramsForChannels(
-                providerId = providerId,
-                channelIds = channels.map { it.id },
-                startTime = now - (60L * 60L * 1000L),
-                endTime = now + (2L * 60L * 60L * 1000L)
-            ).mapValues { (_, programs) ->
-                programs.firstOrNull { it.startTime <= now && it.endTime > now }
-                    ?: programs.firstOrNull()
-            }.mapNotNull { (lookupKey, program) ->
-                program?.let { lookupKey to it }
-            }.toMap()
-            val fallbackProgramMap = fetchXtreamNowPlayingFallback(
-                providerId = providerId,
-                channels = channels,
-                existingPrograms = freshProgramMap
-            )
-            val mergedProgramMap = freshProgramMap + fallbackProgramMap
+            val mergedProgramMap = buildMap {
+                channels.groupBy { it.providerId }.forEach { (providerId, providerChannels) ->
+                    val freshProgramMap = epgRepository.getResolvedProgramsForChannels(
+                        providerId = providerId,
+                        channelIds = providerChannels.map { it.id },
+                        startTime = now - (60L * 60L * 1000L),
+                        endTime = now + (2L * 60L * 60L * 1000L)
+                    ).mapValues { (_, programs) ->
+                        programs.firstOrNull { it.startTime <= now && it.endTime > now }
+                            ?: programs.firstOrNull()
+                    }.mapNotNull { (lookupKey, program) ->
+                        program?.let { lookupKey to it }
+                    }.toMap()
+                    putAll(freshProgramMap)
+                    putAll(
+                        fetchXtreamNowPlayingFallback(
+                            providerId = providerId,
+                            channels = providerChannels,
+                            existingPrograms = freshProgramMap
+                        )
+                    )
+                }
+            }
 
             val channelEpgIds = lookupKeys.toSet()
             _epgProgramMap.update { existing ->
@@ -1075,6 +1282,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun setDefaultCategory(category: Category) {
+        if (_uiState.value.isCombinedLiveSource) return
         viewModelScope.launch {
             preferencesRepository.setDefaultCategory(category.id)
             _uiState.update { it.copy(userMessage = "Set '${category.name}' as default") }
@@ -1082,6 +1290,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun toggleCategoryLock(category: Category) {
+        if (_uiState.value.isCombinedLiveSource) return
         val providerId = _uiState.value.provider?.id ?: return
         viewModelScope.launch {
             val newStatus = !category.isUserProtected
@@ -1105,6 +1314,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun hideCategory(category: Category) {
+        if (_uiState.value.isCombinedLiveSource) return
         if (category.isVirtual || category.id == ChannelRepository.ALL_CHANNELS_ID) return
         val providerId = _uiState.value.provider?.id ?: return
         viewModelScope.launch {
@@ -1129,6 +1339,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun toggleCategoryPinned(category: Category) {
+        if (_uiState.value.isCombinedLiveSource) return
         if (category.isVirtual || category.id == ChannelRepository.ALL_CHANNELS_ID) return
         val providerId = _uiState.value.provider?.id ?: return
         val shouldPin = category.id !in _uiState.value.pinnedCategoryIds
@@ -1286,6 +1497,13 @@ class HomeViewModel @Inject constructor(
 
 data class HomeUiState(
     val provider: Provider? = null,
+    val activeLiveSource: ActiveLiveSource? = null,
+    val activeLiveSourceTitle: String = "",
+    val isCombinedLiveSource: Boolean = false,
+    val liveSourceOptions: List<ActiveLiveSourceOption> = emptyList(),
+    val currentCombinedProfileMembers: List<CombinedM3uProfileMember> = emptyList(),
+    val selectedCombinedSourceProviderId: Long? = null,
+    val showLiveSourceSwitcher: Boolean = false,
     val allProviders: List<Provider> = emptyList(),
     val categories: List<Category> = emptyList(),
     val recentChannels: List<Channel> = emptyList(),

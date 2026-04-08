@@ -12,6 +12,7 @@ import com.streamvault.domain.model.Program
 import com.streamvault.domain.model.Provider
 import com.streamvault.domain.model.ProviderType
 import com.streamvault.domain.repository.ChannelRepository
+import com.streamvault.domain.repository.CombinedM3uRepository
 import com.streamvault.domain.repository.EpgRepository
 import com.streamvault.domain.repository.EpgSourceRepository
 import com.streamvault.domain.repository.FavoriteRepository
@@ -38,6 +39,7 @@ import org.mockito.kotlin.whenever
 class EpgViewModelTest {
 
     private val providerRepository: ProviderRepository = mock()
+    private val combinedM3uRepository: CombinedM3uRepository = mock()
     private val channelRepository: ChannelRepository = mock()
     private val epgRepository: EpgRepository = mock()
     private val epgSourceRepository: EpgSourceRepository = mock()
@@ -51,6 +53,7 @@ class EpgViewModelTest {
     fun setup() {
         Dispatchers.setMain(testDispatcher)
         whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
+        whenever(combinedM3uRepository.getActiveLiveSource()).thenReturn(flowOf(null))
     }
 
     @After
@@ -119,6 +122,7 @@ class EpgViewModelTest {
 
         val viewModel = EpgViewModel(
             providerRepository = providerRepository,
+            combinedM3uRepository = combinedM3uRepository,
             channelRepository = channelRepository,
             epgRepository = epgRepository,
             epgSourceRepository = epgSourceRepository,
@@ -195,6 +199,7 @@ class EpgViewModelTest {
 
         val viewModel = EpgViewModel(
             providerRepository = providerRepository,
+            combinedM3uRepository = combinedM3uRepository,
             channelRepository = channelRepository,
             epgRepository = epgRepository,
             epgSourceRepository = epgSourceRepository,
@@ -274,6 +279,7 @@ class EpgViewModelTest {
 
         val viewModel = EpgViewModel(
             providerRepository = providerRepository,
+            combinedM3uRepository = combinedM3uRepository,
             channelRepository = channelRepository,
             epgRepository = epgRepository,
             epgSourceRepository = epgSourceRepository,

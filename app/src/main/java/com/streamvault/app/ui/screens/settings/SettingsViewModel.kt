@@ -27,6 +27,8 @@ import com.streamvault.domain.model.CategorySortMode
 import com.streamvault.domain.model.ChannelNumberingMode
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.DecoderMode
+import com.streamvault.domain.model.ActiveLiveSource
+import com.streamvault.domain.model.CombinedM3uProfile
 import com.streamvault.domain.model.Provider
 import com.streamvault.domain.model.ProviderStatus
 import com.streamvault.domain.model.ProviderType
@@ -45,6 +47,7 @@ import com.streamvault.domain.usecase.ImportBackupResult
 import com.streamvault.domain.usecase.InspectBackupCommand
 import com.streamvault.domain.usecase.InspectBackupResult
 import com.streamvault.domain.repository.ProviderRepository
+import com.streamvault.domain.repository.CombinedM3uRepository
 import com.streamvault.domain.repository.CategoryRepository
 import com.streamvault.domain.repository.SyncMetadataRepository
 import com.streamvault.domain.usecase.SyncProvider
@@ -99,6 +102,7 @@ private data class SettingsPreferenceSnapshot(
     val isIncognitoMode: Boolean,
     val useXtreamTextClassification: Boolean,
     val liveTvChannelMode: LiveTvChannelMode,
+    val showLiveSourceSwitcher: Boolean,
     val liveTvCategoryFilters: List<String>,
     val liveTvQuickFilterVisibilityMode: LiveTvQuickFilterVisibilityMode,
     val liveChannelNumberingMode: ChannelNumberingMode,
@@ -133,6 +137,7 @@ data class AppUpdateUiModel(
 class SettingsViewModel @Inject constructor(
     application: Application,
     private val providerRepository: ProviderRepository,
+    private val combinedM3uRepository: CombinedM3uRepository,
     private val categoryRepository: CategoryRepository,
     private val preferencesRepository: PreferencesRepository,
     private val internetSpeedTestRunner: InternetSpeedTestRunner,
@@ -191,6 +196,7 @@ class SettingsViewModel @Inject constructor(
                     isIncognitoMode = false,
                     useXtreamTextClassification = true,
                     liveTvChannelMode = LiveTvChannelMode.PRO,
+                    showLiveSourceSwitcher = false,
                     liveTvCategoryFilters = emptyList(),
                     liveTvQuickFilterVisibilityMode = LiveTvQuickFilterVisibilityMode.ALWAYS_VISIBLE,
                     liveChannelNumberingMode = ChannelNumberingMode.GROUP,
@@ -249,6 +255,8 @@ class SettingsViewModel @Inject constructor(
                 snapshot.copy(useXtreamTextClassification = useTextClass)
             }.combine(preferencesRepository.liveTvChannelMode) { snapshot, liveTvChannelMode ->
                 snapshot.copy(liveTvChannelMode = LiveTvChannelMode.fromStorage(liveTvChannelMode))
+            }.combine(preferencesRepository.showLiveSourceSwitcher) { snapshot, showLiveSourceSwitcher ->
+                snapshot.copy(showLiveSourceSwitcher = showLiveSourceSwitcher)
             }.combine(preferencesRepository.liveTvCategoryFilters) { snapshot, liveTvCategoryFilters ->
                 snapshot.copy(liveTvCategoryFilters = liveTvCategoryFilters)
             }.combine(preferencesRepository.liveTvQuickFilterVisibility) { snapshot, visibilityMode ->
@@ -311,6 +319,7 @@ class SettingsViewModel @Inject constructor(
                         isIncognitoMode = snapshot.isIncognitoMode,
                         useXtreamTextClassification = snapshot.useXtreamTextClassification,
                         liveTvChannelMode = snapshot.liveTvChannelMode,
+                        showLiveSourceSwitcher = snapshot.showLiveSourceSwitcher,
                         liveTvCategoryFilters = snapshot.liveTvCategoryFilters,
                         liveTvQuickFilterVisibilityMode = snapshot.liveTvQuickFilterVisibilityMode,
                         liveChannelNumberingMode = snapshot.liveChannelNumberingMode,
@@ -350,6 +359,24 @@ class SettingsViewModel @Inject constructor(
 
         viewModelScope.launch {
             appUpdateInstaller.refreshState()
+        }
+
+        viewModelScope.launch {
+            combinedM3uRepository.getProfiles().collect { profiles ->
+                _uiState.update { it.copy(combinedProfiles = profiles) }
+            }
+        }
+
+        viewModelScope.launch {
+            combinedM3uRepository.getAvailableM3uProviders().collect { providers ->
+                _uiState.update { it.copy(availableM3uProviders = providers) }
+            }
+        }
+
+        viewModelScope.launch {
+            combinedM3uRepository.getActiveLiveSource().collect { activeSource ->
+                _uiState.update { it.copy(activeLiveSource = activeSource) }
+            }
         }
 
         viewModelScope.launch {
@@ -479,9 +506,106 @@ class SettingsViewModel @Inject constructor(
     fun setActiveProvider(providerId: Long) {
         viewModelScope.launch {
             preferencesRepository.setLastActiveProviderId(providerId)
+            combinedM3uRepository.setActiveLiveSource(ActiveLiveSource.ProviderSource(providerId))
             providerRepository.setActiveProvider(providerId)
             // Force sync on connect
             refreshProvider(providerId)
+        }
+    }
+
+    fun setActiveCombinedProfile(profileId: Long) {
+        viewModelScope.launch {
+            when (combinedM3uRepository.setActiveLiveSource(ActiveLiveSource.CombinedM3uSource(profileId))) {
+                is Result.Success -> _uiState.update { it.copy(userMessage = "Combined M3U source activated") }
+                is Result.Error -> _uiState.update { it.copy(userMessage = "Could not activate combined source") }
+                Result.Loading -> Unit
+            }
+        }
+    }
+
+    fun createCombinedProfile(name: String, providerIds: List<Long>) {
+        viewModelScope.launch {
+            when (val result = combinedM3uRepository.createProfile(name, providerIds)) {
+                is Result.Success -> {
+                    combinedM3uRepository.setActiveLiveSource(ActiveLiveSource.CombinedM3uSource(result.data.id))
+                    _uiState.update { it.copy(userMessage = "Combined M3U source created") }
+                }
+                is Result.Error -> _uiState.update { it.copy(userMessage = result.message) }
+                Result.Loading -> Unit
+            }
+        }
+    }
+
+    fun deleteCombinedProfile(profileId: Long) {
+        viewModelScope.launch {
+            when (val result = combinedM3uRepository.deleteProfile(profileId)) {
+                is Result.Success -> _uiState.update { it.copy(userMessage = "Combined M3U source deleted") }
+                is Result.Error -> _uiState.update { it.copy(userMessage = result.message) }
+                Result.Loading -> Unit
+            }
+        }
+    }
+
+    fun addProviderToCombinedProfile(profileId: Long, providerId: Long) {
+        viewModelScope.launch {
+            when (val result = combinedM3uRepository.addProvider(profileId, providerId)) {
+                is Result.Success -> _uiState.update { it.copy(userMessage = "Playlist added to combined source") }
+                is Result.Error -> _uiState.update { it.copy(userMessage = result.message) }
+                Result.Loading -> Unit
+            }
+        }
+    }
+
+    fun renameCombinedProfile(profileId: Long, name: String) {
+        viewModelScope.launch {
+            when (val result = combinedM3uRepository.updateProfileName(profileId, name)) {
+                is Result.Success -> _uiState.update { it.copy(userMessage = "Combined M3U source renamed") }
+                is Result.Error -> _uiState.update { it.copy(userMessage = result.message) }
+                Result.Loading -> Unit
+            }
+        }
+    }
+
+    fun removeProviderFromCombinedProfile(profileId: Long, providerId: Long) {
+        viewModelScope.launch {
+            when (val result = combinedM3uRepository.removeProvider(profileId, providerId)) {
+                is Result.Success -> _uiState.update { it.copy(userMessage = "Playlist removed from combined source") }
+                is Result.Error -> _uiState.update { it.copy(userMessage = result.message) }
+                Result.Loading -> Unit
+            }
+        }
+    }
+
+    fun moveCombinedProvider(profileId: Long, providerId: Long, moveUp: Boolean) {
+        viewModelScope.launch {
+            val profile = _uiState.value.combinedProfiles.firstOrNull { it.id == profileId }
+                ?: return@launch
+            val orderedProviderIds = profile.members
+                .sortedBy { it.priority }
+                .map { it.providerId }
+                .toMutableList()
+            val currentIndex = orderedProviderIds.indexOf(providerId)
+            if (currentIndex == -1) return@launch
+            val targetIndex = if (moveUp) currentIndex - 1 else currentIndex + 1
+            if (targetIndex !in orderedProviderIds.indices) return@launch
+            java.util.Collections.swap(orderedProviderIds, currentIndex, targetIndex)
+            when (val result = combinedM3uRepository.reorderMembers(profileId, orderedProviderIds)) {
+                is Result.Success -> _uiState.update { it.copy(userMessage = "Combined playlist order updated") }
+                is Result.Error -> _uiState.update { it.copy(userMessage = result.message) }
+                Result.Loading -> Unit
+            }
+        }
+    }
+
+    fun setCombinedProviderEnabled(profileId: Long, providerId: Long, enabled: Boolean) {
+        viewModelScope.launch {
+            when (val result = combinedM3uRepository.setMemberEnabled(profileId, providerId, enabled)) {
+                is Result.Success -> _uiState.update {
+                    it.copy(userMessage = if (enabled) "Playlist enabled in combined source" else "Playlist disabled in combined source")
+                }
+                is Result.Error -> _uiState.update { it.copy(userMessage = result.message) }
+                Result.Loading -> Unit
+            }
         }
     }
 
@@ -531,6 +655,12 @@ class SettingsViewModel @Inject constructor(
     fun setLiveTvChannelMode(mode: LiveTvChannelMode) {
         viewModelScope.launch {
             preferencesRepository.setLiveTvChannelMode(mode.name)
+        }
+    }
+
+    fun setShowLiveSourceSwitcher(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setShowLiveSourceSwitcher(enabled)
         }
     }
 
@@ -1570,7 +1700,10 @@ data class ProviderDiagnosticsUiModel(
 
 data class SettingsUiState(
     val providers: List<Provider> = emptyList(),
+    val combinedProfiles: List<CombinedM3uProfile> = emptyList(),
+    val availableM3uProviders: List<Provider> = emptyList(),
     val activeProviderId: Long? = null,
+    val activeLiveSource: ActiveLiveSource? = null,
     val isSyncing: Boolean = false,
     val userMessage: String? = null,
     val syncWarningsByProvider: Map<Long, List<String>> = emptyMap(),
@@ -1601,6 +1734,7 @@ data class SettingsUiState(
     val isIncognitoMode: Boolean = false,
     val useXtreamTextClassification: Boolean = true,
     val liveTvChannelMode: LiveTvChannelMode = LiveTvChannelMode.PRO,
+    val showLiveSourceSwitcher: Boolean = false,
     val liveTvCategoryFilters: List<String> = emptyList(),
     val liveTvQuickFilterVisibilityMode: LiveTvQuickFilterVisibilityMode = LiveTvQuickFilterVisibilityMode.ALWAYS_VISIBLE,
     val liveChannelNumberingMode: ChannelNumberingMode = ChannelNumberingMode.GROUP,
