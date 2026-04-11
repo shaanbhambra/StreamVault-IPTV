@@ -43,6 +43,9 @@ import com.streamvault.domain.model.Result
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileInputStream
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -57,6 +60,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+
+private const val TAG = "RecordingManager"
 
 @Singleton
 class RecordingManagerImpl @Inject constructor(
@@ -592,41 +597,90 @@ class RecordingManagerImpl @Inject constructor(
 
     private suspend fun spawnNextRecurringRunIfNeeded(run: RecordingRunEntity) {
         if (run.recurrence == RecordingRecurrence.NONE || run.recurringRuleId.isNullOrBlank()) return
-        val interval = recurrenceIntervalMs(run.recurrence)
-        val nextStart = run.scheduledStartMs + interval
-        val overlappingPending = recordingRunDao.getByStatus(RecordingStatus.SCHEDULED).any {
-            it.recurringRuleId == run.recurringRuleId && it.scheduledStartMs == nextStart
+        val scheduledRuns = recordingRunDao.getByStatus(RecordingStatus.SCHEDULED)
+        val activeRuns = (scheduledRuns + recordingRunDao.getRecordingRuns()).distinctBy { it.id }
+        val lookAheadLimit = when (run.recurrence) {
+            RecordingRecurrence.DAILY -> 366
+            RecordingRecurrence.WEEKLY -> 104
+            RecordingRecurrence.NONE -> 0
         }
-        if (overlappingPending) return
-        val nextRun = run.copy(
-            id = UUID.randomUUID().toString(),
-            status = RecordingStatus.SCHEDULED,
-            scheduledStartMs = nextStart,
-            scheduledEndMs = run.scheduledEndMs + interval,
-            sourceType = RecordingSourceType.UNKNOWN,
-            resolvedUrl = null,
-            headersJson = "{}",
-            userAgent = null,
-            expirationTime = null,
-            providerLabel = null,
-            outputUri = null,
-            outputDisplayPath = null,
-            bytesWritten = 0L,
-            averageThroughputBytesPerSecond = 0L,
-            retryCount = 0,
-            lastProgressAtMs = null,
-            failureCategory = RecordingFailureCategory.NONE,
-            failureReason = null,
-            terminalAtMs = null,
-            startedAtMs = null,
-            endedAtMs = null,
-            alarmStartAtMs = nextStart,
-            alarmStopAtMs = null,
-            createdAt = System.currentTimeMillis(),
-            updatedAt = System.currentTimeMillis()
-        )
-        recordingRunDao.insert(nextRun)
-        alarmScheduler.scheduleStart(nextRun.id, nextRun.scheduledStartMs)
+
+        for (occurrenceIndex in 1..lookAheadLimit) {
+            val nextWindow = nextRecurringWindow(run, occurrenceIndex) ?: return
+            val nextStart = nextWindow.first
+            val nextEnd = nextWindow.second
+            val overlappingPending = scheduledRuns.any {
+                it.recurringRuleId == run.recurringRuleId && it.scheduledStartMs == nextStart
+            }
+            if (overlappingPending) return
+
+            val conflict = activeRuns.findRecordingRunConflict(
+                candidateStartMs = nextStart,
+                candidateEndMs = nextEnd,
+                statuses = setOf(RecordingStatus.SCHEDULED, RecordingStatus.RECORDING),
+                ignoredRunId = run.id
+            )
+            if (conflict != null) {
+                val conflictTitle = conflict.programTitle ?: conflict.channelName
+                val skippedRun = run.toConflictFailure(
+                    conflictStartMs = nextStart,
+                    conflictEndMs = nextEnd,
+                    reason = "Skipped recurring occurrence because it conflicts with '$conflictTitle'."
+                )
+                recordingRunDao.insert(skippedRun)
+                continue
+            }
+
+            val now = System.currentTimeMillis()
+            val nextRun = run.copy(
+                id = UUID.randomUUID().toString(),
+                status = RecordingStatus.SCHEDULED,
+                scheduledStartMs = nextStart,
+                scheduledEndMs = nextEnd,
+                sourceType = RecordingSourceType.UNKNOWN,
+                resolvedUrl = null,
+                headersJson = "{}",
+                userAgent = null,
+                expirationTime = null,
+                providerLabel = null,
+                outputUri = null,
+                outputDisplayPath = null,
+                bytesWritten = 0L,
+                averageThroughputBytesPerSecond = 0L,
+                retryCount = 0,
+                lastProgressAtMs = null,
+                failureCategory = RecordingFailureCategory.NONE,
+                failureReason = null,
+                terminalAtMs = null,
+                startedAtMs = null,
+                endedAtMs = null,
+                alarmStartAtMs = nextStart,
+                alarmStopAtMs = null,
+                createdAt = now,
+                updatedAt = now
+            )
+            recordingRunDao.insert(nextRun)
+            alarmScheduler.scheduleStart(nextRun.id, nextRun.scheduledStartMs)
+            return
+        }
+
+        Log.w(TAG, "Unable to find a non-conflicting future slot for recurring recording ${run.id}")
+    }
+
+    private fun nextRecurringWindow(run: RecordingRunEntity, occurrencesAhead: Int = 1): Pair<Long, Long>? {
+        if (run.scheduledEndMs <= run.scheduledStartMs) return null
+
+        val zoneId = ZoneId.systemDefault()
+        val startZoned = Instant.ofEpochMilli(run.scheduledStartMs).atZone(zoneId)
+        val nextStartZoned = when (run.recurrence) {
+            RecordingRecurrence.NONE -> return null
+            RecordingRecurrence.DAILY -> startZoned.plusDays(occurrencesAhead.toLong())
+            RecordingRecurrence.WEEKLY -> startZoned.plusWeeks(occurrencesAhead.toLong())
+        }
+        val recordingDuration = Duration.ofMillis(run.scheduledEndMs - run.scheduledStartMs)
+        val nextStartMs = nextStartZoned.toInstant().toEpochMilli()
+        val nextEndMs = nextStartZoned.plus(recordingDuration).toInstant().toEpochMilli()
+        return nextStartMs to nextEndMs
     }
 
     private suspend fun validateRecordingWindow(startMs: Long, endMs: Long, providerId: Long): String? {
@@ -700,9 +754,4 @@ class RecordingManagerImpl @Inject constructor(
         terminalAtMs = terminalAtMs
     )
 
-    private fun recurrenceIntervalMs(recurrence: RecordingRecurrence): Long = when (recurrence) {
-        RecordingRecurrence.NONE -> 0L
-        RecordingRecurrence.DAILY -> 24L * 60L * 60L * 1000L
-        RecordingRecurrence.WEEKLY -> 7L * 24L * 60L * 60L * 1000L
-    }
 }

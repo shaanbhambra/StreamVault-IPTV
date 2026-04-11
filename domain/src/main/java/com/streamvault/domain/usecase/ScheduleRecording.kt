@@ -38,13 +38,18 @@ class ScheduleRecording @Inject constructor(
             return Result.error("Recording needs guide timing for the current live channel.")
         }
 
+        val scheduledStartMs = maxOf(command.nowMs, targetProgram.startTime)
+        if (scheduledStartMs >= targetProgram.endTime) {
+            return Result.error("The selected program has already ended. Refresh the guide and try again.")
+        }
+
         return recordingManager.scheduleRecording(
             RecordingRequest(
                 providerId = command.providerId,
                 channelId = channel.id,
                 channelName = channel.name,
                 streamUrl = command.streamUrl,
-                scheduledStartMs = maxOf(command.nowMs, targetProgram.startTime),
+                scheduledStartMs = scheduledStartMs,
                 scheduledEndMs = targetProgram.endTime,
                 programTitle = targetProgram.title,
                 recurrence = command.recurrence

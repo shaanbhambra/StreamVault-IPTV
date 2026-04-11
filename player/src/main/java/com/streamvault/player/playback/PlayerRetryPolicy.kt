@@ -10,6 +10,8 @@ import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
+private const val LIVE_WINDOW_RETRY_DELAY_MS = 500L
+
 data class PlaybackRetryContext(
     val resolvedStreamType: ResolvedStreamType,
     val timeoutProfile: PlayerTimeoutProfile
@@ -47,7 +49,9 @@ class PlayerRetryPolicy(
     }
 
     fun retryDelayMs(error: Throwable, attempt: Int): Long {
-        if (PlayerErrorClassifier.classify(error) == PlaybackErrorCategory.LIVE_WINDOW) return 0L
+        if (PlayerErrorClassifier.classify(error) == PlaybackErrorCategory.LIVE_WINDOW) {
+            return LIVE_WINDOW_RETRY_DELAY_MS
+        }
         return when (attempt) {
             1 -> 1_000L
             2 -> 2_500L

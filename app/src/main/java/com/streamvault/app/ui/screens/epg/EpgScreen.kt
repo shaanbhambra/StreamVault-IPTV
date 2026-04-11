@@ -153,7 +153,6 @@ fun FullEpgScreen(
     var pendingLockedAction by remember { mutableStateOf<LockedGuideAction?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val now = rememberGuideNow()
     val returnRoute = remember(uiState.selectedCategoryId, uiState.guideAnchorTime, uiState.showFavoritesOnly) {
         Routes.epg(
             categoryId = uiState.selectedCategoryId.takeIf { it != ChannelRepository.ALL_CHANNELS_ID },
@@ -188,7 +187,7 @@ fun FullEpgScreen(
         )
     }
 
-    LaunchedEffect(uiState.channels, uiState.programsByChannel, now) {
+    LaunchedEffect(uiState.channels, uiState.programsByChannel) {
         if (uiState.channels.isEmpty()) {
             focusedChannel = null
             focusedProgram = null
@@ -209,16 +208,9 @@ fun FullEpgScreen(
                     it.endTime == focused.endTime &&
                     it.title == focused.title
             }
-        } ?: resolvedPrograms.firstOrNull { now in it.startTime until it.endTime }
-    }
-
-    val heroSelection = remember(uiState, focusedChannel, focusedProgram, now) {
-        resolveGuideHeroSelection(
-            uiState = uiState,
-            focusedChannel = focusedChannel,
-            focusedProgram = focusedProgram,
-            now = now
-        )
+        } ?: resolvedPrograms.firstOrNull {
+            System.currentTimeMillis() in it.startTime until it.endTime
+        }
     }
 
     AppScreenScaffold(
@@ -301,22 +293,16 @@ fun FullEpgScreen(
                 }
 
                 else -> {
-                    ImmersiveGuideHero(
-                        selection = heroSelection,
-                        providerLabel = uiState.providerSourceLabel,
-                        selectedCategoryName = uiState.categories
-                            .firstOrNull { it.id == uiState.selectedCategoryId }
-                            ?.name
-                            .orEmpty(),
-                        isGuideStale = uiState.isGuideStale,
-                        channelCount = uiState.totalChannelCount,
-                        channelsWithSchedule = uiState.channelsWithSchedule,
-                        lastUpdatedAt = uiState.lastUpdatedAt,
-                        isRefreshing = uiState.isRefreshing,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 4.dp)
-                    )
+                    GuideNowProvider {
+                        GuideHeroSection(
+                            uiState = uiState,
+                            focusedChannel = focusedChannel,
+                            focusedProgram = focusedProgram,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 4.dp)
+                        )
+                    }
                     GuideToolbarRow(
                         selectedCategoryName = uiState.categories
                             .firstOrNull { it.id == uiState.selectedCategoryId }
@@ -349,43 +335,44 @@ fun FullEpgScreen(
                             trackColor = SurfaceHighlight
                         )
                     }
-                    EpgGrid(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        channels = uiState.channels,
-                        favoriteChannelIds = uiState.favoriteChannelIds,
-                        programsByChannel = uiState.programsByChannel,
-                        guideWindowStart = uiState.guideWindowStart,
-                        guideWindowEnd = uiState.guideWindowEnd,
-                        density = uiState.selectedDensity,
-                        now = now,
-                        onChannelClick = { channel ->
-                            if (isGuideChannelLocked(channel, categoriesById, uiState.parentalControlLevel)) {
-                                requestLockedGuideAction(LockedGuideAction.PlayChannel(channel, returnRoute))
-                            } else {
-                                onPlayChannel(channel, returnRoute)
+                    GuideNowProvider {
+                        EpgGrid(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            channels = uiState.channels,
+                            favoriteChannelIds = uiState.favoriteChannelIds,
+                            programsByChannel = uiState.programsByChannel,
+                            guideWindowStart = uiState.guideWindowStart,
+                            guideWindowEnd = uiState.guideWindowEnd,
+                            density = uiState.selectedDensity,
+                            onChannelClick = { channel ->
+                                if (isGuideChannelLocked(channel, categoriesById, uiState.parentalControlLevel)) {
+                                    requestLockedGuideAction(LockedGuideAction.PlayChannel(channel, returnRoute))
+                                } else {
+                                    onPlayChannel(channel, returnRoute)
+                                }
+                            },
+                            onProgramClick = { channel, program ->
+                                topNavVisible = false
+                                if (isGuideChannelLocked(channel, categoriesById, uiState.parentalControlLevel)) {
+                                    requestLockedGuideAction(LockedGuideAction.OpenProgram(channel, program))
+                                } else {
+                                    selectedProgram = channel to program
+                                }
+                            },
+                            onChannelFocused = { channel, currentProgram, isFirstRow ->
+                                topNavVisible = isFirstRow
+                                focusedChannel = channel
+                                focusedProgram = currentProgram
+                            },
+                            onProgramFocused = { channel, program, isFirstRow ->
+                                topNavVisible = isFirstRow
+                                focusedChannel = channel
+                                focusedProgram = program
                             }
-                        },
-                        onProgramClick = { channel, program ->
-                            topNavVisible = false
-                            if (isGuideChannelLocked(channel, categoriesById, uiState.parentalControlLevel)) {
-                                requestLockedGuideAction(LockedGuideAction.OpenProgram(channel, program))
-                            } else {
-                                selectedProgram = channel to program
-                            }
-                        },
-                        onChannelFocused = { channel, currentProgram, isFirstRow ->
-                            topNavVisible = isFirstRow
-                            focusedChannel = channel
-                            focusedProgram = currentProgram
-                        },
-                        onProgramFocused = { channel, program, isFirstRow ->
-                            topNavVisible = isFirstRow
-                            focusedChannel = channel
-                            focusedProgram = program
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -481,42 +468,44 @@ fun FullEpgScreen(
 
     val dialogState = selectedProgram
     if (dialogState != null) {
-        val (channel, program) = dialogState
-        CompactGuideProgramDialog(
-            channel = channel,
-            program = program,
-            providerLabel = uiState.providerSourceLabel,
-            now = now,
-            onDismiss = { selectedProgram = null },
-            onWatchLive = {
-                selectedProgram = null
-                if (isGuideChannelLocked(channel, categoriesById, uiState.parentalControlLevel)) {
-                    requestLockedGuideAction(LockedGuideAction.PlayChannel(channel, returnRoute))
-                } else {
-                    onPlayChannel(channel, returnRoute)
-                }
-            },
-            onWatchArchive = if (program.hasArchive || channel.catchUpSupported) {
-                {
+        GuideNowProvider {
+            val (channel, program) = dialogState
+            CompactGuideProgramDialog(
+                channel = channel,
+                program = program,
+                providerLabel = uiState.providerSourceLabel,
+                now = currentGuideNow(),
+                onDismiss = { selectedProgram = null },
+                onWatchLive = {
                     selectedProgram = null
                     if (isGuideChannelLocked(channel, categoriesById, uiState.parentalControlLevel)) {
-                        requestLockedGuideAction(LockedGuideAction.PlayArchive(channel, program, returnRoute))
+                        requestLockedGuideAction(LockedGuideAction.PlayChannel(channel, returnRoute))
                     } else {
-                        onPlayArchive(channel, program, returnRoute)
+                        onPlayChannel(channel, returnRoute)
                     }
+                },
+                onWatchArchive = if (program.hasArchive || channel.catchUpSupported) {
+                    {
+                        selectedProgram = null
+                        if (isGuideChannelLocked(channel, categoriesById, uiState.parentalControlLevel)) {
+                            requestLockedGuideAction(LockedGuideAction.PlayArchive(channel, program, returnRoute))
+                        } else {
+                            onPlayArchive(channel, program, returnRoute)
+                        }
+                    }
+                } else {
+                    null
+                },
+                onManageEpgMatch = if (channel.providerId > 0L) {
+                    {
+                        selectedProgram = null
+                        viewModel.openEpgOverride(channel)
+                    }
+                } else {
+                    null
                 }
-            } else {
-                null
-            },
-            onManageEpgMatch = if (channel.providerId > 0L) {
-                {
-                    selectedProgram = null
-                    viewModel.openEpgOverride(channel)
-                }
-            } else {
-                null
-            }
-        )
+            )
+        }
     }
 
     if (overrideUiState.channel != null) {

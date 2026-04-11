@@ -232,50 +232,50 @@ class EpgSourceRepositoryImpl @Inject constructor(
                             return super.read(b, off, len).also { if (it > 0) bytesRead += it }
                         }
                     }
-                    val decompressed = xmltvParser.maybeDecompressGzip(source.url, limited)
-
-                    xmltvParser.parseStreamingWithChannels(
-                        inputStream = decompressed,
-                        onChannel = { xmltvChannel ->
-                            channelBatch.add(
-                                EpgChannelEntity(
-                                    epgSourceId = sourceId,
-                                    xmltvChannelId = xmltvChannel.id,
-                                    displayName = xmltvChannel.displayName,
-                                    normalizedName = EpgNameNormalizer.normalize(xmltvChannel.displayName),
-                                    iconUrl = xmltvChannel.iconUrl
+                    xmltvParser.maybeDecompressGzip(source.url, limited).use { decompressed ->
+                        xmltvParser.parseStreamingWithChannels(
+                            inputStream = decompressed,
+                            onChannel = { xmltvChannel ->
+                                channelBatch.add(
+                                    EpgChannelEntity(
+                                        epgSourceId = sourceId,
+                                        xmltvChannelId = xmltvChannel.id,
+                                        displayName = xmltvChannel.displayName,
+                                        normalizedName = EpgNameNormalizer.normalize(xmltvChannel.displayName),
+                                        iconUrl = xmltvChannel.iconUrl
+                                    )
                                 )
-                            )
-                            channelCount++
-                            if (channelBatch.size >= CHANNEL_BATCH_SIZE) {
-                                epgChannelDao.insertAll(channelBatch.toList())
-                                channelBatch.clear()
-                            }
-                        },
-                        onProgramme = { programme ->
-                            programmeBatch.add(
-                                EpgProgrammeEntity(
-                                    epgSourceId = sourceId,
-                                    xmltvChannelId = programme.channelId,
-                                    startTime = programme.startTime,
-                                    endTime = programme.endTime,
-                                    title = programme.title,
-                                    subtitle = programme.subtitle,
-                                    description = programme.description,
-                                    category = programme.category,
-                                    lang = programme.lang,
-                                    rating = programme.rating,
-                                    imageUrl = programme.imageUrl,
-                                    episodeInfo = programme.episodeInfo
+                                channelCount++
+                                if (channelBatch.size >= CHANNEL_BATCH_SIZE) {
+                                    epgChannelDao.insertAll(channelBatch.toList())
+                                    channelBatch.clear()
+                                }
+                            },
+                            onProgramme = { programme ->
+                                programmeBatch.add(
+                                    EpgProgrammeEntity(
+                                        epgSourceId = sourceId,
+                                        xmltvChannelId = programme.channelId,
+                                        startTime = programme.startTime,
+                                        endTime = programme.endTime,
+                                        title = programme.title,
+                                        subtitle = programme.subtitle,
+                                        description = programme.description,
+                                        category = programme.category,
+                                        lang = programme.lang,
+                                        rating = programme.rating,
+                                        imageUrl = programme.imageUrl,
+                                        episodeInfo = programme.episodeInfo
+                                    )
                                 )
-                            )
-                            programmeCount++
-                            if (programmeBatch.size >= PROGRAMME_BATCH_SIZE) {
-                                epgProgrammeDao.insertAll(programmeBatch.toList())
-                                programmeBatch.clear()
+                                programmeCount++
+                                if (programmeBatch.size >= PROGRAMME_BATCH_SIZE) {
+                                    epgProgrammeDao.insertAll(programmeBatch.toList())
+                                    programmeBatch.clear()
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
                 }
 
                 // Flush remaining

@@ -28,6 +28,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.URI
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -151,6 +152,9 @@ class AppUpdateInstaller @Inject constructor(
     suspend fun startDownload(releaseInfo: GitHubReleaseInfo): Result<Unit> = withContext(Dispatchers.IO) {
         val downloadUrl = releaseInfo.downloadUrl
             ?: return@withContext Result.error("Update download is unavailable for this release")
+        if (!isHttpsUrl(downloadUrl)) {
+            return@withContext Result.error("Update download is unavailable because the download URL is not HTTPS")
+        }
 
         try {
             val targetFile = apkFileForVersion(releaseInfo.versionName)
@@ -195,7 +199,7 @@ class AppUpdateInstaller @Inject constructor(
         }
     }
 
-    suspend fun installDownloadedUpdate(): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun installDownloadedUpdate(expectedSha256: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
         val currentState = refreshState()
         if (currentState.status != AppUpdateDownloadStatus.Downloaded || currentState.versionName.isNullOrBlank()) {
             return@withContext Result.error("No downloaded update is ready to install")
@@ -214,6 +218,25 @@ class AppUpdateInstaller @Inject constructor(
         if (!apkFile.exists()) {
             preferencesRepository.setDownloadedAppUpdateVersionName(null)
             return@withContext Result.error("Downloaded update file is missing")
+        }
+
+        // SEC-L02: Verify SHA-256 integrity before handing the APK to the package manager.
+        // This guards against a truncated download, a network MITM, or a tampered file in
+        // the external storage directory (which is world-readable on unencrypted devices).
+        if (!expectedSha256.isNullOrBlank()) {
+            val actualHash = computeSha256Hex(apkFile)
+            if (!actualHash.equals(expectedSha256.trim(), ignoreCase = true)) {
+                android.util.Log.e(
+                    "AppUpdateInstaller",
+                    "APK SHA-256 mismatch for ${apkFile.name}: expected=${expectedSha256.trim()} actual=$actualHash"
+                )
+                apkFile.delete()
+                preferencesRepository.setDownloadedAppUpdateVersionName(null)
+                return@withContext Result.error(
+                    "Downloaded update failed integrity check. The file has been removed; please download again."
+                )
+            }
+            android.util.Log.i("AppUpdateInstaller", "APK SHA-256 verified OK for ${apkFile.name}")
         }
 
         val apkUri = FileProvider.getUriForFile(
@@ -238,6 +261,27 @@ class AppUpdateInstaller @Inject constructor(
         }
     }
 
+    private fun isHttpsUrl(url: String): Boolean {
+        val normalized = url.trim()
+        if (normalized.isBlank()) return false
+        return runCatching {
+            val parsed = URI(normalized)
+            parsed.scheme.equals("https", ignoreCase = true) && !parsed.host.isNullOrBlank()
+        }.getOrDefault(false)
+    }
+
+    private fun computeSha256Hex(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered(DEFAULT_BUFFER_SIZE).use { stream ->
+            val buffer = ByteArray(8192)
+            var read: Int
+            while (stream.read(buffer).also { read = it } != -1) {
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
     private fun apkFileForVersion(versionName: String): File {
         val sanitizedVersion = versionName.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val downloadsDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
@@ -253,6 +297,15 @@ class AppUpdateInstaller @Inject constructor(
             @Suppress("DEPRECATION")
             context.registerReceiver(downloadCompleteReceiver, filter)
         }
+    }
+
+    /**
+     * Unregisters the [DownloadManager] broadcast receiver.
+     * Must be called when this singleton is torn down (e.g. in instrumentation tests that
+     * destroy and recreate the DI graph) to prevent duplicate receiver registrations.
+     */
+    fun unregister() {
+        runCatching { context.unregisterReceiver(downloadCompleteReceiver) }
     }
 
     private fun syncPollingForState(state: AppUpdateDownloadState) {

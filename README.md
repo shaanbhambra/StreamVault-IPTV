@@ -6,6 +6,7 @@
 	<a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/Changelog-View-2563eb?style=for-the-badge" alt="View changelog" /></a>
 	<a href="https://github.com/Davidona/StreamVault-IPTV/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/Davidona/StreamVault-IPTV/release.yml?branch=master&style=for-the-badge&label=CI" alt="GitHub Actions status" /></a>
 	<a href="https://ko-fi.com/davidona"><img src="https://img.shields.io/badge/Support-Ko--fi-ff5f5f?style=for-the-badge&logo=kofi" alt="Support on Ko-fi" /></a>
+	<a href="LICENSE"><img src="https://img.shields.io/badge/License-StreamVault_OSL-0284c7?style=for-the-badge" alt="License" /></a>
 </p>
 
 StreamVault is a TV-first IPTV player for Android TV built with Kotlin, Jetpack Compose, Room, Hilt, and Media3.
@@ -179,3 +180,10 @@ Useful commands:
 - StreamVault is an IPTV client, not a content provider.
 - Use only playlists, streams, and guide sources you are authorized to access.
 - Local configuration and signing files are intentionally excluded from git.
+
+## License
+
+This project was originally released without an explicit license.  
+As of April 2026, all usage, modification, and distribution are governed by the StreamVault Source-Available License (Non-Commercial).
+
+Any use of this project must comply with the terms defined in the LICENSE file.

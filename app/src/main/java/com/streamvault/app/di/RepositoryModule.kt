@@ -3,6 +3,8 @@ package com.streamvault.app.di
 import com.streamvault.data.local.DatabaseTransactionRunner
 import com.streamvault.data.local.RoomDatabaseTransactionRunner
 import com.streamvault.data.preferences.PreferencesRepository
+import com.streamvault.data.security.AndroidKeystoreCredentialCrypto
+import com.streamvault.data.security.CredentialCrypto
 import com.streamvault.data.sync.ProviderSyncStateReaderImpl
 import com.streamvault.data.validation.ProviderSetupInputValidatorImpl
 import com.streamvault.domain.manager.ParentalPinVerifier
@@ -78,6 +80,9 @@ abstract class RepositoryModule {
 
     @Binds @Singleton
     abstract fun bindProviderSyncStateReader(impl: ProviderSyncStateReaderImpl): ProviderSyncStateReader
+
+    @Binds @Singleton
+    abstract fun bindCredentialCrypto(impl: AndroidKeystoreCredentialCrypto): CredentialCrypto
 
     companion object {
         @Provides

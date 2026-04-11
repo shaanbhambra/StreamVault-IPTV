@@ -67,6 +67,7 @@ internal fun observeSettingsPreferenceSnapshot(
             lastSpeedTestEstimated = false,
             isIncognitoMode = false,
             useXtreamTextClassification = true,
+            xtreamBase64TextCompatibility = false,
             liveTvChannelMode = LiveTvChannelMode.PRO,
             showLiveSourceSwitcher = false,
             liveTvCategoryFilters = emptyList(),
@@ -127,6 +128,8 @@ internal fun observeSettingsPreferenceSnapshot(
         snapshot.copy(isIncognitoMode = incognito)
     }.combine(preferencesRepository.useXtreamTextClassification) { snapshot, useTextClass ->
         snapshot.copy(useXtreamTextClassification = useTextClass)
+    }.combine(preferencesRepository.xtreamBase64TextCompatibility) { snapshot, compatibilityEnabled ->
+        snapshot.copy(xtreamBase64TextCompatibility = compatibilityEnabled)
     }.combine(preferencesRepository.liveTvChannelMode) { snapshot, liveTvChannelMode ->
         snapshot.copy(liveTvChannelMode = LiveTvChannelMode.fromStorage(liveTvChannelMode))
     }.combine(preferencesRepository.showLiveSourceSwitcher) { snapshot, showLiveSourceSwitcher ->
@@ -196,6 +199,7 @@ internal fun SettingsUiState.applyPreferenceSnapshot(snapshot: SettingsPreferenc
         },
         isIncognitoMode = snapshot.isIncognitoMode,
         useXtreamTextClassification = snapshot.useXtreamTextClassification,
+        xtreamBase64TextCompatibility = snapshot.xtreamBase64TextCompatibility,
         liveTvChannelMode = snapshot.liveTvChannelMode,
         showLiveSourceSwitcher = snapshot.showLiveSourceSwitcher,
         liveTvCategoryFilters = snapshot.liveTvCategoryFilters,

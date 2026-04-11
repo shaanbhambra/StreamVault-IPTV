@@ -16,6 +16,7 @@ import com.streamvault.data.remote.dto.XtreamSeriesItem
 import com.streamvault.data.remote.xtream.XtreamParsingException
 import com.streamvault.data.remote.xtream.XtreamApiService
 import com.streamvault.data.remote.xtream.XtreamStreamUrlResolver
+import com.streamvault.data.security.CredentialCrypto
 import com.streamvault.domain.model.ProviderStatus
 import com.streamvault.domain.model.ProviderType
 import kotlinx.coroutines.flow.first
@@ -40,10 +41,15 @@ class SeriesRepositoryImplTest {
     private val preferencesRepository: PreferencesRepository = mock()
     private val xtreamStreamUrlResolver: XtreamStreamUrlResolver = mock()
     private val seriesCategoryHydrationDao: SeriesCategoryHydrationDao = mock()
+    private val credentialCrypto = object : CredentialCrypto {
+        override fun encryptIfNeeded(value: String): String = value
+        override fun decryptIfNeeded(value: String): String = value
+    }
 
     @Test
     fun `getSeriesByCategory lazily hydrates xtream category when local cache is empty`() = runTest {
         whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
+        whenever(preferencesRepository.xtreamBase64TextCompatibility).thenReturn(flowOf(false))
         whenever(seriesDao.getCountByCategory(7L, 77L)).thenReturn(flowOf(0))
         whenever(seriesDao.getByCategory(7L, 77L)).thenReturn(flowOf(emptyList()))
         whenever(providerDao.getById(7L)).thenReturn(
@@ -84,6 +90,7 @@ class SeriesRepositoryImplTest {
 
     @Test
     fun `getSeriesDetails falls back to remote series id lookup`() = runTest {
+        whenever(preferencesRepository.xtreamBase64TextCompatibility).thenReturn(flowOf(false))
         val seriesEntity = SeriesEntity(
             id = 15L,
             seriesId = 301L,
@@ -117,6 +124,7 @@ class SeriesRepositoryImplTest {
 
     @Test
     fun `getSeriesDetails returns local series when xtream details fail`() = runTest {
+        whenever(preferencesRepository.xtreamBase64TextCompatibility).thenReturn(flowOf(false))
         val seriesEntity = SeriesEntity(
             id = 15L,
             seriesId = 301L,
@@ -159,6 +167,7 @@ class SeriesRepositoryImplTest {
         playbackHistoryDao = playbackHistoryDao,
         providerDao = providerDao,
         xtreamApiService = xtreamApiService,
+        credentialCrypto = credentialCrypto,
         preferencesRepository = preferencesRepository,
         xtreamStreamUrlResolver = xtreamStreamUrlResolver,
         seriesCategoryHydrationDao = seriesCategoryHydrationDao

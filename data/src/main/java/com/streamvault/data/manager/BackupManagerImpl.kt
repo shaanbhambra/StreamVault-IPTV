@@ -3,6 +3,8 @@ package com.streamvault.data.manager
 import android.content.Context
 import android.net.Uri
 import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import com.google.gson.stream.JsonWriter
 import com.streamvault.data.local.dao.EpisodeDao
 import com.streamvault.data.local.dao.FavoriteDao
 import com.streamvault.data.local.dao.MovieDao
@@ -32,8 +34,11 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import java.io.OutputStream
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.io.Writer
+import java.lang.reflect.Type
 import java.security.MessageDigest
 import java.util.zip.CRC32
 import javax.inject.Inject
@@ -43,6 +48,7 @@ import javax.inject.Singleton
 class BackupManagerImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val preferencesRepository: PreferencesRepository,
+    private val credentialCrypto: CredentialCrypto,
     private val providerDao: ProviderDao,
     private val favoriteDao: FavoriteDao,
     private val virtualGroupDao: VirtualGroupDao,
@@ -155,13 +161,12 @@ class BackupManagerImpl @Inject constructor(
             )
 
             // Compute checksum over the data without checksum field
-            val jsonWithoutChecksum = gson.toJson(backupData)
-            val backupWithChecksum = backupData.copy(checksum = buildSha256Checksum(jsonWithoutChecksum))
+            val backupWithChecksum = backupData.copy(checksum = buildSha256Checksum(backupData))
 
             // 2. Serialize and write to URI
             context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                 OutputStreamWriter(outputStream).use { writer ->
-                    gson.toJson(backupWithChecksum, writer)
+                    writeBackupDataJson(writer, backupWithChecksum)
                 }
             } ?: return@withContext com.streamvault.domain.model.Result.error("Failed to open output stream")
 
@@ -342,7 +347,7 @@ class BackupManagerImpl @Inject constructor(
                     }
                     val entity = provider.copy(
                         id = existing?.id ?: 0L  // 0 = let Room auto-assign PK; avoids ID collision on import
-                    ).toSecureEntityForBackup()
+                    ).toSecureEntityForBackup(credentialCrypto)
                     providerDao.insert(entity)
                 }
                 backupData.preferences
@@ -521,24 +526,77 @@ class BackupManagerImpl @Inject constructor(
     private fun verifyChecksum(backupData: BackupData): Boolean {
         val storedChecksum = backupData.checksum ?: return true // no checksum = legacy backup, skip verification
         val dataWithoutChecksum = backupData.copy(checksum = null)
-        val json = gson.toJson(dataWithoutChecksum)
 
         return if (storedChecksum.startsWith(SHA256_PREFIX)) {
-            buildSha256Checksum(json) == storedChecksum
+            buildSha256Checksum(dataWithoutChecksum) == storedChecksum
         } else {
-            verifyLegacyCrc32Checksum(json, storedChecksum)
+            verifyLegacyCrc32Checksum(dataWithoutChecksum, storedChecksum)
         }
     }
 
-    private fun buildSha256Checksum(json: String): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(json.toByteArray(Charsets.UTF_8))
-        return SHA256_PREFIX + digest.joinToString(separator = "") { "%02x".format(it) }
+    private fun buildSha256Checksum(backupData: BackupData): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        OutputStreamWriter(MessageDigestOutputStream(digest), Charsets.UTF_8).use { writer ->
+            writeBackupDataJson(writer, backupData.copy(checksum = null))
+        }
+        return SHA256_PREFIX + digest.digest().joinToString(separator = "") { "%02x".format(it) }
     }
 
-    private fun verifyLegacyCrc32Checksum(json: String, checksum: String): Boolean {
+    private fun verifyLegacyCrc32Checksum(backupData: BackupData, checksum: String): Boolean {
         val crc = CRC32()
-        crc.update(json.toByteArray(Charsets.UTF_8))
+        OutputStreamWriter(Crc32OutputStream(crc), Charsets.UTF_8).use { writer ->
+            writeBackupDataJson(writer, backupData.copy(checksum = null))
+        }
         return crc.value.toString(16) == checksum
+    }
+
+    private fun writeBackupDataJson(writer: Writer, backupData: BackupData) {
+        JsonWriter(writer).use { jsonWriter ->
+            jsonWriter.beginObject()
+            jsonWriter.name("version").value(backupData.version.toLong())
+            backupData.checksum?.let { checksum ->
+                jsonWriter.name("checksum").value(checksum)
+            }
+            writeNamedJsonField(jsonWriter, "preferences", backupData.preferences, MAP_STRING_STRING_TYPE)
+            writeNamedJsonField(jsonWriter, "providers", backupData.providers, PROVIDER_LIST_TYPE)
+            writeNamedJsonField(jsonWriter, "favorites", backupData.favorites, FAVORITE_LIST_TYPE)
+            writeNamedJsonField(jsonWriter, "virtualGroups", backupData.virtualGroups, VIRTUAL_GROUP_LIST_TYPE)
+            writeNamedJsonField(jsonWriter, "playbackHistory", backupData.playbackHistory, PLAYBACK_HISTORY_LIST_TYPE)
+            writeNamedJsonField(jsonWriter, "multiViewPresets", backupData.multiViewPresets, MULTIVIEW_PRESETS_TYPE)
+            writeNamedJsonField(jsonWriter, "protectedCategories", backupData.protectedCategories, PROTECTED_CATEGORY_LIST_TYPE)
+            writeNamedJsonField(jsonWriter, "scheduledRecordings", backupData.scheduledRecordings, SCHEDULED_RECORDING_LIST_TYPE)
+            jsonWriter.endObject()
+        }
+    }
+
+    private fun <T> writeNamedJsonField(jsonWriter: JsonWriter, name: String, value: T?, type: Type) {
+        if (value == null) return
+        jsonWriter.name(name)
+        gson.toJson(value, type, jsonWriter)
+    }
+
+    private class MessageDigestOutputStream(
+        private val digest: MessageDigest
+    ) : OutputStream() {
+        override fun write(b: Int) {
+            digest.update(b.toByte())
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            digest.update(b, off, len)
+        }
+    }
+
+    private class Crc32OutputStream(
+        private val crc32: CRC32
+    ) : OutputStream() {
+        override fun write(b: Int) {
+            crc32.update(b)
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            crc32.update(b, off, len)
+        }
     }
 
     private fun readBackupData(uriString: String): BackupData? {
@@ -551,7 +609,16 @@ class BackupManagerImpl @Inject constructor(
     }
 }
 
-private fun com.streamvault.domain.model.Provider.toSecureEntityForBackup() =
-    copy(password = CredentialCrypto.encryptIfNeeded(password)).toEntity()
+private fun com.streamvault.domain.model.Provider.toSecureEntityForBackup(
+    credentialCrypto: CredentialCrypto
+) = copy(password = credentialCrypto.encryptIfNeeded(password)).toEntity()
 
 private const val SHA256_PREFIX = "sha256:"
+private val MAP_STRING_STRING_TYPE: Type = object : TypeToken<Map<String, String>>() {}.type
+private val PROVIDER_LIST_TYPE: Type = object : TypeToken<List<com.streamvault.domain.model.Provider>>() {}.type
+private val FAVORITE_LIST_TYPE: Type = object : TypeToken<List<com.streamvault.domain.model.Favorite>>() {}.type
+private val VIRTUAL_GROUP_LIST_TYPE: Type = object : TypeToken<List<com.streamvault.domain.model.VirtualGroup>>() {}.type
+private val PLAYBACK_HISTORY_LIST_TYPE: Type = object : TypeToken<List<com.streamvault.domain.model.PlaybackHistory>>() {}.type
+private val MULTIVIEW_PRESETS_TYPE: Type = object : TypeToken<Map<String, List<Long>>>() {}.type
+private val PROTECTED_CATEGORY_LIST_TYPE: Type = object : TypeToken<List<ProtectedCategoryBackup>>() {}.type
+private val SCHEDULED_RECORDING_LIST_TYPE: Type = object : TypeToken<List<ScheduledRecordingBackup>>() {}.type

@@ -6,6 +6,11 @@ import com.streamvault.domain.model.ProviderEpgSyncMode
 import com.streamvault.domain.model.Result
 import kotlinx.coroutines.flow.Flow
 
+data class LiveStreamProgramRequest(
+    val streamId: Long,
+    val epgChannelId: String? = null
+)
+
 interface ProviderRepository {
     fun getProviders(): Flow<List<Provider>>
     fun getActiveProvider(): Flow<Provider?>
@@ -29,6 +34,19 @@ interface ProviderRepository {
         epgChannelId: String? = null,
         limit: Int = 12
     ): Result<List<Program>>
+    suspend fun getProgramsForLiveStreams(
+        providerId: Long,
+        requests: List<LiveStreamProgramRequest>,
+        limit: Int = 12
+    ): Map<LiveStreamProgramRequest, Result<List<Program>>> =
+        requests.distinct().associateWith { request ->
+            getProgramsForLiveStream(
+                providerId = providerId,
+                streamId = request.streamId,
+                epgChannelId = request.epgChannelId,
+                limit = limit
+            )
+        }
     suspend fun buildCatchUpUrl(providerId: Long, streamId: Long, start: Long, end: Long): String?
     suspend fun buildCatchUpUrls(providerId: Long, streamId: Long, start: Long, end: Long): List<String> =
         listOfNotNull(buildCatchUpUrl(providerId, streamId, start, end))

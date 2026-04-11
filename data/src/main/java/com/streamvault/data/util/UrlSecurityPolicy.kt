@@ -1,5 +1,6 @@
 package com.streamvault.data.util
 
+import com.streamvault.domain.util.StreamEntryUrlPolicy
 import java.net.URI
 import java.util.Locale
 
@@ -19,7 +20,7 @@ object UrlSecurityPolicy {
     /** Validates individual stream/asset entries inside an imported playlist. HTTP is allowed here
      *  because the majority of IPTV providers serve streams over plain HTTP. */
     fun isAllowedStreamEntryUrl(url: String): Boolean =
-        !containsNewlines(url) && hasAllowedScheme(url, streamEntrySchemes)
+        StreamEntryUrlPolicy.isAllowed(url)
 
     fun validateXtreamServerUrl(url: String): String? {
         return if (!containsNewlines(url) && hasAllowedScheme(url, xtreamServerSchemes)) {
@@ -65,9 +66,16 @@ object UrlSecurityPolicy {
     }
 
     private fun containsNewlines(url: String): Boolean {
-        val decoded = url.replace("%0A", "\n", ignoreCase = true)
-            .replace("%0D", "\r", ignoreCase = true)
-        return decoded.contains('\n') || decoded.contains('\r')
+        // Decode up to two percent-encoding layers to catch double-encoded payloads
+        // (e.g. %250A → %0A → \n). Also checks %09 (tab) which can split log lines.
+        var decoded = url
+        repeat(2) {
+            decoded = decoded
+                .replace("%0A", "\n", ignoreCase = true)
+                .replace("%0D", "\r", ignoreCase = true)
+                .replace("%09", "\t", ignoreCase = true)
+        }
+        return decoded.any { it == '\n' || it == '\r' || it == '\t' }
     }
 
     private fun parseScheme(url: String): String? {

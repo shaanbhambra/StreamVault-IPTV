@@ -102,6 +102,31 @@ class MoviesViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            providerRepository.getProviders().collectLatest { providers ->
+                _uiState.update {
+                    it.copy(
+                        hasProviders = providers.isNotEmpty(),
+                        isLoading = if (providers.isEmpty()) false else it.isLoading
+                    )
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            providerRepository.getActiveProvider().collectLatest { provider ->
+                activeProviderId = provider?.id
+                _uiState.update {
+                    it.copy(
+                        hasActiveProvider = provider != null,
+                        isLoading = if (provider == null) false else it.isLoading,
+                        isLoadingSelectedCategory = if (provider == null) false else it.isLoadingSelectedCategory,
+                        isLoadingPreviewRows = if (provider == null) false else it.isLoadingPreviewRows
+                    )
+                }
+            }
+        }
+
+        viewModelScope.launch {
             try {
             providerRepository.getActiveProvider()
                 .filterNotNull()
@@ -1171,6 +1196,8 @@ data class MoviesUiState(
     val selectedLibrarySortBy: LibrarySortBy = LibrarySortBy.LIBRARY,
     val vodViewMode: VodViewMode = VodViewMode.MODERN,
     val continueWatching: List<PlaybackHistory> = emptyList(),
+    val hasProviders: Boolean = false,
+    val hasActiveProvider: Boolean = false,
     val isLoading: Boolean = true,
     val isLoadingPreviewRows: Boolean = false,
     val hasMorePreviewRows: Boolean = false,

@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -48,6 +49,7 @@ fun PinDialog(
     var canInteract by remember { mutableStateOf(false) }
     val firstKeyFocusRequester = remember { FocusRequester() }
     val isTelevisionDevice = rememberIsTelevisionDevice()
+    val blockOpenGesture = rememberDialogOpenGestureBlocker(canInteract)
 
     LaunchedEffect(Unit) {
         firstKeyFocusRequester.requestFocusSafely(tag = "PinDialog", target = "PIN keypad")
@@ -78,6 +80,7 @@ fun PinDialog(
         val dialogContent: @Composable (Modifier) -> Unit = { resolvedModifier ->
             Box(
                 modifier = resolvedModifier
+                    .onPreviewKeyEvent(blockOpenGesture)
                     .background(SurfaceElevated, RoundedCornerShape(16.dp))
                     .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
                     .padding(24.dp),

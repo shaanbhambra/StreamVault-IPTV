@@ -185,6 +185,20 @@ fun SeriesScreen(
                     subtitle = uiState.errorMessage ?: ""
                 )
             }
+        } else if (!uiState.hasProviders) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                AppMessageState(
+                    title = stringResource(R.string.home_add_first_provider),
+                    subtitle = stringResource(R.string.home_add_first_provider_subtitle)
+                )
+            }
+        } else if (!uiState.hasActiveProvider || (uiState.seriesByCategory.isEmpty() && uiState.libraryCount == 0 && uiState.searchQuery.isBlank() && !uiState.isLoadingPreviewRows)) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                AppMessageState(
+                    title = stringResource(R.string.vod_sync_needed_title),
+                    subtitle = stringResource(R.string.vod_sync_needed_subtitle)
+                )
+            }
         } else if (uiState.seriesByCategory.isEmpty() && !uiState.isLoadingPreviewRows) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 AppMessageState(
@@ -389,10 +403,16 @@ private fun SeriesVodContent(
             category == null || !isCategoryHidden(category)
         }
     }
-    val catEntries = uiState.seriesByCategory.entries
-        .filter { (name, items) ->
-            name != uiState.favoriteCategoryName && name in visibleCategoryNames && items.isNotEmpty()
-        }.toList()
+    val visibleCategoryNameSet = remember(visibleCategoryNames) {
+        visibleCategoryNames.toSet()
+    }
+    val catEntries = remember(uiState.seriesByCategory, visibleCategoryNameSet, uiState.favoriteCategoryName) {
+        uiState.seriesByCategory.entries
+            .filter { (name, items) ->
+                name != uiState.favoriteCategoryName && name in visibleCategoryNameSet && items.isNotEmpty()
+            }
+            .toList()
+    }
     val fallbackSeriesId = if (heroSeries == null) {
         favoriteSeries.firstOrNull()?.id
             ?: freshSeries.firstOrNull()?.id

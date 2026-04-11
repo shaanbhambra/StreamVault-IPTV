@@ -116,6 +116,7 @@ class SyncManager @Inject constructor(
     private val epgRepository: EpgRepository,
     private val epgSourceRepository: EpgSourceRepository,
     private val okHttpClient: OkHttpClient,
+    private val credentialCrypto: CredentialCrypto,
     private val syncMetadataRepository: SyncMetadataRepository,
     private val transactionRunner: DatabaseTransactionRunner,
     private val preferencesRepository: com.streamvault.data.preferences.PreferencesRepository
@@ -239,17 +240,25 @@ class SyncManager @Inject constructor(
     fun currentSyncState(providerId: Long): SyncState =
         syncStateTracker.current(providerId)
 
+    /** Returns true if any provider sync mutex is currently held (used by DatabaseMaintenanceManager). */
+    fun isAnySyncActive(): Boolean = providerSyncMutexes.values.any { it.isLocked }
     private suspend fun <T> withProviderLock(providerId: Long, block: suspend () -> T): T {
         val mutex = providerSyncMutexes.computeIfAbsent(providerId) { Mutex() }
         return mutex.withLock { block() }
     }
 
     suspend fun onProviderDeleted(providerId: Long) {
-        backgroundEpgJobs.remove(providerId)?.cancel()
-        syncStateTracker.reset(providerId)
+        val cancelledEpgJob = backgroundEpgJobs.remove(providerId)
+        if (cancelledEpgJob?.isActive == true) {
+            Log.w(TAG, "onProviderDeleted($providerId): cancelled an active background EPG job; mid-sync delete detected")
+        }
+        cancelledEpgJob?.cancel()
+        withProviderLock(providerId) {
+            syncStateTracker.reset(providerId)
+            xtreamAdaptiveSyncPolicy.forgetProvider(providerId)
+            syncCatalogStore.clearProviderStaging(providerId)
+        }
         providerSyncMutexes.remove(providerId)
-        xtreamAdaptiveSyncPolicy.forgetProvider(providerId)
-        syncCatalogStore.clearProviderStaging(providerId)
     }
 
     fun scheduleBackgroundEpgSync(providerId: Long) {
@@ -258,7 +267,7 @@ class SyncManager @Inject constructor(
             withProviderLock(providerId) {
                 val providerEntity = providerDao.getById(providerId) ?: return@withProviderLock
                 val provider = providerEntity
-                    .copy(password = CredentialCrypto.decryptIfNeeded(providerEntity.password))
+                    .copy(password = credentialCrypto.decryptIfNeeded(providerEntity.password))
                     .toDomain()
                 try {
                     publishSyncState(providerId, SyncState.Syncing("Downloading EPG..."))
@@ -296,10 +305,12 @@ class SyncManager @Inject constructor(
                 }
             }
         }
+        // Store the launched job before registering completion cleanup so fast-completing
+        // coroutines cannot finish and race past map registration.
+        backgroundEpgJobs[providerId] = job
         job.invokeOnCompletion {
             backgroundEpgJobs.remove(providerId, job)
         }
-        backgroundEpgJobs[providerId] = job
     }
 
     private fun shouldSyncEpgUpfront(provider: Provider): Boolean =
@@ -316,7 +327,7 @@ class SyncManager @Inject constructor(
             ?: return@lock com.streamvault.domain.model.Result.error("Provider $providerId not found")
 
         val provider = providerEntity
-            .copy(password = CredentialCrypto.decryptIfNeeded(providerEntity.password))
+            .copy(password = credentialCrypto.decryptIfNeeded(providerEntity.password))
             .toDomain()
             .let { resolvedProvider ->
                 resolvedProvider.copy(
@@ -370,7 +381,7 @@ class SyncManager @Inject constructor(
             ?: return@lock com.streamvault.domain.model.Result.error("Provider $providerId not found")
 
         val provider = providerEntity
-            .copy(password = CredentialCrypto.decryptIfNeeded(providerEntity.password))
+            .copy(password = credentialCrypto.decryptIfNeeded(providerEntity.password))
             .toDomain()
             .let { resolvedProvider ->
                 movieFastSyncOverride?.let { override ->
@@ -413,8 +424,9 @@ class SyncManager @Inject constructor(
         }
         progress(provider.id, onProgress, "Connecting to server...")
         val useTextClassification = preferencesRepository.useXtreamTextClassification.first()
+        val enableBase64TextCompatibility = preferencesRepository.xtreamBase64TextCompatibility.first()
         val hiddenLiveCategoryIds = preferencesRepository.getHiddenCategoryIds(provider.id, ContentType.LIVE).first()
-        val api = createXtreamSyncProvider(provider, useTextClassification)
+        val api = createXtreamSyncProvider(provider, useTextClassification, enableBase64TextCompatibility)
 
         var metadata = syncMetadataRepository.getMetadata(provider.id) ?: SyncMetadata(provider.id)
         val now = System.currentTimeMillis()
@@ -946,8 +958,9 @@ class SyncManager @Inject constructor(
             ProviderType.XTREAM_CODES -> {
                 progress(provider.id, onProgress, "Retrying Live TV...")
                 val useTextClassification = preferencesRepository.useXtreamTextClassification.first()
+                val enableBase64TextCompatibility = preferencesRepository.xtreamBase64TextCompatibility.first()
                 val hiddenLiveCategoryIds = preferencesRepository.getHiddenCategoryIds(provider.id, ContentType.LIVE).first()
-                val api = createXtreamSyncProvider(provider, useTextClassification)
+                val api = createXtreamSyncProvider(provider, useTextClassification, enableBase64TextCompatibility)
                 val currentMetadata = syncMetadataRepository.getMetadata(provider.id) ?: SyncMetadata(provider.id)
                 val liveSyncResult = syncXtreamLiveCatalog(
                     provider = provider,
@@ -1076,7 +1089,8 @@ class SyncManager @Inject constructor(
                     "Retrying Movies..."
                 )
                 val useTextClassification = preferencesRepository.useXtreamTextClassification.first()
-                val api = createXtreamSyncProvider(provider, useTextClassification)
+                val enableBase64TextCompatibility = preferencesRepository.xtreamBase64TextCompatibility.first()
+                val api = createXtreamSyncProvider(provider, useTextClassification, enableBase64TextCompatibility)
                 val currentMetadata = syncMetadataRepository.getMetadata(provider.id) ?: SyncMetadata(provider.id)
                 val movieSyncResult = syncXtreamMoviesCatalog(
                     provider = provider,
@@ -1230,7 +1244,8 @@ class SyncManager @Inject constructor(
         }
         progress(provider.id, onProgress, "Retrying Series...")
         val useTextClassification = preferencesRepository.useXtreamTextClassification.first()
-        val api = createXtreamSyncProvider(provider, useTextClassification)
+        val enableBase64TextCompatibility = preferencesRepository.xtreamBase64TextCompatibility.first()
+        val api = createXtreamSyncProvider(provider, useTextClassification, enableBase64TextCompatibility)
         val currentMetadata = syncMetadataRepository.getMetadata(provider.id) ?: SyncMetadata(provider.id)
         val seriesSyncResult = syncXtreamSeriesCatalog(
             provider = provider,
@@ -1667,7 +1682,11 @@ class SyncManager @Inject constructor(
         private const val PROGRESS_INTERVAL = 5_000
     }
 
-    private fun createXtreamSyncProvider(provider: Provider, useTextClassification: Boolean = true): XtreamProvider {
+    private fun createXtreamSyncProvider(
+        provider: Provider,
+        useTextClassification: Boolean = true,
+        enableBase64TextCompatibility: Boolean = false
+    ): XtreamProvider {
         return XtreamProvider(
             providerId = provider.id,
             api = xtreamCatalogApiService,
@@ -1675,7 +1694,8 @@ class SyncManager @Inject constructor(
             username = provider.username,
             password = provider.password,
             allowedOutputFormats = provider.allowedOutputFormats,
-            useTextClassification = useTextClassification
+            useTextClassification = useTextClassification,
+            enableBase64TextCompatibility = enableBase64TextCompatibility
         )
     }
 

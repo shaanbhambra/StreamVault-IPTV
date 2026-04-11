@@ -58,6 +58,8 @@ import androidx.documentfile.provider.DocumentFile
 import com.streamvault.app.ui.interaction.TvClickableSurface
 import com.streamvault.app.ui.interaction.TvButton
 import com.streamvault.app.ui.interaction.TvIconButton
+import com.streamvault.app.util.OfficialBuildStatus
+import com.streamvault.app.util.OfficialBuildVerifier
 
 import com.streamvault.app.ui.components.dialogs.PinDialog
 import com.streamvault.app.ui.components.dialogs.PremiumDialog
@@ -122,6 +124,10 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
     val mainActivity = context.findMainActivity()
+    val officialBuildVerification = remember(context.packageName) { OfficialBuildVerifier.verify(context) }
+    val buildVerificationLabel = remember(officialBuildVerification.status, context) {
+        formatOfficialBuildStatusLabel(officialBuildVerification.status, context)
+    }
     val appLanguageLabel = remember(uiState.appLanguage, context) {
         displayLanguageLabel(uiState.appLanguage, context.getString(R.string.settings_system_default))
     }
@@ -708,6 +714,29 @@ fun SettingsScreen(
                             }
                             Spacer(Modifier.height(2.dp))
                             TvClickableSurface(
+                                onClick = { viewModel.toggleXtreamBase64TextCompatibility() },
+                                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                                colors = ClickableSurfaceDefaults.colors(
+                                    containerColor = Color.Transparent,
+                                    focusedContainerColor = Primary.copy(alpha = 0.15f)
+                                ),
+                                scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(text = stringResource(R.string.settings_xtream_base64_compatibility), style = MaterialTheme.typography.bodyMedium, color = OnSurface)
+                                        Text(text = stringResource(R.string.settings_xtream_base64_compatibility_subtitle), style = MaterialTheme.typography.bodySmall, color = OnBackground.copy(alpha = 0.6f))
+                                    }
+                                    Switch(checked = uiState.xtreamBase64TextCompatibility, onCheckedChange = { viewModel.toggleXtreamBase64TextCompatibility() })
+                                }
+                            }
+                            Spacer(Modifier.height(2.dp))
+                            TvClickableSurface(
                                 onClick = { showClearHistoryDialog = true },
                                 shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
                                 colors = ClickableSurfaceDefaults.colors(
@@ -927,6 +956,7 @@ fun SettingsScreen(
 
                         item {
                             SettingsRow(label = stringResource(R.string.settings_build), value = stringResource(R.string.settings_build_desc))
+                            SettingsRow(label = stringResource(R.string.settings_build_verification), value = buildVerificationLabel)
                             SettingsRow(label = stringResource(R.string.settings_developed_by), value = stringResource(R.string.settings_developer_name))
                             ClickableSettingsRow(
                                 label = stringResource(R.string.settings_github),
@@ -1031,6 +1061,15 @@ fun SettingsScreen(
         onCustomSyncSelectionsChange = { customSyncSelections = it }
     )
 }
+}
+
+private fun formatOfficialBuildStatusLabel(
+    status: OfficialBuildStatus,
+    context: android.content.Context
+): String = when (status) {
+    OfficialBuildStatus.OFFICIAL -> context.getString(R.string.settings_build_verification_official)
+    OfficialBuildStatus.UNOFFICIAL -> context.getString(R.string.settings_build_verification_unofficial)
+    OfficialBuildStatus.VERIFICATION_UNAVAILABLE -> context.getString(R.string.settings_build_verification_unavailable)
 }
 
 private fun android.content.Context.findMainActivity(): MainActivity? {

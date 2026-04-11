@@ -102,6 +102,8 @@ class PreferencesRepository @Inject constructor(
         val GUIDE_SCHEDULED_ONLY = intPreferencesKey("guide_scheduled_only")
         val RECENT_SEARCH_QUERIES = stringPreferencesKey("recent_search_queries")
         val XTREAM_TEXT_CLASSIFICATION = booleanPreferencesKey("xtream_text_classification")
+        val XTREAM_BASE64_TEXT_COMPATIBILITY = booleanPreferencesKey("xtream_base64_text_compatibility")
+        val XTREAM_TEXT_IMPORT_GENERATION = longPreferencesKey("xtream_text_import_generation")
         val PREVENT_STANDBY_DURING_PLAYBACK = booleanPreferencesKey("prevent_standby_during_playback")
         val AUTO_CHECK_APP_UPDATES = booleanPreferencesKey("auto_check_app_updates")
         val LAST_APP_UPDATE_CHECK_TIMESTAMP = longPreferencesKey("last_app_update_check_timestamp")
@@ -159,6 +161,14 @@ class PreferencesRepository @Inject constructor(
 
     val useXtreamTextClassification: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[PreferencesKeys.XTREAM_TEXT_CLASSIFICATION] ?: true // default ON
+    }
+
+    val xtreamBase64TextCompatibility: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.XTREAM_BASE64_TEXT_COMPATIBILITY] ?: false
+    }
+
+    val xtreamTextImportGeneration: Flow<Long> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.XTREAM_TEXT_IMPORT_GENERATION] ?: 0L
     }
 
     val playerMuted: Flow<Boolean> = context.dataStore.data.map { preferences ->
@@ -310,6 +320,41 @@ class PreferencesRepository @Inject constructor(
     suspend fun setUseXtreamTextClassification(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.XTREAM_TEXT_CLASSIFICATION] = enabled
+        }
+    }
+
+    suspend fun setXtreamBase64TextCompatibility(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.XTREAM_BASE64_TEXT_COMPATIBILITY] = enabled
+        }
+    }
+
+    suspend fun bumpXtreamTextImportGeneration(): Long {
+        var nextGeneration = 0L
+        context.dataStore.edit { preferences ->
+            nextGeneration = (preferences[PreferencesKeys.XTREAM_TEXT_IMPORT_GENERATION] ?: 0L) + 1L
+            preferences[PreferencesKeys.XTREAM_TEXT_IMPORT_GENERATION] = nextGeneration
+        }
+        return nextGeneration
+    }
+
+    suspend fun getXtreamTextImportGeneration(): Long {
+        return xtreamTextImportGeneration.first()
+    }
+
+    suspend fun getXtreamTextImportAppliedGeneration(providerId: Long): Long {
+        val key = longPreferencesKey(xtreamTextImportAppliedGenerationKey(providerId))
+        return context.dataStore.data.first()[key] ?: 0L
+    }
+
+    suspend fun markXtreamTextImportApplied(providerId: Long, generation: Long) {
+        val key = longPreferencesKey(xtreamTextImportAppliedGenerationKey(providerId))
+        context.dataStore.edit { preferences ->
+            if (generation <= 0L) {
+                preferences.remove(key)
+            } else {
+                preferences[key] = generation
+            }
         }
     }
 
@@ -1150,6 +1195,9 @@ class PreferencesRepository @Inject constructor(
 
         return !preferences[PreferencesKeys.LEGACY_PARENTAL_PIN].isNullOrBlank()
     }
+
+    private fun xtreamTextImportAppliedGenerationKey(providerId: Long): String =
+        "xtream_text_import_applied_generation_$providerId"
 }
 
 data class ParentalPinBackupData(

@@ -53,6 +53,7 @@ import com.streamvault.app.ui.components.LiveSourceSwitcher
 import com.streamvault.app.ui.components.shell.ContentMetadataStrip
 import com.streamvault.app.ui.components.shell.LiveChannelRowSurface
 import com.streamvault.app.ui.components.shell.StatusPill
+import com.streamvault.app.ui.components.TvEmptyState
 import com.streamvault.app.ui.components.dialogs.CategoryOptionsDialog
 import com.streamvault.app.ui.components.dialogs.PinDialog
 import com.streamvault.app.ui.components.dialogs.PremiumDialog
@@ -287,7 +288,19 @@ fun HomeScreen(
                 )
             }
 
-            if (uiState.isCategoriesLoading && uiState.categories.isEmpty()) {
+            if (uiState.allProviders.isEmpty() && !uiState.isCategoriesLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    TvEmptyState(
+                        title = stringResource(R.string.home_add_first_provider),
+                        subtitle = stringResource(R.string.home_add_first_provider_subtitle)
+                    )
+                }
+            } else if (uiState.isCategoriesLoading && uiState.categories.isEmpty()) {
                 Row(modifier = Modifier.fillMaxSize()) {
                     Box(
                         modifier = Modifier

@@ -3,12 +3,18 @@ package com.streamvault.data.remote.xtream
 import com.google.common.truth.Truth.assertThat
 import com.streamvault.data.local.dao.ProviderDao
 import com.streamvault.data.local.entity.ProviderEntity
+import com.streamvault.data.security.CredentialCrypto
 import com.streamvault.domain.model.ProviderType
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
 class XtreamStreamUrlResolverTest {
+    private val credentialCrypto = object : CredentialCrypto {
+        override fun encryptIfNeeded(value: String): String = value
+        override fun decryptIfNeeded(value: String): String = value
+    }
+
 
     @Test
     fun buildPlaybackUrl_uses_live_container_extension_when_present() {
@@ -51,7 +57,8 @@ class XtreamStreamUrlResolverTest {
                     username = "alice",
                     password = "secret"
                 )
-            )
+            ),
+            credentialCrypto = credentialCrypto
         )
         val url = XtreamUrlFactory.buildInternalStreamUrl(
             providerId = 9,
@@ -79,7 +86,8 @@ class XtreamStreamUrlResolverTest {
                     username = "alice",
                     password = "secret"
                 )
-            )
+            ),
+            credentialCrypto = credentialCrypto
         )
         val url = XtreamUrlFactory.buildInternalStreamUrl(
             providerId = 9,
@@ -128,6 +136,8 @@ class XtreamStreamUrlResolverTest {
         override fun getActive() = flowOf(provider)
         override suspend fun getByUrlAndUser(serverUrl: String, username: String): ProviderEntity? = null
         override suspend fun getById(id: Long): ProviderEntity? = provider?.takeIf { it.id == id }
+        override suspend fun getByIds(ids: List<Long>): List<ProviderEntity> =
+            listOfNotNull(provider).filter { it.id in ids }
         override suspend fun insert(provider: ProviderEntity): Long = provider.id
         override suspend fun update(provider: ProviderEntity) = Unit
         override suspend fun delete(id: Long) = Unit

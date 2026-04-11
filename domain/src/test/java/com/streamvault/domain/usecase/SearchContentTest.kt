@@ -14,6 +14,7 @@ import com.streamvault.domain.repository.MovieRepository
 import com.streamvault.domain.repository.SeriesRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -86,12 +87,36 @@ class SearchContentTest {
         assertThat(result.movies).isEmpty()
         assertThat(result.series).isEmpty()
     }
+
+    @Test
+    fun rethrows_non_io_upstream_failures() = runTest {
+        val expected = IllegalStateException("channel search failed")
+        val useCase = SearchContent(
+            channelRepository = FakeChannelRepository(
+                searchResults = emptyList(),
+                searchFlow = flow { throw expected }
+            ),
+            movieRepository = FakeMovieRepository(searchResults = emptyList()),
+            seriesRepository = FakeSeriesRepository(searchResults = emptyList())
+        )
+
+        val thrown = try {
+            useCase(providerId = 99L, query = "star").first()
+            null
+        } catch (error: IllegalStateException) {
+            error
+        }
+
+        assertThat(thrown).isNotNull()
+        assertThat(thrown?.message).isEqualTo(expected.message)
+    }
 }
 
 private class FakeChannelRepository(
-    private val searchResults: List<Channel>
+    private val searchResults: List<Channel>,
+    private val searchFlow: Flow<List<Channel>>? = null
 ) : ChannelRepository {
-    override fun searchChannels(providerId: Long, query: String): Flow<List<Channel>> = flowOf(searchResults)
+    override fun searchChannels(providerId: Long, query: String): Flow<List<Channel>> = searchFlow ?: flowOf(searchResults)
     override fun getChannels(providerId: Long): Flow<List<Channel>> = unsupported()
     override fun getChannelsByCategory(providerId: Long, categoryId: Long): Flow<List<Channel>> = unsupported()
     override fun getChannelsByNumber(providerId: Long, categoryId: Long): Flow<List<Channel>> = unsupported()
@@ -107,9 +132,10 @@ private class FakeChannelRepository(
 }
 
 private class FakeMovieRepository(
-    private val searchResults: List<Movie>
+    private val searchResults: List<Movie>,
+    private val searchFlow: Flow<List<Movie>>? = null
 ) : MovieRepository {
-    override fun searchMovies(providerId: Long, query: String): Flow<List<Movie>> = flowOf(searchResults)
+    override fun searchMovies(providerId: Long, query: String): Flow<List<Movie>> = searchFlow ?: flowOf(searchResults)
     override fun getMovies(providerId: Long): Flow<List<Movie>> = unsupported()
     override fun getMoviesByCategory(providerId: Long, categoryId: Long): Flow<List<Movie>> = unsupported()
     override fun getMoviesByCategoryPage(providerId: Long, categoryId: Long, limit: Int, offset: Int): Flow<List<Movie>> = unsupported()
@@ -132,9 +158,10 @@ private class FakeMovieRepository(
 }
 
 private class FakeSeriesRepository(
-    private val searchResults: List<Series>
+    private val searchResults: List<Series>,
+    private val searchFlow: Flow<List<Series>>? = null
 ) : SeriesRepository {
-    override fun searchSeries(providerId: Long, query: String): Flow<List<Series>> = flowOf(searchResults)
+    override fun searchSeries(providerId: Long, query: String): Flow<List<Series>> = searchFlow ?: flowOf(searchResults)
     override fun getSeries(providerId: Long): Flow<List<Series>> = unsupported()
     override fun getSeriesByCategory(providerId: Long, categoryId: Long): Flow<List<Series>> = unsupported()
     override fun getSeriesByCategoryPage(providerId: Long, categoryId: Long, limit: Int, offset: Int): Flow<List<Series>> = unsupported()

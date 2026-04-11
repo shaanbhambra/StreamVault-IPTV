@@ -1,6 +1,8 @@
 package com.streamvault.data.repository
 
+import android.content.ContentResolver
 import android.content.Context
+import android.net.Uri
 import com.google.common.truth.Truth.assertThat
 import com.streamvault.data.epg.EpgResolutionEngine
 import com.streamvault.data.local.dao.ChannelEpgMappingDao
@@ -16,6 +18,7 @@ import com.streamvault.data.parser.XmltvParser
 import com.streamvault.domain.model.EpgMatchType
 import com.streamvault.domain.model.EpgSourceType
 import com.streamvault.domain.model.Result
+import java.io.ByteArrayInputStream
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import org.junit.Before
@@ -31,6 +34,7 @@ import org.mockito.kotlin.whenever
 class EpgSourceRepositoryImplTest {
 
     private val context: Context = mock()
+    private val contentResolver: ContentResolver = mock()
     private val epgSourceDao: EpgSourceDao = mock()
     private val providerEpgSourceDao: ProviderEpgSourceDao = mock()
     private val channelEpgMappingDao: ChannelEpgMappingDao = mock()
@@ -44,6 +48,7 @@ class EpgSourceRepositoryImplTest {
 
     @Before
     fun setup() {
+        whenever(context.contentResolver).thenReturn(contentResolver)
         repository = EpgSourceRepositoryImpl(
             context = context,
             epgSourceDao = epgSourceDao,
@@ -170,5 +175,35 @@ class EpgSourceRepositoryImplTest {
 
         assertThat(result.map { it.displayName }).containsExactly("BBC One")
         assertThat(result.single().epgSourceName).isEqualTo("Primary")
+    }
+
+    @Test
+    fun `refreshSource_closesDecompressedXmlStream`() = runTest {
+        val source = EpgSourceEntity(
+            id = 10L,
+            name = "Primary",
+            url = "content://epg/source.xml.gz"
+        )
+        val decompressedStream = CloseTrackingInputStream()
+
+        whenever(epgSourceDao.getById(10L)).thenReturn(source)
+        whenever(contentResolver.openInputStream(Uri.parse(source.url))).thenReturn(ByteArrayInputStream(byteArrayOf(1, 2, 3)))
+        whenever(xmltvParser.maybeDecompressGzip(eq(source.url), any())).thenReturn(decompressedStream)
+        whenever(providerEpgSourceDao.getProviderIdsForSourceSync(10L)).thenReturn(emptyList())
+
+        val result = repository.refreshSource(10L)
+
+        assertThat(result is Result.Success).isTrue()
+        assertThat(decompressedStream.closed).isTrue()
+    }
+
+    private class CloseTrackingInputStream : ByteArrayInputStream(byteArrayOf()) {
+        var closed: Boolean = false
+            private set
+
+        override fun close() {
+            closed = true
+            super.close()
+        }
     }
 }

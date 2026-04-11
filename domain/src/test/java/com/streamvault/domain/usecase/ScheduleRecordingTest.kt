@@ -85,6 +85,29 @@ class ScheduleRecordingTest {
         assertThat(manager.lastScheduledRequest?.scheduledEndMs).isEqualTo(4_000L)
     }
 
+    @Test
+    fun returns_error_when_program_has_already_ended() = runTest {
+        val manager = FakeRecordingManager()
+        val useCase = ScheduleRecording(manager)
+
+        val result = useCase(
+            ScheduleRecordingCommand(
+                contentType = ContentType.LIVE,
+                providerId = 7L,
+                channel = channel(),
+                streamUrl = "https://example.com/live.ts",
+                currentProgram = program(title = "Ended", startTime = 1_000L, endTime = 2_000L),
+                nextProgram = null,
+                recurrence = RecordingRecurrence.NONE,
+                nowMs = 2_000L
+            )
+        )
+
+        assertThat((result as Result.Error).message)
+            .isEqualTo("The selected program has already ended. Refresh the guide and try again.")
+        assertThat(manager.lastScheduledRequest).isNull()
+    }
+
     private fun channel() = Channel(
         id = 11L,
         name = "Channel 11",

@@ -9,11 +9,13 @@ package com.streamvault.data.util
  *
  * Example: "star wars" → "star* AND wars*"
  */
-internal fun String.toFtsPrefixQuery(): String {
+internal fun String.toFtsPrefixQuery(): String? {
     val tokens = trim()
         .split(Regex("\\s+"))
         .map { token -> token.replace(Regex("[^\\p{L}\\p{N}_]"), "") }
         .filter { it.length >= 2 }
+
+    if (tokens.isEmpty()) return null
 
     return tokens.joinToString(" AND ") { "$it*" }
 }

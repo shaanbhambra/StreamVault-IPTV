@@ -216,9 +216,19 @@ internal class SyncManagerM3uImporter(
     private fun ensureSuccessfulPlaylistResponse(response: Response) {
         if (response.isSuccessful) return
         if (response.code in 500..599 || response.code == 429) {
+            // Transient — the retry wrapper will attempt again automatically.
             throw IOException("Transient HTTP ${response.code}")
         }
-        throw IllegalStateException("Failed to download M3U: HTTP ${response.code}")
+        // Non-transient failures: produce an actionable message so the user understands
+        // exactly why this source was skipped (especially relevant for CombinedM3U profiles).
+        val reason = when (response.code) {
+            401 -> "subscription credentials were rejected (HTTP 401 Unauthorized) — check your username and password"
+            403 -> "access was denied by the provider (HTTP 403 Forbidden) — your subscription may have expired or your IP is banned"
+            404 -> "the playlist URL was not found on the server (HTTP 404 Not Found) — the provider URL may have changed"
+            407 -> "a proxy authentication error occurred (HTTP 407) — check your network settings"
+            else -> "the server returned an unexpected error (HTTP ${response.code})"
+        }
+        throw IllegalStateException("Failed to download M3U playlist: $reason")
     }
 
     private fun maybeDecompressPlaylist(streamed: StreamedPlaylist): InputStream {

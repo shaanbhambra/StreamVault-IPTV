@@ -516,7 +516,10 @@ internal fun EpgOverrideDialog(
                             .heightIn(max = 320.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        items(state.candidates) { candidate ->
+                        items(
+                            items = state.candidates,
+                            key = { candidate -> "${candidate.epgSourceId}:${candidate.xmltvChannelId}" }
+                        ) { candidate ->
                             val isCurrent = state.currentMapping?.epgSourceId == candidate.epgSourceId &&
                                 state.currentMapping?.xmltvChannelId == candidate.xmltvChannelId
                             TvClickableSurface(

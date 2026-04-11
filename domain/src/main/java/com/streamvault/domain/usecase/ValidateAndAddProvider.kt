@@ -38,6 +38,11 @@ class ValidateAndAddProvider @Inject constructor(
     private val providerSetupInputValidator: ProviderSetupInputValidator,
     private val providerRepository: ProviderRepository
 ) {
+    companion object {
+        private const val MAX_XTREAM_PLAYLIST_USERNAME_LENGTH = 128
+        private const val MAX_XTREAM_PLAYLIST_PASSWORD_LENGTH = 256
+    }
+
     suspend fun loginXtream(
         command: XtreamProviderSetupCommand,
         onProgress: ((String) -> Unit)? = null
@@ -77,27 +82,33 @@ class ValidateAndAddProvider @Inject constructor(
         ) {
             is Result.Success -> {
                 val validatedInput = validated.data
-                val parsedXtream = parseXtreamPlaylistUrl(validatedInput.url)
-                if (parsedXtream != null) {
-                    providerRepository.loginXtream(
-                        serverUrl = parsedXtream.serverUrl,
-                        username = parsedXtream.username,
-                        password = parsedXtream.password,
-                        name = validatedInput.name,
-                        xtreamFastSyncEnabled = true,
-                        epgSyncMode = command.epgSyncMode,
-                        onProgress = onProgress,
-                        id = command.existingProviderId
-                    ).toUseCaseResult()
-                } else {
-                    providerRepository.validateM3u(
-                        url = validatedInput.url,
-                        name = validatedInput.name,
-                        epgSyncMode = command.epgSyncMode,
-                        m3uVodClassificationEnabled = command.m3uVodClassificationEnabled,
-                        onProgress = onProgress,
-                        id = command.existingProviderId
-                    ).toUseCaseResult()
+                when (val parsedXtream = parseXtreamPlaylistUrl(validatedInput.url)) {
+                    is ParsedXtreamPlaylistUrlResult.ValidationError ->
+                        ValidateAndAddProviderResult.ValidationError(parsedXtream.message)
+
+                    is ParsedXtreamPlaylistUrlResult.Success -> {
+                        providerRepository.loginXtream(
+                            serverUrl = parsedXtream.serverUrl,
+                            username = parsedXtream.username,
+                            password = parsedXtream.password,
+                            name = validatedInput.name,
+                            xtreamFastSyncEnabled = true,
+                            epgSyncMode = command.epgSyncMode,
+                            onProgress = onProgress,
+                            id = command.existingProviderId
+                        ).toUseCaseResult()
+                    }
+
+                    ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist -> {
+                        providerRepository.validateM3u(
+                            url = validatedInput.url,
+                            name = validatedInput.name,
+                            epgSyncMode = command.epgSyncMode,
+                            m3uVodClassificationEnabled = command.m3uVodClassificationEnabled,
+                            onProgress = onProgress,
+                            id = command.existingProviderId
+                        ).toUseCaseResult()
+                    }
                 }
             }
 
@@ -112,28 +123,43 @@ class ValidateAndAddProvider @Inject constructor(
         is Result.Loading -> ValidateAndAddProviderResult.Error("Unexpected loading state")
     }
 
-    private data class ParsedXtreamPlaylistUrl(
-        val serverUrl: String,
-        val username: String,
-        val password: String
-    )
+    private sealed interface ParsedXtreamPlaylistUrlResult {
+        data object NotXtreamPlaylist : ParsedXtreamPlaylistUrlResult
+        data class ValidationError(val message: String) : ParsedXtreamPlaylistUrlResult
+        data class Success(
+            val serverUrl: String,
+            val username: String,
+            val password: String
+        ) : ParsedXtreamPlaylistUrlResult
+    }
 
-    private fun parseXtreamPlaylistUrl(url: String): ParsedXtreamPlaylistUrl? {
-        val uri = runCatching { URI(url) }.getOrNull() ?: return null
-        val scheme = uri.scheme?.lowercase() ?: return null
-        if (scheme != "http" && scheme != "https") return null
+    private fun parseXtreamPlaylistUrl(url: String): ParsedXtreamPlaylistUrlResult {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist
+        val scheme = uri.scheme?.lowercase() ?: return ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist
+        if (scheme != "http" && scheme != "https") return ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist
 
         val normalizedPath = uri.path.orEmpty().lowercase()
-        if (!normalizedPath.endsWith("/get.php")) return null
+        if (!normalizedPath.endsWith("/get.php")) return ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist
 
         val query = parseQueryParameters(uri.rawQuery)
-        val username = query["username"]?.takeIf { it.isNotBlank() } ?: return null
-        val password = query["password"]?.takeIf { it.isNotBlank() } ?: return null
-        val type = query["type"]?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
-        if (type != "m3u" && type != "m3u_plus") return null
+        val username = query["username"]?.takeIf { it.isNotBlank() }
+            ?: return ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist
+        val password = query["password"]?.takeIf { it.isNotBlank() }
+            ?: return ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist
+        val type = query["type"]?.lowercase()?.takeIf { it.isNotBlank() }
+            ?: return ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist
+        if (type != "m3u" && type != "m3u_plus") return ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist
 
-        val authority = uri.rawAuthority?.takeIf { it.isNotBlank() } ?: return null
-        return ParsedXtreamPlaylistUrl(
+        if (username.length > MAX_XTREAM_PLAYLIST_USERNAME_LENGTH) {
+            return ParsedXtreamPlaylistUrlResult.ValidationError("Playlist username is too long.")
+        }
+        if (password.length > MAX_XTREAM_PLAYLIST_PASSWORD_LENGTH) {
+            return ParsedXtreamPlaylistUrlResult.ValidationError("Playlist password is too long.")
+        }
+
+        val authority = uri.rawAuthority?.takeIf { it.isNotBlank() }
+            ?: return ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist
+        return ParsedXtreamPlaylistUrlResult.Success(
             serverUrl = "$scheme://$authority",
             username = username,
             password = password

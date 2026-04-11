@@ -18,6 +18,7 @@ import com.streamvault.data.remote.dto.XtreamCategory
 import com.streamvault.data.remote.dto.XtreamStream
 import com.streamvault.data.remote.xtream.XtreamApiService
 import com.streamvault.data.remote.xtream.XtreamStreamUrlResolver
+import com.streamvault.data.security.CredentialCrypto
 import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.ProviderStatus
 import com.streamvault.domain.model.ProviderType
@@ -44,6 +45,10 @@ class MovieRepositoryImplTest {
     private val xtreamStreamUrlResolver: XtreamStreamUrlResolver = mock()
     private val movieCategoryHydrationDao: MovieCategoryHydrationDao = mock()
     private val syncMetadataRepository: SyncMetadataRepository = mock()
+    private val credentialCrypto = object : CredentialCrypto {
+        override fun encryptIfNeeded(value: String): String = value
+        override fun decryptIfNeeded(value: String): String = value
+    }
     private val transactionRunner = object : DatabaseTransactionRunner {
         override suspend fun <T> inTransaction(block: suspend () -> T): T = block()
     }
@@ -72,7 +77,8 @@ class MovieRepositoryImplTest {
             rating = 9.5f
         )
 
-        whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
+    whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
+    whenever(preferencesRepository.xtreamBase64TextCompatibility).thenReturn(flowOf(false))
         whenever(movieDao.getTopRatedPreview(7L, 48)).thenReturn(flowOf(listOf(recommendedMovie, unrelatedMovie, watchedMovie)))
         whenever(movieDao.getFreshPreview(7L, 48)).thenReturn(flowOf(listOf(recommendedMovie, unrelatedMovie, watchedMovie)))
         whenever(favoriteDao.getAllByType(ContentType.MOVIE.name)).thenReturn(flowOf(emptyList()))
@@ -124,6 +130,7 @@ class MovieRepositoryImplTest {
         )
 
         whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
+        whenever(preferencesRepository.xtreamBase64TextCompatibility).thenReturn(flowOf(false))
         whenever(movieDao.getCountByCategory(7L, 10L)).thenReturn(flowOf(1))
         whenever(movieDao.getById(targetMovie.id)).thenReturn(
             movieRecord(
@@ -147,6 +154,7 @@ class MovieRepositoryImplTest {
     @Test
     fun `getMoviesByCategory lazily hydrates xtream category when local cache is empty`() = runTest {
         whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
+        whenever(preferencesRepository.xtreamBase64TextCompatibility).thenReturn(flowOf(false))
         whenever(movieDao.getCountByCategory(7L, 42L)).thenReturn(flowOf(0))
         whenever(movieDao.getByCategory(7L, 42L)).thenReturn(flowOf(emptyList()))
         whenever(movieCategoryHydrationDao.get(7L, 42L)).thenReturn(null)
@@ -188,6 +196,7 @@ class MovieRepositoryImplTest {
         categoryDao = categoryDao,
         providerDao = providerDao,
         xtreamApiService = xtreamApiService,
+        credentialCrypto = credentialCrypto,
         preferencesRepository = preferencesRepository,
         favoriteDao = favoriteDao,
         playbackHistoryDao = playbackHistoryDao,

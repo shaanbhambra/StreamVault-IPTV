@@ -1,8 +1,10 @@
 package com.streamvault.data.repository
 
+import com.streamvault.data.local.DatabaseTransactionRunner
 import com.streamvault.data.local.dao.*
 import com.streamvault.data.local.entity.ProviderEntity
 import com.streamvault.data.mapper.*
+import com.streamvault.data.preferences.PreferencesRepository
 import com.streamvault.data.remote.xtream.XtreamApiService
 import com.streamvault.data.remote.xtream.XtreamProvider
 import com.streamvault.data.security.CredentialCrypto
@@ -12,12 +14,17 @@ import com.streamvault.data.util.ProviderInputSanitizer
 import com.streamvault.data.util.UrlSecurityPolicy
 import com.streamvault.domain.model.*
 import com.streamvault.domain.provider.IptvProvider
+import com.streamvault.domain.repository.LiveStreamProgramRequest
 import com.streamvault.domain.repository.ProviderRepository
 import com.streamvault.domain.repository.SyncMetadataRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -29,8 +36,11 @@ class ProviderRepositoryImpl @Inject constructor(
     private val channelDao: ChannelDao,
     private val programDao: ProgramDao,
     private val xtreamApiService: XtreamApiService,
+    private val credentialCrypto: CredentialCrypto,
+    private val preferencesRepository: PreferencesRepository,
     private val syncManager: SyncManager,
-    private val syncMetadataRepository: SyncMetadataRepository
+    private val syncMetadataRepository: SyncMetadataRepository,
+    private val transactionRunner: DatabaseTransactionRunner
 ) : ProviderRepository {
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -102,7 +112,7 @@ class ProviderRepositoryImpl @Inject constructor(
         }
         val effectivePassword = try {
             password.takeIf { it.isNotBlank() }
-                ?: existingProvider?.password?.let(CredentialCrypto::decryptIfNeeded)
+                ?: existingProvider?.password?.let(credentialCrypto::decryptIfNeeded)
                 ?: ""
         } catch (e: CredentialDecryptionException) {
             return Result.error(e.message ?: CredentialDecryptionException.MESSAGE, e)
@@ -286,7 +296,108 @@ class ProviderRepositoryImpl @Inject constructor(
         epgChannelId: String?,
         limit: Int
     ): Result<List<Program>> {
-        if (providerId <= 0L || streamId <= 0L) {
+        return when (val providerContextResult = createXtreamLiveProgramProviderContext(providerId)) {
+            is Result.Success -> fetchXtreamProgramsForLiveStream(
+                providerId = providerId,
+                streamId = streamId,
+                epgChannelId = epgChannelId,
+                limit = limit,
+                xtreamProvider = providerContextResult.data
+            )
+            is Result.Error -> Result.error(providerContextResult.message, providerContextResult.exception)
+            is Result.Loading -> Result.error("Unexpected loading state")
+        }
+    }
+
+    override suspend fun getProgramsForLiveStreams(
+        providerId: Long,
+        requests: List<LiveStreamProgramRequest>,
+        limit: Int
+    ): Map<LiveStreamProgramRequest, Result<List<Program>>> {
+        val normalizedRequests = requests
+            .filter { it.streamId > 0L }
+            .distinct()
+        if (normalizedRequests.isEmpty()) {
+            return emptyMap()
+        }
+
+        return when (val providerContextResult = createXtreamLiveProgramProviderContext(providerId)) {
+            is Result.Success -> coroutineScope {
+                normalizedRequests
+                    .map { request ->
+                        async {
+                            request to fetchXtreamProgramsForLiveStream(
+                                providerId = providerId,
+                                streamId = request.streamId,
+                                epgChannelId = request.epgChannelId,
+                                limit = limit,
+                                xtreamProvider = providerContextResult.data
+                            )
+                        }
+                    }
+                    .awaitAll()
+                    .toMap()
+            }
+            is Result.Error -> normalizedRequests.associateWith { request ->
+                Result.error(providerContextResult.message, providerContextResult.exception)
+            }
+            is Result.Loading -> normalizedRequests.associateWith {
+                Result.error("Unexpected loading state")
+            }
+        }
+    }
+
+    override suspend fun buildCatchUpUrl(providerId: Long, streamId: Long, start: Long, end: Long): String? {
+        return buildCatchUpUrls(providerId, streamId, start, end).firstOrNull()
+    }
+
+    override suspend fun buildCatchUpUrls(providerId: Long, streamId: Long, start: Long, end: Long): List<String> {
+        val providerEntity = providerDao.getById(providerId) ?: return emptyList()
+        val provider = providerEntity.toPublicDomain()
+        val providerPassword = credentialCrypto.decryptIfNeeded(providerEntity.password)
+        val channel = channelDao.getById(streamId)
+        val resolvedStreamId = channel?.streamId?.takeIf { it > 0 } ?: streamId
+        return if (provider.type == ProviderType.XTREAM_CODES) {
+            createXtreamProvider(
+                providerId = providerId,
+                serverUrl = provider.serverUrl,
+                username = provider.username,
+                password = providerPassword,
+                allowedOutputFormats = provider.allowedOutputFormats
+            )
+                .buildCatchUpUrls(resolvedStreamId, start, end)
+        } else {
+            // M3U catch-up
+            val source = channel?.catchUpSource ?: return emptyList()
+            buildM3uCatchUpUrls(source, start, end)
+        }
+    }
+
+    suspend fun createXtreamProvider(
+        providerId: Long,
+        serverUrl: String,
+        username: String,
+        password: String,
+        allowedOutputFormats: List<String> = emptyList()
+    ): IptvProvider {
+        val enableBase64TextCompatibility = preferencesRepository.xtreamBase64TextCompatibility.first()
+        return XtreamProvider(
+            providerId = providerId,
+            api = xtreamApiService,
+            serverUrl = serverUrl,
+            username = username,
+            password = password,
+            allowedOutputFormats = allowedOutputFormats,
+            enableBase64TextCompatibility = enableBase64TextCompatibility
+        )
+    }
+
+    private fun ProviderEntity.toPublicDomain(): Provider {
+        return toDomain().copy(password = "")
+    }
+
+    private suspend fun createXtreamLiveProgramProviderContext(providerId: Long): Result<XtreamProvider> {
+        if (providerId <= 0L) {
             return Result.error("Live stream context is unavailable.")
         }
 
@@ -298,18 +409,32 @@ class ProviderRepositoryImpl @Inject constructor(
         }
 
         val providerPassword = try {
-            CredentialCrypto.decryptIfNeeded(providerEntity.password)
+            credentialCrypto.decryptIfNeeded(providerEntity.password)
         } catch (e: CredentialDecryptionException) {
             return Result.error(e.message ?: CredentialDecryptionException.MESSAGE, e)
         }
 
-        val xtreamProvider = createXtreamProvider(
-            providerId = providerId,
-            serverUrl = provider.serverUrl,
-            username = provider.username,
-            password = providerPassword,
-            allowedOutputFormats = provider.allowedOutputFormats
+        return Result.success(
+            createXtreamProvider(
+                providerId = providerId,
+                serverUrl = provider.serverUrl,
+                username = provider.username,
+                password = providerPassword,
+                allowedOutputFormats = provider.allowedOutputFormats
+            ) as XtreamProvider
         )
+    }
+
+    private suspend fun fetchXtreamProgramsForLiveStream(
+        providerId: Long,
+        streamId: Long,
+        epgChannelId: String?,
+        limit: Int,
+        xtreamProvider: XtreamProvider
+    ): Result<List<Program>> {
+        if (providerId <= 0L || streamId <= 0L) {
+            return Result.error("Live stream context is unavailable.")
+        }
 
         val shortProgramsResult = xtreamProvider.getShortEpg(
             channelId = streamId.toString(),
@@ -355,53 +480,8 @@ class ProviderRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun buildCatchUpUrl(providerId: Long, streamId: Long, start: Long, end: Long): String? {
-        return buildCatchUpUrls(providerId, streamId, start, end).firstOrNull()
-    }
-
-    override suspend fun buildCatchUpUrls(providerId: Long, streamId: Long, start: Long, end: Long): List<String> {
-        val providerEntity = providerDao.getById(providerId) ?: return emptyList()
-        val provider = providerEntity.toPublicDomain()
-        val providerPassword = CredentialCrypto.decryptIfNeeded(providerEntity.password)
-        val channel = channelDao.getById(streamId)
-        val resolvedStreamId = channel?.streamId?.takeIf { it > 0 } ?: streamId
-        return if (provider.type == ProviderType.XTREAM_CODES) {
-            createXtreamProvider(
-                providerId = providerId,
-                serverUrl = provider.serverUrl,
-                username = provider.username,
-                password = providerPassword,
-                allowedOutputFormats = provider.allowedOutputFormats
-            )
-                .buildCatchUpUrls(resolvedStreamId, start, end)
-        } else {
-            // M3U catch-up
-            val source = channel?.catchUpSource ?: return emptyList()
-            buildM3uCatchUpUrls(source, start, end)
-        }
-    }
-
-    fun createXtreamProvider(
-        providerId: Long,
-        serverUrl: String,
-        username: String,
-        password: String,
-        allowedOutputFormats: List<String> = emptyList()
-    ): IptvProvider = XtreamProvider(
-        providerId = providerId,
-        api = xtreamApiService,
-        serverUrl = serverUrl,
-        username = username,
-        password = password,
-        allowedOutputFormats = allowedOutputFormats
-    )
-
-    private fun ProviderEntity.toPublicDomain(): Provider {
-        return toDomain().copy(password = "")
-    }
-
     private fun Provider.toSecureEntity(): ProviderEntity {
-        val encryptedPassword = CredentialCrypto.encryptIfNeeded(password)
+        val encryptedPassword = credentialCrypto.encryptIfNeeded(password)
         return copy(password = encryptedPassword).toEntity()
     }
 
@@ -443,8 +523,10 @@ class ProviderRepositoryImpl @Inject constructor(
 
     private suspend fun cacheProgramsForChannel(providerId: Long, programs: List<Program>) {
         val channelId = programs.firstOrNull()?.channelId ?: return
-        programDao.deleteForChannel(providerId, channelId)
-        programDao.insertAll(programs.map { it.toEntity().copy(providerId = providerId) })
+        transactionRunner.inTransaction {
+            programDao.deleteForChannel(providerId, channelId)
+            programDao.insertAll(programs.map { it.toEntity().copy(providerId = providerId) })
+        }
     }
 
     private suspend fun refreshCachedEpgMetadata(providerId: Long) {

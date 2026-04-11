@@ -38,4 +38,20 @@ class StreamInfoTest {
         assertThat(streamInfo.drmInfo?.forceDefaultLicenseUrl).isTrue()
         assertThat(streamInfo.drmInfo?.playClearContentWithoutKey).isTrue()
     }
+
+    @Test
+    fun drmInfo_rejects_disallowed_license_url() {
+        val error = try {
+            DrmInfo(
+                scheme = DrmScheme.WIDEVINE,
+                licenseUrl = "javascript:alert(1)"
+            )
+            null
+        } catch (e: IllegalArgumentException) {
+            e
+        }
+
+        assertThat(error).isNotNull()
+        assertThat(error!!.message).contains("allowed stream-entry URL scheme")
+    }
 }

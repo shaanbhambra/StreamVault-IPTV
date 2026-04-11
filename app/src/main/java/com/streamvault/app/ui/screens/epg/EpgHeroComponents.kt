@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,6 +78,41 @@ internal fun resolveGuideHeroSelection(
         channel = resolvedChannel,
         program = resolvedProgram,
         isFallbackToChannel = resolvedProgram == null
+    )
+}
+
+@Composable
+internal fun GuideHeroSection(
+    uiState: EpgUiState,
+    focusedChannel: Channel?,
+    focusedProgram: Program?,
+    modifier: Modifier = Modifier
+) {
+    val now = currentGuideNow()
+    val heroSelection by remember(uiState, focusedChannel, focusedProgram, now) {
+        derivedStateOf {
+            resolveGuideHeroSelection(
+                uiState = uiState,
+                focusedChannel = focusedChannel,
+                focusedProgram = focusedProgram,
+                now = now
+            )
+        }
+    }
+
+    ImmersiveGuideHero(
+        selection = heroSelection,
+        providerLabel = uiState.providerSourceLabel,
+        selectedCategoryName = uiState.categories
+            .firstOrNull { it.id == uiState.selectedCategoryId }
+            ?.name
+            .orEmpty(),
+        isGuideStale = uiState.isGuideStale,
+        channelCount = uiState.totalChannelCount,
+        channelsWithSchedule = uiState.channelsWithSchedule,
+        lastUpdatedAt = uiState.lastUpdatedAt,
+        isRefreshing = uiState.isRefreshing,
+        modifier = modifier
     )
 }
 

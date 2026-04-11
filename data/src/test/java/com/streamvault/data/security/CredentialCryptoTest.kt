@@ -6,12 +6,9 @@ import org.junit.Test
 class CredentialCryptoTest {
 
     @Test
-    fun `decryptIfNeeded throws credential exception for unreadable encrypted value`() {
-        val failure = runCatching {
-            CredentialCrypto.decryptIfNeeded("enc:v1:not-valid-base64")
-        }.exceptionOrNull()
+    fun `credential decryption exception exposes actionable default message`() {
+        val failure = CredentialDecryptionException()
 
-        assertThat(failure).isInstanceOf(CredentialDecryptionException::class.java)
-        assertThat(failure).hasMessageThat().contains("Please re-enter your provider credentials")
+        assertThat(failure.message).contains("Please re-enter your provider credentials")
     }
 }

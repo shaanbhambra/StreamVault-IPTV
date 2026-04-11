@@ -22,6 +22,7 @@ import com.streamvault.domain.manager.BackupConflictStrategy
 import com.streamvault.domain.manager.BackupImportPlan
 import com.streamvault.domain.manager.BackupManager
 import com.streamvault.domain.manager.BackupPreview
+import com.streamvault.domain.manager.ParentalControlManager
 import com.streamvault.domain.manager.RecordingManager
 import com.streamvault.domain.model.Category
 import com.streamvault.domain.model.CategorySortMode
@@ -73,6 +74,7 @@ class SettingsViewModel @Inject constructor(
     private val internetSpeedTestRunner: InternetSpeedTestRunner,
     private val backupManager: BackupManager,
     private val recordingManager: RecordingManager,
+    private val parentalControlManager: ParentalControlManager,
     private val syncManager: SyncManager,
     private val syncMetadataRepository: SyncMetadataRepository,
     private val playbackHistoryRepository: com.streamvault.domain.repository.PlaybackHistoryRepository,
@@ -550,6 +552,17 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun toggleXtreamBase64TextCompatibility() {
+        viewModelScope.launch {
+            val current = _uiState.value.xtreamBase64TextCompatibility
+            preferencesRepository.setXtreamBase64TextCompatibility(!current)
+            preferencesRepository.bumpXtreamTextImportGeneration()
+            _uiState.update {
+                it.copy(userMessage = "Xtream text decoding changed. Refresh each Xtream provider once to re-import titles.")
+            }
+        }
+    }
+
     fun clearHistory() {
         viewModelScope.launch {
             _uiState.update { it.copy(isSyncing = true) }
@@ -573,6 +586,7 @@ class SettingsViewModel @Inject constructor(
     fun changePin(newPin: String) {
         viewModelScope.launch {
             preferencesRepository.setParentalPin(newPin)
+            parentalControlManager.clearUnlockedCategories()
             _uiState.update { it.copy(userMessage = appContext.getString(R.string.settings_pin_changed)) }
         }
     }

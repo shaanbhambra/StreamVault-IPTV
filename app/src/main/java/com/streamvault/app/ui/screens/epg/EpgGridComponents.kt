@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -113,7 +114,6 @@ internal fun EpgGrid(
     guideWindowStart: Long,
     guideWindowEnd: Long,
     density: GuideDensity,
-    now: Long,
     onChannelClick: (Channel) -> Unit,
     onProgramClick: (Channel, Program) -> Unit,
     onChannelFocused: (Channel, Program?, Boolean) -> Unit,
@@ -148,7 +148,6 @@ internal fun EpgGrid(
             GuideTimelineHeader(
                 windowStart = guideWindowStart,
                 windowEnd = guideWindowEnd,
-                now = now,
                 channelRailWidth = channelRailWidth,
                 timelineGap = timelineGap,
                 timelineViewportWidth = timelineViewportWidth,
@@ -173,7 +172,6 @@ internal fun EpgGrid(
                         channel = channel,
                         isFavorite = channel.id in favoriteChannelIds,
                         programs = programs,
-                        now = now,
                         windowStart = guideWindowStart,
                         windowEnd = guideWindowEnd,
                         channelRailWidth = channelRailWidth,
@@ -199,7 +197,6 @@ internal fun EpgGrid(
 private fun GuideTimelineHeader(
     windowStart: Long,
     windowEnd: Long,
-    now: Long,
     channelRailWidth: Dp,
     timelineGap: Dp,
     timelineViewportWidth: Dp,
@@ -207,6 +204,7 @@ private fun GuideTimelineHeader(
     markerStepMs: Long,
     scrollState: androidx.compose.foundation.ScrollState
 ) {
+    val now = currentGuideNow()
     val hourFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val totalDuration = (windowEnd - windowStart).coerceAtLeast(1L)
     val clampedNow = now.coerceIn(windowStart, windowEnd)
@@ -318,7 +316,6 @@ fun EpgRow(
     channel: Channel,
     isFavorite: Boolean,
     programs: List<Program>,
-    now: Long,
     windowStart: Long,
     windowEnd: Long,
     channelRailWidth: Dp,
@@ -335,8 +332,11 @@ fun EpgRow(
     onProgramFocused: (Program) -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val now = currentGuideNow()
+    val currentProgram by remember(programs, now) {
+        derivedStateOf { programs.currentProgramAt(now) }
+    }
     val totalDuration = (windowEnd - windowStart).coerceAtLeast(1L)
-    val currentProgram = programs.firstOrNull { now in it.startTime..it.endTime }
     val channelPaddingVertical = when (density) {
         GuideDensity.COMPACT -> 3.dp
         GuideDensity.COMFORTABLE -> 4.dp
@@ -470,16 +470,6 @@ fun EpgRow(
                             .background(Color.White.copy(alpha = 0.08f))
                     )
                 }
-                if (now in windowStart..windowEnd) {
-                    val nowRatio = ((now - windowStart).toFloat() / totalDuration.toFloat()).coerceIn(0f, 1f)
-                    Box(
-                        modifier = Modifier
-                            .padding(start = totalTimelineWidth * nowRatio)
-                            .width(2.dp)
-                            .fillMaxHeight()
-                            .background(Primary)
-                    )
-                }
                 if (programs.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(stringResource(R.string.epg_no_schedule_short), color = OnSurfaceDim)
@@ -489,8 +479,6 @@ fun EpgRow(
                         ProgramItem(
                             program = program,
                             density = density,
-                            isCurrent = now in program.startTime until program.endTime,
-                            now = now,
                             windowStart = windowStart,
                             windowEnd = windowEnd,
                             totalTimelineWidth = totalTimelineWidth,
@@ -509,8 +497,6 @@ fun EpgRow(
 fun ProgramItem(
     program: Program,
     density: GuideDensity,
-    isCurrent: Boolean,
-    now: Long,
     windowStart: Long,
     windowEnd: Long,
     totalTimelineWidth: Dp,
@@ -518,6 +504,8 @@ fun ProgramItem(
     onFocused: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val now = currentGuideNow()
+    val isCurrent = now in program.startTime until program.endTime
 
     val format = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val startStr = format.format(Date(program.startTime))
@@ -626,6 +614,9 @@ fun ProgramItem(
         }
     }
 }
+
+private fun List<Program>.currentProgramAt(now: Long): Program? =
+    firstOrNull { now in it.startTime until it.endTime }
 
 internal fun formatWindowDuration(durationMs: Long): String {
     val hours = durationMs / (60 * 60 * 1000L)

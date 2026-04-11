@@ -282,6 +282,7 @@ fun AppNavigation(mainActivity: MainActivity) {
             ProviderSetupScreen(
                 editProviderId = providerId,
                 initialImportUri = importUri,
+                onBack = { navController.popBackStack() },
                 onProviderAdded = dropUnlessResumed {
                     navController.navigate(Routes.HOME) {
                         popUpTo(Routes.PROVIDER_SETUP) { inclusive = true }

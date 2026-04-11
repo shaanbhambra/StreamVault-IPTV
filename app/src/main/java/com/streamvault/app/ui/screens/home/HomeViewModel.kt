@@ -34,6 +34,7 @@ import com.streamvault.domain.repository.ChannelRepository
 import com.streamvault.domain.repository.CombinedM3uRepository
 import com.streamvault.domain.repository.EpgRepository
 import com.streamvault.domain.repository.FavoriteRepository
+import com.streamvault.domain.repository.LiveStreamProgramRequest
 import com.streamvault.domain.repository.PlaybackHistoryRepository
 import com.streamvault.domain.repository.ProviderRepository
 import com.streamvault.domain.usecase.GetCustomCategories
@@ -175,7 +176,29 @@ class HomeViewModel @Inject constructor(
                         observeRecentChannels(provider.id)
                         preferencesRepository.setLastActiveProviderId(provider.id)
                     }
-                    null -> Unit
+                    null -> {
+                        combinedCategoriesById = emptyMap()
+                        _localChannels.value = emptyList()
+                        _uiState.update {
+                            it.copy(
+                                provider = null,
+                                activeLiveSource = null,
+                                activeLiveSourceTitle = "",
+                                isCombinedLiveSource = false,
+                                categories = emptyList(),
+                                recentChannels = emptyList(),
+                                lastVisitedCategory = null,
+                                selectedCategory = null,
+                                filteredChannels = emptyList(),
+                                hasChannels = false,
+                                isLoading = false,
+                                isCategoriesLoading = false,
+                                errorMessage = null,
+                                currentCombinedProfileMembers = emptyList(),
+                                selectedCombinedSourceProviderId = null
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -985,28 +1008,30 @@ class HomeViewModel @Inject constructor(
         }
 
         val now = System.currentTimeMillis()
-        return coroutineScope {
-            missingChannels
-                .take(10)
-                .map { channel ->
-                    async {
-                        val result = providerRepository.getProgramsForLiveStream(
-                            providerId = providerId,
-                            streamId = channel.streamId,
-                            epgChannelId = channel.epgChannelId,
-                            limit = 6
-                        )
-                        val programs = (result as? Result.Success)?.data.orEmpty()
-                        val currentProgram = programs.firstOrNull { it.startTime <= now && it.endTime > now }
-                            ?: programs.firstOrNull()
-                        val lookupKey = channel.guideLookupKey() ?: return@async null
-                        currentProgram?.let { lookupKey to it }
-                    }
-                }
-                .awaitAll()
-                .mapNotNull { it }
-                .toMap()
-        }
+        val fallbackChannels = missingChannels.take(10)
+        val programsByRequest = providerRepository.getProgramsForLiveStreams(
+            providerId = providerId,
+            requests = fallbackChannels.map { channel ->
+                LiveStreamProgramRequest(
+                    streamId = channel.streamId,
+                    epgChannelId = channel.epgChannelId
+                )
+            },
+            limit = 6
+        )
+
+        return fallbackChannels.mapNotNull { channel ->
+            val programs = (programsByRequest[
+                LiveStreamProgramRequest(
+                    streamId = channel.streamId,
+                    epgChannelId = channel.epgChannelId
+                )
+            ] as? Result.Success)?.data.orEmpty()
+            val currentProgram = programs.firstOrNull { it.startTime <= now && it.endTime > now }
+                ?: programs.firstOrNull()
+            val lookupKey = channel.guideLookupKey() ?: return@mapNotNull null
+            currentProgram?.let { lookupKey to it }
+        }.toMap()
     }
 
     fun updateVisibleChannelWindow(channelIds: List<Long>, focusedChannelId: Long? = null) {

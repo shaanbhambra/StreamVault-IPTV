@@ -8,22 +8,34 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
- * AES-GCM credential crypto backed by Android Keystore.
+ * Contract for AES-GCM credential encryption backed by Android Keystore.
+ * Expressed as an interface so implementations can be replaced with test fakes.
+ */
+interface CredentialCrypto {
+    fun encryptIfNeeded(value: String): String
+    fun decryptIfNeeded(value: String): String
+}
+
+/**
+ * Production implementation backed by the Android Keystore system.
  *
  * Values are persisted as: enc:v1:<base64(iv + ciphertext)>
  */
-object CredentialCrypto {
-    private const val TAG = "CredentialCrypto"
-    private const val KEYSTORE_TYPE = "AndroidKeyStore"
-    private const val KEY_ALIAS = "streamvault_credentials"
-    private const val TRANSFORMATION = "AES/GCM/NoPadding"
-    private const val IV_SIZE_BYTES = 12
-    private const val AUTH_TAG_BITS = 128
-    private const val PREFIX = "enc:v1:"
+@Singleton
+class AndroidKeystoreCredentialCrypto @Inject constructor() : CredentialCrypto {
+    private val TAG = "CredentialCrypto"
+    private val KEYSTORE_TYPE = "AndroidKeyStore"
+    private val KEY_ALIAS = "streamvault_credentials"
+    private val TRANSFORMATION = "AES/GCM/NoPadding"
+    private val IV_SIZE_BYTES = 12
+    private val AUTH_TAG_BITS = 128
+    private val PREFIX = "enc:v1:"
 
-    fun encryptIfNeeded(value: String): String {
+    override fun encryptIfNeeded(value: String): String {
         if (value.isBlank() || value.startsWith(PREFIX)) return value
 
         return try {
@@ -40,7 +52,7 @@ object CredentialCrypto {
         }
     }
 
-    fun decryptIfNeeded(value: String): String {
+    override fun decryptIfNeeded(value: String): String {
         if (!value.startsWith(PREFIX)) return value
 
         return try {

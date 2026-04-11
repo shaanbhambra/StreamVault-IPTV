@@ -6,6 +6,7 @@ import com.streamvault.domain.model.PlaybackHistory
 import com.streamvault.domain.repository.PlaybackHistoryRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -65,6 +66,26 @@ class GetContinueWatchingTest {
         assertThat(result.map { it.contentId }).containsExactly(2L, 4L).inOrder()
     }
 
+    @Test
+    fun rethrows_non_io_upstream_failures() = runTest {
+        val expected = IllegalStateException("database broken")
+        val useCase = GetContinueWatching(
+            playbackHistoryRepository = FakePlaybackHistoryRepository(
+                historyFlow = flow { throw expected }
+            )
+        )
+
+        val thrown = try {
+            useCase(providerId = 1L).first()
+            null
+        } catch (error: IllegalStateException) {
+            error
+        }
+
+        assertThat(thrown).isNotNull()
+        assertThat(thrown?.message).isEqualTo(expected.message)
+    }
+
     private suspend fun Flow<List<PlaybackHistory>>.collectOnce(): List<PlaybackHistory> = first()
 
     private fun history(
@@ -86,10 +107,11 @@ class GetContinueWatchingTest {
     )
 
     private class FakePlaybackHistoryRepository(
-        private val history: List<PlaybackHistory>
+        private val history: List<PlaybackHistory> = emptyList(),
+        private val historyFlow: Flow<List<PlaybackHistory>>? = null
     ) : PlaybackHistoryRepository {
-        override fun getRecentlyWatched(limit: Int): Flow<List<PlaybackHistory>> = flowOf(history.take(limit))
-        override fun getRecentlyWatchedByProvider(providerId: Long, limit: Int): Flow<List<PlaybackHistory>> = flowOf(history.take(limit))
+        override fun getRecentlyWatched(limit: Int): Flow<List<PlaybackHistory>> = historyFlow ?: flowOf(history.take(limit))
+        override fun getRecentlyWatchedByProvider(providerId: Long, limit: Int): Flow<List<PlaybackHistory>> = historyFlow ?: flowOf(history.take(limit))
         override fun getUnwatchedCount(providerId: Long, seriesId: Long): Flow<Int> = flowOf(0)
         override suspend fun getPlaybackHistory(contentId: Long, contentType: ContentType, providerId: Long): PlaybackHistory? = null
         override suspend fun markAsWatched(history: PlaybackHistory) = com.streamvault.domain.model.Result.success(Unit)

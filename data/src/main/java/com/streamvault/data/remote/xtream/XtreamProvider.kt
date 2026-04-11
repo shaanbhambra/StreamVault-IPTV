@@ -31,10 +31,17 @@ class XtreamProvider(
     private val username: String,
     private val password: String,
     private val allowedOutputFormats: List<String> = emptyList(),
-    private val useTextClassification: Boolean = true
+    private val useTextClassification: Boolean = true,
+    private val enableBase64TextCompatibility: Boolean = false
 ) : IptvProvider {
     companion object {
         private const val TAG = "XtreamProvider"
+    }
+
+    private enum class XtreamTextDecodeMode {
+        RAW,
+        EPG,
+        METADATA
     }
 
     private data class ResolvedXtreamCategory(
@@ -196,16 +203,16 @@ class XtreamProvider(
             Result.success(
                 Movie(
                     id = movieData.streamId,
-                    name = decodeXtreamNullableText(movieData.name)?.ifBlank { null } ?: "Movie ${movieData.streamId}",
+                    name = decodeXtreamNullableText(movieData.name, XtreamTextDecodeMode.RAW)?.ifBlank { null } ?: "Movie ${movieData.streamId}",
                     posterUrl = sanitizeAssetValue(info?.movieImage),
                     backdropUrl = firstUsableAsset(info?.backdropPath),
                     categoryId = category.id,
                     categoryName = category.name,
                     containerExtension = normalizedContainerExtension,
-                    plot = decodeXtreamNullableText(info?.plot),
-                    cast = decodeXtreamNullableText(info?.cast),
-                    director = decodeXtreamNullableText(info?.director),
-                    genre = decodeXtreamNullableText(info?.genre),
+                    plot = decodeXtreamNullableText(info?.plot, XtreamTextDecodeMode.METADATA),
+                    cast = decodeXtreamNullableText(info?.cast, XtreamTextDecodeMode.METADATA),
+                    director = decodeXtreamNullableText(info?.director, XtreamTextDecodeMode.METADATA),
+                    genre = decodeXtreamNullableText(info?.genre, XtreamTextDecodeMode.METADATA),
                     releaseDate = info?.releaseDate,
                     duration = info?.duration,
                     durationSeconds = info?.durationSecs ?: 0,
@@ -299,13 +306,14 @@ class XtreamProvider(
                 Episode(
                     id = episodeId,
                     title = decodeXtreamText(
-                        ep.title.ifBlank { decodeXtreamNullableText(ep.info?.name) ?: "Episode ${ep.episodeNum}" }
+                        ep.title.ifBlank { decodeXtreamNullableText(ep.info?.name, XtreamTextDecodeMode.RAW) ?: "Episode ${ep.episodeNum}" },
+                        XtreamTextDecodeMode.RAW
                     ),
                     episodeNumber = ep.episodeNum,
                     seasonNumber = ep.season.takeIf { it > 0 } ?: resolvedSeasonNumber,
                     containerExtension = normalizedExtension,
                     coverUrl = sanitizeAssetValue(ep.info?.movieImage),
-                    plot = decodeXtreamNullableText(ep.info?.plot),
+                    plot = decodeXtreamNullableText(ep.info?.plot, XtreamTextDecodeMode.METADATA),
                     duration = ep.info?.duration,
                     durationSeconds = ep.info?.durationSecs ?: 0,
                     rating = ep.info?.rating?.toFloatOrNull() ?: 0f,
@@ -634,9 +642,9 @@ class XtreamProvider(
         if (streamId <= 0) return null
         val category = resolveXtreamCategory(ContentType.LIVE, categoryId, categoryName)
         val primaryContainerExtension = preferredLiveContainerExtension(containerExtension)
-        val resolvedName = decodeXtreamNullableText(name)?.ifBlank { null } ?: "Channel $streamId"
+        val resolvedName = decodeXtreamNullableText(name, XtreamTextDecodeMode.RAW)?.ifBlank { null } ?: "Channel $streamId"
         val sanitizedLogoUrl = sanitizeAssetValue(streamIcon)
-        val sanitizedEpgChannelId = decodeXtreamNullableText(epgChannelId)
+        val sanitizedEpgChannelId = decodeXtreamNullableText(epgChannelId, XtreamTextDecodeMode.RAW)
         val sanitizedDirectSource = sanitizeAssetValue(directSource)
         val streamUrl = buildInternalLiveStreamUrl(
             streamId = streamId,
@@ -677,7 +685,7 @@ class XtreamProvider(
     private fun XtreamStream.toMovie(adultCategoryIds: Set<Long>): Movie? {
         if (streamId <= 0) return null
         val category = resolveXtreamCategory(ContentType.MOVIE, categoryId, categoryName)
-        val resolvedName = decodeXtreamNullableText(name)?.ifBlank { null } ?: "Movie $streamId"
+        val resolvedName = decodeXtreamNullableText(name, XtreamTextDecodeMode.RAW)?.ifBlank { null } ?: "Movie $streamId"
         val normalizedContainerExtension = normalizeContainerExtension(containerExtension)
         val sanitizedDirectSource = sanitizeAssetValue(directSource)
         return Movie(
@@ -730,7 +738,7 @@ class XtreamProvider(
     ): Series? {
         val resolvedSeriesId = seriesId.takeIf { it > 0 } ?: fallbackSeriesId ?: return null
         val category = resolveXtreamCategory(ContentType.SERIES, categoryId, categoryName)
-        val resolvedName = decodeXtreamNullableText(name)?.ifBlank { null } ?: "Series $resolvedSeriesId"
+        val resolvedName = decodeXtreamNullableText(name, XtreamTextDecodeMode.RAW)?.ifBlank { null } ?: "Series $resolvedSeriesId"
         return Series(
             id = 0,
             name = resolvedName,
@@ -738,10 +746,11 @@ class XtreamProvider(
             backdropUrl = firstUsableAsset(backdropPath),
             categoryId = category.id,
             categoryName = category.name,
-            plot = decodeXtreamNullableText(plot) ?: decodeXtreamNullableText(description),
-            cast = decodeXtreamNullableText(cast),
-            director = decodeXtreamNullableText(director),
-            genre = decodeXtreamNullableText(genre),
+            plot = decodeXtreamNullableText(plot, XtreamTextDecodeMode.METADATA)
+                ?: decodeXtreamNullableText(description, XtreamTextDecodeMode.METADATA),
+            cast = decodeXtreamNullableText(cast, XtreamTextDecodeMode.METADATA),
+            director = decodeXtreamNullableText(director, XtreamTextDecodeMode.METADATA),
+            genre = decodeXtreamNullableText(genre, XtreamTextDecodeMode.METADATA),
             releaseDate = releaseDate ?: releaseDateAlt,
             rating = normalizeXtreamRatingTenPoint(rating, rating5based),
             tmdbId = tmdb?.trim()?.toLongOrNull() ?: tmdbId?.trim()?.toLongOrNull(),
@@ -840,8 +849,8 @@ class XtreamProvider(
 
     private fun XtreamEpgListing.toDomain(): Program {
         // Xtream sometimes base64-encodes title and description
-        val decodedTitle = decodeXtreamText(title)
-        val decodedDescription = decodeXtreamText(description)
+        val decodedTitle = decodeXtreamText(title, XtreamTextDecodeMode.EPG)
+        val decodedDescription = decodeXtreamText(description, XtreamTextDecodeMode.EPG)
 
         return Program(
             id = id.toLongOrNull() ?: 0,
@@ -858,8 +867,11 @@ class XtreamProvider(
         )
     }
 
-    private fun decodeXtreamNullableText(value: String?): String? {
-        return value?.let(::decodeXtreamText)?.takeIf { it.isNotBlank() }
+    private fun decodeXtreamNullableText(
+        value: String?,
+        mode: XtreamTextDecodeMode = XtreamTextDecodeMode.RAW
+    ): String? {
+        return value?.let { decodeXtreamText(it, mode) }?.takeIf { it.isNotBlank() }
     }
 
     private fun sanitizeAssetValue(value: String?): String? {
@@ -888,14 +900,17 @@ class XtreamProvider(
             ?: 0f
     }
 
-    private fun decodeXtreamText(value: String): String = tryBase64Decode(value).trim()
+    private fun decodeXtreamText(
+        value: String,
+        mode: XtreamTextDecodeMode = XtreamTextDecodeMode.RAW
+    ): String = tryBase64Decode(value, mode).trim()
 
     private fun resolveXtreamCategory(
         type: ContentType,
         rawCategoryId: String?,
         rawCategoryName: String?
     ): ResolvedXtreamCategory {
-        val decodedName = decodeXtreamNullableText(rawCategoryName)
+        val decodedName = decodeXtreamNullableText(rawCategoryName, XtreamTextDecodeMode.RAW)
         val parsedId = rawCategoryId?.trim()?.toLongOrNull()
         if (parsedId != null) {
             return ResolvedXtreamCategory(
@@ -920,9 +935,10 @@ class XtreamProvider(
         return (normalized.hashCode().toLong() and 0x7fff_ffffL).coerceAtLeast(1L)
     }
 
-    private fun tryBase64Decode(value: String): String = try {
+    private fun tryBase64Decode(value: String, mode: XtreamTextDecodeMode): String = try {
         val normalized = value.trim()
         if (
+            (mode == XtreamTextDecodeMode.RAW && !enableBase64TextCompatibility) ||
             normalized.isBlank() ||
             normalized.length % 4 != 0 ||
             !XTREAM_BASE64_REGEX.matches(normalized)
@@ -930,10 +946,27 @@ class XtreamProvider(
             value
         } else {
             val decoded = String(Base64.getDecoder().decode(normalized), Charsets.UTF_8)
-            if (decoded.any { it.isLetterOrDigit() }) decoded else value
+            if (isPlausibleXtreamDecodedText(decoded)) decoded else value
         }
     } catch (_: Exception) {
         value
+    }
+
+    private fun isPlausibleXtreamDecodedText(value: String): Boolean {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) return false
+        if (trimmed.any { it.isISOControl() && !it.isWhitespace() }) return false
+
+        val readableChars = trimmed.count(::isReadableXtreamTextChar)
+        val readableRatio = readableChars.toDouble() / trimmed.length.toDouble()
+        val letterOrDigitCount = trimmed.count(Char::isLetterOrDigit)
+
+        return readableRatio >= XTREAM_DECODED_TEXT_MIN_READABLE_RATIO &&
+            letterOrDigitCount >= XTREAM_DECODED_TEXT_MIN_ALNUM_COUNT
+    }
+
+    private fun isReadableXtreamTextChar(char: Char): Boolean {
+        return char.isLetterOrDigit() || char.isWhitespace() || char in XTREAM_READABLE_TEXT_PUNCTUATION
     }
 }
 
@@ -999,3 +1032,6 @@ private val XTREAM_LOCAL_DATE_FORMATTERS: List<DateTimeFormatter> = listOf(
 )
 
 private val XTREAM_BASE64_REGEX = Regex("^[A-Za-z0-9+/]+={0,2}$")
+private const val XTREAM_DECODED_TEXT_MIN_READABLE_RATIO = 0.85
+private const val XTREAM_DECODED_TEXT_MIN_ALNUM_COUNT = 3
+private val XTREAM_READABLE_TEXT_PUNCTUATION = setOf('\'', '"', '-', '_', '.', '?', '!', '&', ':', '’', ',', ';', '(', ')', '[', ']', '/', '\\')

@@ -126,6 +126,7 @@ private class FakeSyncProviderRepository(
         providerId: Long,
         force: Boolean,
         movieFastSyncOverride: Boolean?,
+        epgSyncModeOverride: ProviderEpgSyncMode?,
         onProgress: ((String) -> Unit)?
     ): Result<Unit> {
         lastRefreshCall = RefreshCall(providerId, force)

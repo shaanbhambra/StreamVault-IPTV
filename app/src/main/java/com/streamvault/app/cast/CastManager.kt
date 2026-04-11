@@ -163,8 +163,16 @@ class CastManager @Inject constructor(
     }
 
     private fun isRequestSupported(request: CastMediaRequest): Boolean {
+        val normalizedUrl = request.url.trim().lowercase()
         val mimeType = request.mimeType.orEmpty().lowercase()
-        if (request.url.startsWith("rtsp", ignoreCase = true)) return false
+        if (
+            normalizedUrl.startsWith("rtsp://") ||
+            normalizedUrl.startsWith("rtsps://") ||
+            normalizedUrl.startsWith("rtmp://") ||
+            normalizedUrl.startsWith("rtmps://")
+        ) {
+            return false
+        }
         return mimeType.isBlank() || mimeType != "application/x-rtsp"
     }
 

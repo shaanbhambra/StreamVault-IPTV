@@ -1,15 +1,20 @@
 package com.streamvault.player.playback
 
 import android.util.Log
+import androidx.annotation.MainThread
 import androidx.media3.exoplayer.source.MediaSource
 import com.streamvault.domain.model.StreamInfo
 
+/**
+ * Main-thread-only cache for a single preloaded media source owned by Media3PlayerEngine.
+ */
+@MainThread
 class PreloadCoordinator(
     private val nowMs: () -> Long = { System.currentTimeMillis() }
 ) {
     var currentPreloadedMediaId: String? = null
         private set
-    var currentPreloadedUrlHash: String? = null
+    var currentPreloadedNormalizedUrl: String? = null
         private set
     var preloadedMediaSource: MediaSource? = null
         private set
@@ -18,11 +23,12 @@ class PreloadCoordinator(
 
     private var currentResolvedType: ResolvedStreamType? = null
     private var currentDrmKey: String? = null
-    private var currentHeadersHash: Int? = null
+    private var currentHeadersHash: String? = null
 
+    @MainThread
     fun store(mediaId: String, streamInfo: StreamInfo, resolvedType: ResolvedStreamType, mediaSource: MediaSource) {
         currentPreloadedMediaId = mediaId
-        currentPreloadedUrlHash = normalizedUrlHash(streamInfo.url)
+        currentPreloadedNormalizedUrl = normalizedUrl(streamInfo.url)
         preloadedMediaSource = mediaSource
         currentResolvedType = resolvedType
         currentDrmKey = drmKey(streamInfo)
@@ -31,6 +37,7 @@ class PreloadCoordinator(
         safeLog("preload stored mediaId=$mediaId type=$resolvedType target=${PlaybackLogSanitizer.sanitizeUrl(streamInfo.url)}")
     }
 
+    @MainThread
     fun tryReuse(mediaId: String, streamInfo: StreamInfo, resolvedType: ResolvedStreamType): MediaSource? {
         val result = when {
             preloadedMediaSource == null -> null
@@ -42,7 +49,7 @@ class PreloadCoordinator(
                 invalidate("different-media-id")
                 null
             }
-            currentPreloadedUrlHash != normalizedUrlHash(streamInfo.url) -> {
+            currentPreloadedNormalizedUrl != normalizedUrl(streamInfo.url) -> {
                 invalidate("different-url")
                 null
             }
@@ -67,12 +74,14 @@ class PreloadCoordinator(
         return result
     }
 
+    @MainThread
     fun onPlaybackStarted(mediaId: String) {
         if (currentPreloadedMediaId != null && currentPreloadedMediaId != mediaId) {
             invalidate("playback-started-different-media")
         }
     }
 
+    @MainThread
     fun invalidate(reason: String) {
         if (preloadedMediaSource != null) {
             safeLog("preload invalidated reason=$reason mediaId=$currentPreloadedMediaId")
@@ -80,15 +89,17 @@ class PreloadCoordinator(
         clear()
     }
 
+    @MainThread
     fun release() {
         invalidate("release")
     }
 
+    @MainThread
     fun isExpired(): Boolean = preloadedMediaSource != null && nowMs() - createdAtMs > PRELOAD_EXPIRY_MS
 
     private fun clear() {
         currentPreloadedMediaId = null
-        currentPreloadedUrlHash = null
+        currentPreloadedNormalizedUrl = null
         preloadedMediaSource = null
         currentResolvedType = null
         currentDrmKey = null
@@ -96,16 +107,34 @@ class PreloadCoordinator(
         createdAtMs = 0L
     }
 
-    private fun normalizedUrlHash(url: String): String {
-        return url.trim().substringBefore('#').hashCode().toString()
+    private fun normalizedUrl(url: String): String {
+        return url.trim().substringBefore('#')
     }
 
     private fun drmKey(streamInfo: StreamInfo): String? {
-        return streamInfo.drmInfo?.let { "${it.scheme}:${it.licenseUrl}:${it.headers.hashCode()}" }
+        return streamInfo.drmInfo?.let {
+            // Sort header keys for a deterministic fingerprint across JVM restarts.
+            val headersPart = it.headers.entries
+                .sortedBy { e -> e.key }
+                .joinToString("&") { e -> "${e.key}=${e.value}" }
+            "${it.scheme}:${it.licenseUrl}:${stableHash(headersPart)}"
+        }
     }
 
-    private fun headersHash(streamInfo: StreamInfo): Int {
-        return (streamInfo.headers.toSortedMap() + ("User-Agent" to (streamInfo.userAgent ?: ""))).hashCode()
+    private fun headersHash(streamInfo: StreamInfo): String {
+        // Build a sorted, deterministic string representation of the effective headers so that
+        // two identical header maps always produce the same fingerprint after a JVM restart.
+        // hashCode() is NOT content-stable across restarts and must not be used here.
+        val effectiveHeaders = (streamInfo.headers.toSortedMap() + ("User-Agent" to (streamInfo.userAgent ?: "")))
+        val canonical = effectiveHeaders.entries.joinToString("&") { "${it.key}=${it.value}" }
+        return stableHash(canonical)
+    }
+
+    /** SHA-256 fingerprint truncated to 16 hex chars — stable across JVM restarts. */
+    private fun stableHash(input: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(input.toByteArray(Charsets.UTF_8))
+        return digest.take(8).joinToString("") { "%02x".format(it) }
     }
 
     companion object {

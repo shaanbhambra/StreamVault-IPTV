@@ -38,6 +38,22 @@ class UrlSecurityPolicyTest {
     }
 
     @Test
+    fun `stream entry urls reject double-encoded newline injection`() {
+        // %250A -> %0A -> \n requires two-pass decode to catch
+        assertThat(UrlSecurityPolicy.isAllowedStreamEntryUrl("https://example.com/live.ts%250AInjected: true")).isFalse()
+        // %250D -> %0D -> \r
+        assertThat(UrlSecurityPolicy.isAllowedStreamEntryUrl("https://example.com/live.ts%250DInjected: true")).isFalse()
+        // Mixed-case double-encoded
+        assertThat(UrlSecurityPolicy.isAllowedStreamEntryUrl("https://example.com/live.ts%250aInjected: true")).isFalse()
+    }
+
+    @Test
+    fun `stream entry urls reject tab injection`() {
+        // %09 (tab) can split structured log entries
+        assertThat(UrlSecurityPolicy.isAllowedStreamEntryUrl("https://example.com/live.ts%09Injected: true")).isFalse()
+    }
+
+    @Test
     fun `sanitizeImportedAssetUrl drops unsupported schemes`() {
         assertThat(UrlSecurityPolicy.sanitizeImportedAssetUrl("ftp://example.com/logo.png")).isNull()
         assertThat(UrlSecurityPolicy.sanitizeImportedAssetUrl("https://example.com/logo.png"))

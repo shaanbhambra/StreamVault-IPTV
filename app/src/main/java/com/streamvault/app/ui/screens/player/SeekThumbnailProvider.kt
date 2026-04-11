@@ -10,6 +10,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
 @Singleton
@@ -19,6 +20,12 @@ class SeekThumbnailProvider @Inject constructor(
     companion object {
         private const val FRAME_BUCKET_MS = 10_000L
         private const val MAX_PREVIEW_WIDTH = 480
+        /**
+         * Maximum time to wait for [MediaMetadataRetriever] to open a remote URL and extract
+         * a frame. Without this, [MediaMetadataRetriever.setDataSource] on a slow or live HTTP
+         * stream can block a [kotlinx.coroutines.Dispatchers.IO] thread indefinitely.
+         */
+        private const val RETRIEVER_TIMEOUT_MS = 8_000L
     }
 
     private val bitmapCache = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 1024L / 24L).toInt()) {
@@ -45,26 +52,34 @@ class SeekThumbnailProvider @Inject constructor(
         val cacheKey = "$streamUrl#$bucketPosition"
         bitmapCache.get(cacheKey)?.let { return@withContext it }
 
-        val retriever = MediaMetadataRetriever()
-        try {
-            val uri = Uri.parse(streamUrl)
-            when (uri.scheme?.lowercase()) {
-                "content", "file" -> retriever.setDataSource(context, uri)
-                else -> retriever.setDataSource(streamUrl, emptyMap())
+        // withTimeoutOrNull guards against MediaMetadataRetriever.setDataSource() hanging
+        // indefinitely on a remote HTTP URL (e.g. a live stream with no file extension).
+        withTimeoutOrNull(RETRIEVER_TIMEOUT_MS) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                val uri = Uri.parse(streamUrl)
+                when (uri.scheme?.lowercase()) {
+                    "content", "file" -> retriever.setDataSource(context, uri)
+                    else -> retriever.setDataSource(streamUrl, emptyMap())
+                }
+
+                val rawBitmap = retriever.getFrameAtTime(bucketPosition * 1000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    ?: retriever.getFrameAtTime(bucketPosition * 1000L)
+                    ?: return@withTimeoutOrNull null
+
+                val scaledBitmap = rawBitmap.scaleDown(MAX_PREVIEW_WIDTH)
+                bitmapCache.put(cacheKey, scaledBitmap)
+                scaledBitmap
+            } catch (_: Exception) {
+                null
+            } finally {
+                runCatching { retriever.release() }
             }
-
-            val rawBitmap = retriever.getFrameAtTime(bucketPosition * 1000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                ?: retriever.getFrameAtTime(bucketPosition * 1000L)
-                ?: return@withContext null
-
-            val scaledBitmap = rawBitmap.scaleDown(MAX_PREVIEW_WIDTH)
-            bitmapCache.put(cacheKey, scaledBitmap)
-            scaledBitmap
-        } catch (_: Exception) {
-            null
-        } finally {
-            runCatching { retriever.release() }
         }
+    }
+
+    fun clearCache() {
+        bitmapCache.evictAll()
     }
 
     private fun Bitmap.scaleDown(maxWidth: Int): Bitmap {

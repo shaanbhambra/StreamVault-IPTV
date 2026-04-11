@@ -4,6 +4,7 @@ import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.PlaybackHistory
 import com.streamvault.domain.repository.PlaybackHistoryRepository
 import com.streamvault.domain.util.isPlaybackComplete
+import com.streamvault.domain.util.shouldRethrowDomainFlowFailure
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -40,6 +41,9 @@ class GetContinueWatching @Inject constructor(
                     .toList()
             }
             .catch { error ->
+                if (error.shouldRethrowDomainFlowFailure()) {
+                    throw error
+                }
                 logger.log(Level.WARNING, "Failed to build continue watching list", error)
                 emit(emptyList())
             }

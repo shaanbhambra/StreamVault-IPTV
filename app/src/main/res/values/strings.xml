@@ -52,6 +52,8 @@
     <string name="home_last_group_label">Last: %1$s</string>
     <string name="home_search_channels">Search channels...</string>
     <string name="home_loading">Loading...</string>
+    <string name="home_add_first_provider">Add your first provider</string>
+    <string name="home_add_first_provider_subtitle">Set up a provider to load live channels, movies, series, and guide data.</string>
     <string name="home_no_channels_found">No channels found in this category</string>
     <string name="home_no_channels_found_subtitle">Try another category or search term.</string>
     <string name="home_add_favorites_hint">Add channels to favorites to see them here</string>
@@ -178,6 +180,8 @@
     
     <string name="movies_incorrect_pin">Incorrect PIN</string>
     <string name="movies_loading">Loading movies...</string>
+    <string name="vod_sync_needed_title">Sync needed</string>
+    <string name="vod_sync_needed_subtitle">Refresh this provider to import movies and series into the library.</string>
     <string name="movies_no_found">No movies found</string>
     <string name="movies_no_found_subtitle">Try a different category or return to the full library shelves to surface more titles.</string>
     <string name="movies_categories_title">Categories</string>
@@ -434,6 +438,10 @@
     <string name="settings_app_version">App Version</string>
     <string name="settings_build">Build</string>
     <string name="settings_build_desc">StreamVault for Android TV</string>
+    <string name="settings_build_verification">Build Verification</string>
+    <string name="settings_build_verification_official">Official build</string>
+    <string name="settings_build_verification_unofficial">Unofficial build</string>
+    <string name="settings_build_verification_unavailable">Verification unavailable</string>
     <string name="settings_enabled">Enabled</string>
     <string name="settings_disabled">Disabled</string>
     <string name="settings_developed_by">Developed by</string>
@@ -789,6 +797,10 @@
     <string name="setup_file_browse_hint">Browse local storage or USB</string>
     <string name="setup_file_import_failed">Could not import playlist file. Please try again.</string>
     <string name="setup_file_import_storage_full">Storage is full. Free up space and try importing again.</string>
+    <string name="setup_discard_draft_title">Discard setup draft?</string>
+    <string name="setup_discard_draft_body">This provider setup is incomplete. Go back and lose the current draft?</string>
+    <string name="setup_discard_draft_confirm">Discard</string>
+    <string name="setup_discard_draft_cancel">Keep editing</string>
     <string name="setup_validating">Validating...</string>
     <string name="setup_add">Add Playlist</string>
 
@@ -1138,6 +1150,8 @@
     <string name="settings_clear_history_confirm">Clear History</string>
     <string name="settings_xtream_text_classification">Xtream Name-Based Adult Detection</string>
     <string name="settings_xtream_text_classification_subtitle">Use category name keywords to flag adult content when the provider doesn\'t set the adult flag explicitly</string>
+    <string name="settings_xtream_base64_compatibility">Xtream Base64 Text Compatibility</string>
+    <string name="settings_xtream_base64_compatibility_subtitle">Broadly decode Xtream names and categories when a provider stores them as Base64. Leave this off unless text looks encoded.</string>
     <string name="settings_prevent_standby">Keep Screen On During Playback</string>
     <string name="settings_prevent_standby_subtitle">Prevents the TV from showing a standby warning while a channel or video is playing</string>
     <string name="settings_clear_history_dialog_title">Clear Watch History?</string>

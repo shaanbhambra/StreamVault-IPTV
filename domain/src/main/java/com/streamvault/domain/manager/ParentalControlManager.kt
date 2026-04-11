@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -11,7 +12,6 @@ import javax.inject.Singleton
 class ParentalControlManager @Inject constructor(
     private val sessionStore: ParentalControlSessionStore
 ) {
-    private val stateLock = Any()
     private val _unlockedCategoriesByProvider = MutableStateFlow<Map<Long, Set<Long>>>(emptyMap())
     val unlockedCategoriesByProvider: StateFlow<Map<Long, Set<Long>>> =
         _unlockedCategoriesByProvider.asStateFlow()
@@ -26,52 +26,37 @@ class ParentalControlManager @Inject constructor(
         unlockedCategoriesByProvider.map { it[providerId] ?: emptySet() }
 
     fun unlockCategory(providerId: Long, categoryId: Long) {
-        synchronized(stateLock) {
-            publishState(
-                _unlockedCategoriesByProvider.value + (providerId to setOf(categoryId))
-            )
+        _unlockedCategoriesByProvider.update { current ->
+            (current + (providerId to setOf(categoryId)))
+                .filterValues { it.isNotEmpty() }
         }
+        sessionStore.writeSessionState(ParentalControlSessionState())
     }
 
-    fun isCategoryUnlocked(providerId: Long, categoryId: Long): Boolean {
-        synchronized(stateLock) {
-            return _unlockedCategoriesByProvider.value[providerId]?.contains(categoryId) == true
-        }
-    }
+    // StateFlow.value reads are thread-safe without an external lock.
+    fun isCategoryUnlocked(providerId: Long, categoryId: Long): Boolean =
+        _unlockedCategoriesByProvider.value[providerId]?.contains(categoryId) == true
 
     fun retainUnlockedCategory(providerId: Long, categoryId: Long?) {
-        synchronized(stateLock) {
+        _unlockedCategoriesByProvider.update { current ->
             val retainedCategoryIds = categoryId
-                ?.takeIf { unlockedCategoryIds ->
-                    _unlockedCategoriesByProvider.value[providerId]?.contains(unlockedCategoryIds) == true
-                }
+                ?.takeIf { id -> current[providerId]?.contains(id) == true }
                 ?.let(::setOf)
                 .orEmpty()
-            val updatedUnlocks = if (retainedCategoryIds.isEmpty()) {
-                _unlockedCategoriesByProvider.value - providerId
+            if (retainedCategoryIds.isEmpty()) {
+                current - providerId
             } else {
-                _unlockedCategoriesByProvider.value + (providerId to retainedCategoryIds)
+                (current + (providerId to retainedCategoryIds))
+                    .filterValues { it.isNotEmpty() }
             }
-            publishState(updatedUnlocks)
         }
+        sessionStore.writeSessionState(ParentalControlSessionState())
     }
 
     fun clearUnlockedCategories(providerId: Long? = null) {
-        synchronized(stateLock) {
-            val updatedUnlocks = if (providerId == null) {
-                emptyMap()
-            } else {
-                _unlockedCategoriesByProvider.value - providerId
-            }
-            publishState(updatedUnlocks)
+        _unlockedCategoriesByProvider.update { current ->
+            if (providerId == null) emptyMap() else current - providerId
         }
-    }
-
-    private fun publishState(
-        state: Map<Long, Set<Long>>
-    ) {
-        _unlockedCategoriesByProvider.value = state
-            .filterValues { it.isNotEmpty() }
         sessionStore.writeSessionState(ParentalControlSessionState())
     }
 }

@@ -10,6 +10,7 @@ import com.streamvault.domain.model.StreamInfo
 import com.streamvault.domain.repository.MovieRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -50,12 +51,36 @@ class GetRecommendationsTest {
         assertThat(result.map(Movie::id)).containsExactly(10L, 11L).inOrder()
     }
 
+    @Test
+    fun rethrows_non_io_upstream_failures() = runTest {
+        val expected = IllegalStateException("recommendations query failed")
+        val useCase = GetRecommendations(
+            movieRepository = FakeMovieRepository(
+                recommendations = emptyList(),
+                topRated = emptyList(),
+                recommendationsFlow = flow { throw expected }
+            )
+        )
+
+        val thrown = try {
+            useCase(providerId = 7L, limit = 2).first()
+            null
+        } catch (error: IllegalStateException) {
+            error
+        }
+
+        assertThat(thrown).isNotNull()
+        assertThat(thrown?.message).isEqualTo(expected.message)
+    }
+
     private class FakeMovieRepository(
         private val recommendations: List<Movie>,
-        private val topRated: List<Movie>
+        private val topRated: List<Movie>,
+        private val recommendationsFlow: Flow<List<Movie>>? = null,
+        private val topRatedFlow: Flow<List<Movie>>? = null
     ) : MovieRepository {
-        override fun getRecommendations(providerId: Long, limit: Int): Flow<List<Movie>> = flowOf(recommendations.take(limit))
-        override fun getTopRatedPreview(providerId: Long, limit: Int): Flow<List<Movie>> = flowOf(topRated.take(limit))
+        override fun getRecommendations(providerId: Long, limit: Int): Flow<List<Movie>> = recommendationsFlow ?: flowOf(recommendations.take(limit))
+        override fun getTopRatedPreview(providerId: Long, limit: Int): Flow<List<Movie>> = topRatedFlow ?: flowOf(topRated.take(limit))
 
         override fun getMovies(providerId: Long): Flow<List<Movie>> = unsupported()
         override fun getMoviesByCategory(providerId: Long, categoryId: Long): Flow<List<Movie>> = unsupported()

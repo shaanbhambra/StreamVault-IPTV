@@ -52,7 +52,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -95,8 +94,7 @@ class Media3PlayerEngine @Inject constructor(
             }
         }
 
-    private var supervisorJob = SupervisorJob()
-    private var scope = CoroutineScope(Dispatchers.Main.immediate + supervisorJob)
+    private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
     private var exoPlayer: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
     private var requestedDecoderMode: DecoderMode = DecoderMode.AUTO
@@ -343,9 +341,6 @@ class Media3PlayerEngine @Inject constructor(
         _mediaTitle.value = null
         trackController.resetSelections()
         statsCollector.reset()
-        supervisorJob.cancel()
-        supervisorJob = SupervisorJob()
-        scope = CoroutineScope(Dispatchers.Main.immediate + supervisorJob)
     }
 
     private fun prepareInternal(
@@ -563,11 +558,7 @@ class Media3PlayerEngine @Inject constructor(
                 output: Any,
                 renderTimeMs: Long
             ) {
-                playbackStarted = true
-                Log.i(
-                    TAG,
-                    "first-frame-success streamType=$currentResolvedStreamType timeoutProfile=$currentTimeoutProfile target=${PlaybackLogSanitizer.sanitizeUrl(lastStreamInfo?.url)}"
-                )
+                markPlaybackStarted("first-frame-success")
             }
         }
     }
@@ -589,11 +580,17 @@ class Media3PlayerEngine @Inject constructor(
                 if (_playbackState.value == PlaybackState.READY) {
                     _retryStatus.value = null
                 }
+                if (_playbackState.value == PlaybackState.READY && _isPlaying.value) {
+                    markPlaybackStarted("ready-while-playing")
+                }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _isPlaying.value = isPlaying
                 if (isPlaying) {
+                    if (_playbackState.value == PlaybackState.READY) {
+                        markPlaybackStarted("playing-ready")
+                    }
                     statsCollector.start()
                     audioFocusController.onPlaybackStarted()
                 } else {
@@ -621,6 +618,15 @@ class Media3PlayerEngine @Inject constructor(
                 trackController.onTracksChanged(tracks)
             }
         }
+    }
+
+    private fun markPlaybackStarted(reason: String) {
+        if (playbackStarted) return
+        playbackStarted = true
+        Log.i(
+            TAG,
+            "$reason streamType=$currentResolvedStreamType timeoutProfile=$currentTimeoutProfile target=${PlaybackLogSanitizer.sanitizeUrl(lastStreamInfo?.url)}"
+        )
     }
 
     private fun handlePlaybackError(error: PlaybackException) {
@@ -676,6 +682,9 @@ class Media3PlayerEngine @Inject constructor(
                     return@launch
                 }
                 retryJob = null
+                if (category == PlaybackErrorCategory.LIVE_WINDOW) {
+                    exoPlayer?.seekToDefaultPosition()
+                }
                 prepareInternal(streamInfo, preserveRetryState = true, seekPositionMs = null, autoPlay = true)
             }
             return

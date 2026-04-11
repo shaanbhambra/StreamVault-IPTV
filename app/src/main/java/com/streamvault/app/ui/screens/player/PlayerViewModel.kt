@@ -25,6 +25,7 @@ import com.streamvault.domain.model.RecordingItem
 import com.streamvault.domain.model.RecordingRecurrence
 import com.streamvault.domain.model.RecordingRequest
 import com.streamvault.domain.model.RecordingStatus
+import com.streamvault.domain.model.ProviderType
 import com.streamvault.domain.model.Result
 import com.streamvault.domain.model.Series
 import com.streamvault.domain.model.VirtualCategoryIds
@@ -184,6 +185,7 @@ class PlayerViewModel @Inject constructor(
     internal val triedAlternativeStreams = mutableSetOf<String>()
     private val failedStreamsThisSession = mutableMapOf<String, Int>()
     private var hasRetriedWithSoftwareDecoder = false
+    private var hasRetriedXtreamAuthRefresh = false
     internal var lastRecordedLivePlaybackKey: Pair<Long, Long>? = null
     private var currentStreamClassLabel: String = "Primary"
     private var prepareRequestVersion: Long = 0L
@@ -346,21 +348,25 @@ class PlayerViewModel @Inject constructor(
             )
             return
         }
-        val recoveryType = classifyPlaybackError(error)
-        val channel = currentChannelFlow.value?.sanitizedForPlayer()
-
-        if (currentContentType != ContentType.LIVE || channel == null) {
-            if (!isActivePlaybackSession(requestVersion, playbackUrl)) return
-            showPlayerNotice(
-                message = resolvePlaybackErrorMessage(error),
-                recoveryType = recoveryType,
-                actions = buildRecoveryActions(recoveryType)
-            )
-            return
-        }
-
         recoveryJob = viewModelScope.launch {
             if (!isActivePlaybackSession(requestVersion, playbackUrl)) return@launch
+            if (tryRefreshXtreamPlaybackAfterAuthError(error, requestVersion, playbackUrl)) {
+                return@launch
+            }
+
+            val recoveryType = classifyPlaybackError(error)
+            val channel = currentChannelFlow.value?.sanitizedForPlayer()
+
+            if (currentContentType != ContentType.LIVE || channel == null) {
+                if (!isActivePlaybackSession(requestVersion, playbackUrl)) return@launch
+                showPlayerNotice(
+                    message = resolvePlaybackErrorMessage(error),
+                    recoveryType = recoveryType,
+                    actions = buildRecoveryActions(recoveryType)
+                )
+                return@launch
+            }
+
             if (isCatchUpPlayback()) {
                 markStreamFailure(currentStreamUrl)
                 setLastFailureReason(error.message)
@@ -566,6 +572,7 @@ class PlayerViewModel @Inject constructor(
 
     internal fun beginPlaybackSession(): Long {
         recoveryJob?.cancel()
+        hasRetriedXtreamAuthRefresh = false
         return ++prepareRequestVersion
     }
 
@@ -743,6 +750,23 @@ class PlayerViewModel @Inject constructor(
         requestVersion: Long
     ): Boolean {
         if (!isActivePlaybackSession(requestVersion)) return false
+
+        // Fast-path expiry check: if the stream URL already carries an expiration timestamp
+        // that is in the past, skip the network probe entirely and surface a clear message.
+        val expiry = streamInfo.expirationTime
+        if (expiry != null && expiry > 0L && expiry < System.currentTimeMillis()) {
+            if (!isActivePlaybackSession(requestVersion)) return false
+            val expiryMessage = "This stream's subscription has expired. " +
+                "Please renew your subscription with the provider."
+            setLastFailureReason(expiryMessage)
+            showPlayerNotice(
+                message = expiryMessage,
+                recoveryType = PlayerRecoveryType.SOURCE,
+                actions = buildRecoveryActions(PlayerRecoveryType.SOURCE)
+            )
+            return false
+        }
+
         probePlaybackUrl(streamInfo.url)?.let { failure ->
             if (!isActivePlaybackSession(requestVersion)) return false
             setLastFailureReason(failure.message)
@@ -1493,6 +1517,58 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    private suspend fun tryRefreshXtreamPlaybackAfterAuthError(
+        error: PlayerError,
+        requestVersion: Long,
+        playbackUrl: String
+    ): Boolean {
+        if (hasRetriedXtreamAuthRefresh) return false
+        if (error !is PlayerError.NetworkError) return false
+        if (!isAuthExpiryPlaybackError(error.message)) return false
+        if (!isXtreamPlaybackSession()) return false
+
+        val refreshedStreamInfo = resolvePlaybackStreamInfo(
+            logicalUrl = currentStreamUrl,
+            internalContentId = currentContentId,
+            providerId = currentProviderId,
+            contentType = currentContentType
+        ) ?: return false
+
+        if (!isActivePlaybackSession(requestVersion, playbackUrl)) return false
+
+        hasRetriedXtreamAuthRefresh = true
+        setLastFailureReason(error.message)
+        appendRecoveryAction("Refreshed Xtream playback URL after auth failure")
+        showPlayerNotice(
+            message = "Refreshing the provider playback URL…",
+            recoveryType = PlayerRecoveryType.NETWORK,
+            actions = buildRecoveryActions(PlayerRecoveryType.NETWORK),
+            isRetryNotice = true
+        )
+        if (!preparePlayer(refreshedStreamInfo, requestVersion)) return true
+        playerEngine.play()
+        return true
+    }
+
+    private suspend fun isXtreamPlaybackSession(): Boolean {
+        val providerId = currentProviderId.takeIf { it > 0L } ?: return false
+        val provider = providerRepository.getProvider(providerId) ?: return false
+        if (provider.type != ProviderType.XTREAM_CODES) return false
+        return xtreamStreamUrlResolver.isInternalStreamUrl(currentStreamUrl) ||
+            xtreamStreamUrlResolver.isInternalStreamUrl(currentResolvedPlaybackUrl)
+    }
+
+    private fun isAuthExpiryPlaybackError(message: String?): Boolean {
+        val normalized = message.orEmpty().lowercase(Locale.ROOT)
+        return "401" in normalized ||
+            "403" in normalized ||
+            "unauthorized" in normalized ||
+            "forbidden" in normalized ||
+            "authentication" in normalized ||
+            "token" in normalized ||
+            "expired" in normalized
+    }
+
     private fun setLastFailureReason(message: String?) {
         _playerDiagnostics.update { it.copy(lastFailureReason = message?.takeIf { reason -> reason.isNotBlank() }) }
     }
@@ -2019,6 +2095,7 @@ class PlayerViewModel @Inject constructor(
         aspectRatioJob?.cancel()
         recentChannelsJob?.cancel()
         lastVisitedCategoryJob?.cancel()
+        seekThumbnailProvider.clearCache()
         playerEngine.release()
     }
 }

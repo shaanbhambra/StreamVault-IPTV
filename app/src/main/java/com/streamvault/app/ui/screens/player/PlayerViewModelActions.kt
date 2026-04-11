@@ -14,6 +14,14 @@ import kotlinx.coroutines.launch
 
 fun PlayerViewModel.castCurrentMedia(onRouteSelectionRequired: () -> Unit) {
     viewModelScope.launch {
+        if (currentStreamUrl.isCastUnsupportedProtocol()) {
+            showPlayerNotice(
+                message = "RTSP and RTMP streams are not supported for casting.",
+                recoveryType = PlayerRecoveryType.SOURCE
+            )
+            return@launch
+        }
+
         val request = buildCastRequest()
         if (request == null) {
             showPlayerNotice(
@@ -216,4 +224,12 @@ internal fun StreamInfo.inferCastStreamType(): StreamType {
         normalizedUrl.startsWith("rtsp") -> StreamType.RTSP
         else -> StreamType.PROGRESSIVE
     }
+}
+
+private fun String.isCastUnsupportedProtocol(): Boolean {
+    val normalizedUrl = trim().lowercase()
+    return normalizedUrl.startsWith("rtsp://") ||
+        normalizedUrl.startsWith("rtsps://") ||
+        normalizedUrl.startsWith("rtmp://") ||
+        normalizedUrl.startsWith("rtmps://")
 }

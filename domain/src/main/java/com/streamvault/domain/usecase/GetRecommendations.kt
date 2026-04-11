@@ -2,6 +2,7 @@ package com.streamvault.domain.usecase
 
 import com.streamvault.domain.model.Movie
 import com.streamvault.domain.repository.MovieRepository
+import com.streamvault.domain.util.shouldRethrowDomainFlowFailure
 import java.util.logging.Level
 import java.util.logging.Logger
 import javax.inject.Inject
@@ -27,6 +28,9 @@ class GetRecommendations @Inject constructor(
                 }
             }
             .catch { error ->
+                if (error.shouldRethrowDomainFlowFailure()) {
+                    throw error
+                }
                 logger.log(Level.WARNING, "Failed to load recommendations", error)
                 emit(emptyList())
             }

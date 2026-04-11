@@ -1,5 +1,6 @@
 package com.streamvault.app.ui.components.dialogs
 
+import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,6 +24,8 @@ import androidx.compose.ui.Modifier
 import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -36,6 +40,23 @@ import com.streamvault.app.ui.interaction.mouseClickable
 import com.streamvault.app.ui.design.AppColors
 import com.streamvault.app.ui.design.FocusSpec
 
+internal val LocalDialogCanInteract = compositionLocalOf { true }
+
+@Composable
+internal fun rememberDialogOpenGestureBlocker(canInteract: Boolean): (KeyEvent) -> Boolean = remember(canInteract) {
+    { event ->
+        !canInteract &&
+            event.nativeKeyEvent.action == AndroidKeyEvent.ACTION_UP &&
+            when (event.nativeKeyEvent.keyCode) {
+                AndroidKeyEvent.KEYCODE_DPAD_CENTER,
+                AndroidKeyEvent.KEYCODE_ENTER,
+                AndroidKeyEvent.KEYCODE_NUMPAD_ENTER,
+                AndroidKeyEvent.KEYCODE_BUTTON_A -> true
+                else -> false
+            }
+    }
+}
+
 @Composable
 fun PremiumDialog(
     title: String,
@@ -48,6 +69,7 @@ fun PremiumDialog(
 ) {
     var canInteract by remember { mutableStateOf(false) }
     val isTelevisionDevice = rememberIsTelevisionDevice()
+    val blockOpenGesture = rememberDialogOpenGestureBlocker(canInteract)
     LaunchedEffect(Unit) { delay(500); canInteract = true }
     Dialog(
         onDismissRequest = onDismissRequest,
@@ -57,63 +79,12 @@ fun PremiumDialog(
             usePlatformDefaultWidth = false
         )
     ) {
-        if (isTelevisionDevice) {
-            Surface(
-                modifier = modifier.fillMaxWidth(widthFraction),
-                shape = RoundedCornerShape(28.dp),
-                colors = SurfaceDefaults.colors(containerColor = AppColors.SurfaceElevated)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    AppColors.BrandMuted.copy(alpha = 0.18f),
-                                    AppColors.SurfaceElevated,
-                                    AppColors.Surface
-                                )
-                            )
-                        )
-                        .padding(28.dp),
-                    verticalArrangement = Arrangement.spacedBy(18.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = title,
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = AppColors.TextPrimary
-                        )
-                        if (!subtitle.isNullOrBlank()) {
-                            Text(
-                                text = subtitle,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = AppColors.TextSecondary
-                            )
-                        }
-                    }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp, androidx.compose.ui.Alignment.End),
-                        content = footer
-                    )
-                }
-            }
-        } else {
-            BoxWithConstraints(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                val resolvedWidthFraction = when {
-                    maxWidth < 700.dp -> 0.9f
-                    maxWidth < 1000.dp -> maxOf(widthFraction, 0.62f)
-                    else -> widthFraction
-                }
-
+        androidx.compose.runtime.CompositionLocalProvider(LocalDialogCanInteract provides canInteract) {
+            if (isTelevisionDevice) {
                 Surface(
-                    modifier = modifier.fillMaxWidth(resolvedWidthFraction),
+                    modifier = modifier
+                        .fillMaxWidth(widthFraction)
+                        .onPreviewKeyEvent(blockOpenGesture),
                     shape = RoundedCornerShape(28.dp),
                     colors = SurfaceDefaults.colors(containerColor = AppColors.SurfaceElevated)
                 ) {
@@ -155,6 +126,63 @@ fun PremiumDialog(
                         )
                     }
                 }
+            } else {
+                BoxWithConstraints(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val resolvedWidthFraction = when {
+                        maxWidth < 700.dp -> 0.9f
+                        maxWidth < 1000.dp -> maxOf(widthFraction, 0.62f)
+                        else -> widthFraction
+                    }
+
+                    Surface(
+                        modifier = modifier
+                            .fillMaxWidth(resolvedWidthFraction)
+                            .onPreviewKeyEvent(blockOpenGesture),
+                        shape = RoundedCornerShape(28.dp),
+                        colors = SurfaceDefaults.colors(containerColor = AppColors.SurfaceElevated)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            AppColors.BrandMuted.copy(alpha = 0.18f),
+                                            AppColors.SurfaceElevated,
+                                            AppColors.Surface
+                                        )
+                                    )
+                                )
+                                .padding(28.dp),
+                            verticalArrangement = Arrangement.spacedBy(18.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    color = AppColors.TextPrimary
+                                )
+                                if (!subtitle.isNullOrBlank()) {
+                                    Text(
+                                        text = subtitle,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = AppColors.TextSecondary
+                                    )
+                                }
+                            }
+
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp, androidx.compose.ui.Alignment.End),
+                                content = footer
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -169,6 +197,7 @@ fun PremiumDialogActionButton(
     destructive: Boolean = false,
     emphasized: Boolean = false
 ) {
+    val canInteract = LocalDialogCanInteract.current
     val containerColor = when {
         destructive -> AppColors.Live.copy(alpha = 0.22f)
         emphasized -> AppColors.Brand
@@ -181,9 +210,9 @@ fun PremiumDialogActionButton(
     }
 
     Button(
-        onClick = onClick,
+        onClick = { if (canInteract) onClick() },
         enabled = enabled,
-        modifier = modifier.fillMaxWidth().mouseClickable(enabled = enabled, onClick = onClick),
+        modifier = modifier.fillMaxWidth().mouseClickable(enabled = enabled, onClick = { if (canInteract) onClick() }),
         colors = ButtonDefaults.colors(
             containerColor = containerColor,
             contentColor = contentColor,
@@ -214,6 +243,7 @@ fun PremiumDialogFooterButton(
     destructive: Boolean = false,
     emphasized: Boolean = false
 ) {
+    val canInteract = LocalDialogCanInteract.current
     val containerColor = when {
         destructive -> AppColors.Live.copy(alpha = 0.18f)
         emphasized -> AppColors.Brand
@@ -222,9 +252,9 @@ fun PremiumDialogFooterButton(
     val contentColor = if (emphasized) Color.Black else AppColors.TextPrimary
 
     Button(
-        onClick = onClick,
+        onClick = { if (canInteract) onClick() },
         enabled = enabled,
-        modifier = Modifier.mouseClickable(enabled = enabled, onClick = onClick),
+        modifier = Modifier.mouseClickable(enabled = enabled, onClick = { if (canInteract) onClick() }),
         colors = ButtonDefaults.colors(
             containerColor = containerColor,
             contentColor = contentColor,

@@ -19,6 +19,7 @@ import com.streamvault.domain.repository.CombinedM3uRepository
 import com.streamvault.domain.repository.EpgRepository
 import com.streamvault.domain.repository.EpgSourceRepository
 import com.streamvault.domain.repository.FavoriteRepository
+import com.streamvault.domain.repository.LiveStreamProgramRequest
 import com.streamvault.domain.repository.ProviderRepository
 import com.streamvault.domain.usecase.GetCustomCategories
 import com.streamvault.data.preferences.PreferencesRepository
@@ -1081,29 +1082,31 @@ class EpgViewModel @Inject constructor(
             return emptyMap()
         }
 
-        return coroutineScope {
-            missingChannels
-                .take(MAX_XTREAM_GUIDE_FALLBACK_CHANNELS)
-                .map { channel ->
-                    async {
-                        val result = providerRepository.getProgramsForLiveStream(
-                            providerId = providerId,
-                            streamId = channel.streamId,
-                            epgChannelId = channel.epgChannelId,
-                            limit = 12
-                        )
-                        val programs = (result as? com.streamvault.domain.model.Result.Success)?.data
-                            .orEmpty()
-                            .filter { program -> program.endTime > windowStart && program.startTime < windowEnd }
-                            .sortedBy { program -> program.startTime }
-                        val lookupKey = channel.guideLookupKey() ?: return@async null
-                        if (programs.isEmpty()) null else lookupKey to programs
-                    }
-                }
-                .awaitAll()
-                .mapNotNull { it }
-                .toMap()
-        }
+        val fallbackChannels = missingChannels.take(MAX_XTREAM_GUIDE_FALLBACK_CHANNELS)
+        val programsByRequest = providerRepository.getProgramsForLiveStreams(
+            providerId = providerId,
+            requests = fallbackChannels.map { channel ->
+                LiveStreamProgramRequest(
+                    streamId = channel.streamId,
+                    epgChannelId = channel.epgChannelId
+                )
+            },
+            limit = 12
+        )
+
+        return fallbackChannels.mapNotNull { channel ->
+            val programs = (programsByRequest[
+                LiveStreamProgramRequest(
+                    streamId = channel.streamId,
+                    epgChannelId = channel.epgChannelId
+                )
+            ] as? com.streamvault.domain.model.Result.Success)?.data
+                .orEmpty()
+                .filter { program -> program.endTime > windowStart && program.startTime < windowEnd }
+                .sortedBy { program -> program.startTime }
+            val lookupKey = channel.guideLookupKey() ?: return@mapNotNull null
+            if (programs.isEmpty()) null else lookupKey to programs
+        }.toMap()
     }
 
     private suspend fun buildGuideDisplaySnapshot(

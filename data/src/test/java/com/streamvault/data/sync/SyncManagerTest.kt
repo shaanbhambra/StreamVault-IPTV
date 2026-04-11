@@ -11,6 +11,7 @@ import com.streamvault.data.local.dao.ProviderDao
 import com.streamvault.data.local.dao.SeriesDao
 import com.streamvault.data.local.entity.ProviderEntity
 import com.streamvault.data.parser.M3uParser
+import com.streamvault.data.security.CredentialCrypto
 import com.streamvault.domain.model.SyncState
 import com.streamvault.domain.model.Result
 import com.streamvault.domain.model.ProviderType
@@ -65,6 +66,8 @@ class SyncManagerTest {
         private val provider: ProviderEntity? = sampleProvider()
     ) : ProviderDao() {
         override suspend fun getById(id: Long): ProviderEntity? = provider
+        override suspend fun getByIds(ids: List<Long>): List<ProviderEntity> =
+            listOfNotNull(provider).filter { it.id in ids }
         override suspend fun updateSyncTime(id: Long, timestamp: Long) = Unit
         override fun getAll() = kotlinx.coroutines.flow.flowOf(listOfNotNull(provider))
         override fun getActive() = kotlinx.coroutines.flow.flowOf(provider)
@@ -168,6 +171,10 @@ class SyncManagerTest {
     private val transactionRunner = object : DatabaseTransactionRunner {
         override suspend fun <T> inTransaction(block: suspend () -> T): T = block()
     }
+    private val credentialCrypto = object : CredentialCrypto {
+        override fun encryptIfNeeded(value: String): String = value
+        override fun decryptIfNeeded(value: String): String = value
+    }
     private val syncMetadataRepo = FakeSyncMetadataRepository()
 
     @Before
@@ -186,6 +193,7 @@ class SyncManagerTest {
             preferencesRepo
         )
         org.mockito.kotlin.whenever(preferencesRepo.useXtreamTextClassification).thenReturn(flowOf(false))
+        org.mockito.kotlin.whenever(preferencesRepo.xtreamBase64TextCompatibility).thenReturn(flowOf(false))
         org.mockito.kotlin.whenever(preferencesRepo.getHiddenCategoryIds(any(), any())).thenReturn(flowOf(emptySet()))
     }
 
@@ -212,6 +220,7 @@ class SyncManagerTest {
         epgRepository = epgRepo,
         epgSourceRepository = epgSourceRepo,
         okHttpClient = xtreamBackend.okHttpClient(),
+        credentialCrypto = credentialCrypto,
         syncMetadataRepository = syncMetadataRepo,
         transactionRunner = transactionRunner,
         preferencesRepository = preferencesRepo
@@ -380,6 +389,7 @@ class SyncManagerTest {
                 ]
             """.trimIndent()
         )
+        org.mockito.kotlin.whenever(movieDao.getCount(1L)).thenReturn(flowOf(0))
 
         val result = mgr.retrySection(
             providerId = 1L,
@@ -549,44 +559,37 @@ class SyncManagerTest {
 
     @Test
     fun `isVodEntry_mp4Extension_returnsTrue`() {
-        val mgr = buildManager()
-        assertThat(mgr.isVodEntry(entry(url = "http://vod.example.com/film.mp4"))).isTrue()
+        assertThat(M3uParser.isVodEntry(entry(url = "http://vod.example.com/film.mp4"))).isTrue()
     }
 
     @Test
     fun `isVodEntry_mkvExtension_returnsTrue`() {
-        val mgr = buildManager()
-        assertThat(mgr.isVodEntry(entry(url = "http://vod.example.com/show.mkv"))).isTrue()
+        assertThat(M3uParser.isVodEntry(entry(url = "http://vod.example.com/show.mkv"))).isTrue()
     }
 
     @Test
     fun `isVodEntry_movieGroupTitle_returnsTrue`() {
-        val mgr = buildManager()
-        assertThat(mgr.isVodEntry(entry(group = "Movies HD"))).isTrue()
+        assertThat(M3uParser.isVodEntry(entry(group = "Movies HD"))).isTrue()
     }
 
     @Test
     fun `isVodEntry_vodGroupTitle_returnsTrue`() {
-        val mgr = buildManager()
-        assertThat(mgr.isVodEntry(entry(group = "VOD Library"))).isTrue()
+        assertThat(M3uParser.isVodEntry(entry(group = "VOD Library"))).isTrue()
     }
 
     @Test
     fun `isVodEntry_filmGroupTitle_returnsTrue`() {
-        val mgr = buildManager()
-        assertThat(mgr.isVodEntry(entry(group = "Film Classics"))).isTrue()
+        assertThat(M3uParser.isVodEntry(entry(group = "Film Classics"))).isTrue()
     }
 
     @Test
     fun `isVodEntry_liveTs_returnsFalse`() {
-        val mgr = buildManager()
-        assertThat(mgr.isVodEntry(entry(url = "http://live.example.com/cnn.ts", group = "News"))).isFalse()
+        assertThat(M3uParser.isVodEntry(entry(url = "http://live.example.com/cnn.ts", group = "News"))).isFalse()
     }
 
     @Test
     fun `isVodEntry_liveM3u8_returnsFalse`() {
-        val mgr = buildManager()
-        assertThat(mgr.isVodEntry(entry(url = "http://live.example.com/sports.m3u8", group = "Sports"))).isFalse()
+        assertThat(M3uParser.isVodEntry(entry(url = "http://live.example.com/sports.m3u8", group = "Sports"))).isFalse()
     }
 
     // ── SyncState sealed class properties ───────────────────────────

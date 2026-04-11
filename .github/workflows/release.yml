@@ -148,15 +148,32 @@ jobs:
           echo "release_tag=v$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "apk_name=StreamVault-$VERSION_NAME.apk" >> "$GITHUB_OUTPUT"
 
+      - name: Extract changelog entry
+        id: changelog
+        shell: bash
+        run: |
+          VERSION="${{ steps.app_version.outputs.version_name }}"
+          echo "Extracting notes for version $VERSION"
+          
+          # Extract lines between the header and the next header (or EOF)
+          {
+            echo "notes<<EOF"
+            awk -v ver="$VERSION" '$0 ~ "^## " ver " " {p=1; next} $0 ~ "^## " && p {p=0} p {print}' docs/CHANGELOG.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.app_version.outputs.release_tag }}
           name: StreamVault ${{ steps.app_version.outputs.version_name }}
           body: |
-            Version `${{ steps.app_version.outputs.version_name }}` (code `${{ steps.app_version.outputs.version_code }}`) built from `${{ github.sha }}`.
+            ${{ steps.changelog.outputs.notes }}
+            
+            ---
+            Built from `${{ github.sha }}`.
           files: |
             dist/${{ steps.app_version.outputs.apk_name }}
             dist/StreamVault.apk
           make_latest: true
-          generate_release_notes: true
+          generate_release_notes: false

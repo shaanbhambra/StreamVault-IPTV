@@ -1,5 +1,7 @@
 package com.streamvault.domain.model
 
+import com.streamvault.domain.util.StreamEntryUrlPolicy
+
 data class StreamInfo(
     val url: String,
     val title: String? = null,
@@ -27,6 +29,9 @@ data class DrmInfo(
 ) {
     init {
         require(licenseUrl.isNotBlank()) { "DrmInfo licenseUrl must not be blank" }
+        require(StreamEntryUrlPolicy.isAllowed(licenseUrl)) {
+            "DrmInfo licenseUrl must use an allowed stream-entry URL scheme"
+        }
     }
 }
 

@@ -11,8 +11,27 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
+/**
+ * Collects playback position, duration, and diagnostic statistics from an [ExoPlayer] instance
+ * and exposes them as [MutableStateFlow]s for Compose UI observation.
+ *
+ * ## Threading Model
+ * **All public methods must be called on the Main/UI thread.** This is safe because:
+ * - ExoPlayer delivers all [androidx.media3.exoplayer.analytics.AnalyticsListener] callbacks
+ *   on the application looper (Main thread).
+ * - [androidx.media3.common.Player.Listener] callbacks are also delivered on Main.
+ * - The polling coroutine runs on [Dispatchers.Main.immediate], which dispatches
+ *   synchronously if already on Main and never bounces to a background thread pool.
+ *
+ * This design removes the original cross-dispatcher hop pattern
+ * (`launch(Dispatchers.Default)` → `withContext(Dispatchers.Main.immediate)` → back),
+ * which caused 2–3 unnecessary thread context switches every 250 ms per active player.
+ * For a 4-player multiview layout, that was up to 12 wasted thread hops per second.
+ *
+ * Because everything runs on one thread, fields are plain `var`s with no `@Volatile`
+ * or `AtomicInteger` overhead.
+ */
 class PlayerStatsCollector(
     private val scopeProvider: () -> CoroutineScope,
     private val currentPosition: MutableStateFlow<Long>,
@@ -20,12 +39,7 @@ class PlayerStatsCollector(
     private val videoFormat: MutableStateFlow<VideoFormat>,
     private val playerStats: MutableStateFlow<PlayerStats>
 ) {
-    private data class PlayerSnapshot(
-        val currentPosition: Long,
-        val duration: Long,
-        val bufferedDurationMs: Long?
-    )
-
+    // All fields are Main-thread-only. No @Volatile or AtomicInteger required.
     private var pollingJob: Job? = null
     private var playerProvider: (() -> ExoPlayer?)? = null
     private var lastVideoFormat: Format? = null
@@ -50,90 +64,105 @@ class PlayerStatsCollector(
         playerStats.value = PlayerStats()
     }
 
+    /** Called by [androidx.media3.exoplayer.analytics.AnalyticsListener] — always on Main. */
     fun onVideoFormatChanged(format: Format) {
         lastVideoFormat = format
         lastFrameRate = format.frameRate.takeIf { it > 0f } ?: lastFrameRate
     }
 
+    /** Called by [androidx.media3.exoplayer.analytics.AnalyticsListener] — always on Main. */
     fun onAudioFormatChanged(format: Format) {
         lastAudioFormat = format
     }
 
+    /** Called by [androidx.media3.exoplayer.analytics.AnalyticsListener] — always on Main. */
     fun onDroppedFrames(count: Int) {
         droppedFrames += count
     }
 
+    /** Called by [androidx.media3.exoplayer.analytics.AnalyticsListener] — always on Main. */
     fun onBandwidthEstimate(bitrateEstimate: Long) {
         if (bitrateEstimate > 0L) {
             lastBandwidthEstimate = bitrateEstimate
         }
     }
 
+    /** Called by [androidx.media3.common.Player.Listener] — always on Main. */
     fun incrementRebufferCount() {
         playerStats.value = playerStats.value.copy(rebufferCount = playerStats.value.rebufferCount + 1)
     }
 
+    /**
+     * Starts the stat polling loop on [Dispatchers.Main.immediate].
+     *
+     * Updates are throttled into three tiers so we don't emit more StateFlow updates
+     * than the UI can meaningfully display:
+     *
+     * | Data | Interval |
+     * |---|---|
+     * | `currentPosition` / `duration` | Every 250 ms |
+     * | `bufferedDurationMs` | Every 500 ms (every 2 ticks) |
+     * | Codec / bitrate / dropped frames | Every 1 000 ms (every 4 ticks) |
+     */
     fun start() {
         stop()
-        pollingJob = scopeProvider().launch(Dispatchers.Default) {
-            var bufferedUpdateElapsedMs = BUFFERED_UPDATE_INTERVAL_MS
-            var statsUpdateElapsedMs = STATS_UPDATE_INTERVAL_MS
+        pollingJob = scopeProvider().launch(Dispatchers.Main.immediate) {
+            // Initialise to their trigger thresholds so the very first tick emits
+            // buffered and stats updates immediately (consistent with player-start UX).
+            var ticksSinceBufferedUpdate = BUFFERED_UPDATE_TICKS
+            var ticksSinceStatsUpdate = STATS_UPDATE_TICKS
+
             while (isActive) {
-                val shouldUpdateBuffered = bufferedUpdateElapsedMs >= BUFFERED_UPDATE_INTERVAL_MS
-                val shouldUpdateStats = statsUpdateElapsedMs >= STATS_UPDATE_INTERVAL_MS
-                val snapshot = readPlayerSnapshot(shouldUpdateBuffered)
+                val player = playerProvider?.invoke()
 
-                if (snapshot != null) {
-                    currentPosition.value = snapshot.currentPosition
-                    duration.value = snapshot.duration
+                if (player != null) {
+                    // --- Tier 1: Position + duration (every tick) ------------------
+                    currentPosition.value = player.currentPosition
+                    duration.value = player.duration.coerceAtLeast(0L)
 
-                    snapshot.bufferedDurationMs?.let { bufferedDuration ->
-                        playerStats.value = playerStats.value.copy(bufferedDurationMs = bufferedDuration)
-                        bufferedUpdateElapsedMs = 0L
+                    // --- Tier 2: Buffered duration (every 500 ms) ------------------
+                    if (ticksSinceBufferedUpdate >= BUFFERED_UPDATE_TICKS) {
+                        val buffered = (player.bufferedPosition - player.currentPosition)
+                            .coerceAtLeast(0L)
+                        playerStats.value = playerStats.value.copy(bufferedDurationMs = buffered)
+                        ticksSinceBufferedUpdate = 0
                     }
 
-                    if (shouldUpdateStats) {
+                    // --- Tier 3: Codec / bitrate / dropped frames (every 1 000 ms) -
+                    if (ticksSinceStatsUpdate >= STATS_UPDATE_TICKS) {
                         val video = lastVideoFormat
                         val audio = lastAudioFormat
+                        val dropped = droppedFrames
+
                         videoFormat.value = VideoFormat(
-                            width = video?.width?.takeIf { it > 0 } ?: 0,
+                            width  = video?.width?.takeIf  { it > 0 } ?: 0,
                             height = video?.height?.takeIf { it > 0 } ?: 0,
                             frameRate = lastFrameRate,
-                            bitrate = video?.bitrate?.takeIf { it > 0 } ?: 0,
+                            bitrate   = video?.bitrate?.takeIf { it > 0 } ?: 0,
                             codecV = video?.sampleMimeType ?: video?.codecs,
                             codecA = audio?.sampleMimeType ?: audio?.codecs
                         )
                         playerStats.value = playerStats.value.copy(
-                            videoCodec = video?.sampleMimeType ?: video?.codecs ?: playerStats.value.videoCodec,
-                            audioCodec = audio?.sampleMimeType ?: audio?.codecs ?: playerStats.value.audioCodec,
-                            videoBitrate = video?.bitrate?.takeIf { it > 0 } ?: playerStats.value.videoBitrate,
-                            droppedFrames = droppedFrames,
-                            width = video?.width?.takeIf { it > 0 } ?: playerStats.value.width,
-                            height = video?.height?.takeIf { it > 0 } ?: playerStats.value.height,
+                            videoCodec        = video?.sampleMimeType ?: video?.codecs
+                                                ?: playerStats.value.videoCodec,
+                            audioCodec        = audio?.sampleMimeType ?: audio?.codecs
+                                                ?: playerStats.value.audioCodec,
+                            videoBitrate      = video?.bitrate?.takeIf { it > 0 }
+                                                ?: playerStats.value.videoBitrate,
+                            droppedFrames     = dropped,
+                            width             = video?.width?.takeIf  { it > 0 }
+                                                ?: playerStats.value.width,
+                            height            = video?.height?.takeIf { it > 0 }
+                                                ?: playerStats.value.height,
                             bandwidthEstimate = lastBandwidthEstimate
                         )
-                        statsUpdateElapsedMs = 0L
+                        ticksSinceStatsUpdate = 0
                     }
                 }
-                delay(POSITION_UPDATE_INTERVAL_MS)
-                bufferedUpdateElapsedMs += POSITION_UPDATE_INTERVAL_MS
-                statsUpdateElapsedMs += POSITION_UPDATE_INTERVAL_MS
-            }
-        }
-    }
 
-    private suspend fun readPlayerSnapshot(includeBufferedDuration: Boolean): PlayerSnapshot? {
-        return withContext(Dispatchers.Main.immediate) {
-            playerProvider?.invoke()?.let { player ->
-                PlayerSnapshot(
-                    currentPosition = player.currentPosition,
-                    duration = player.duration.coerceAtLeast(0L),
-                    bufferedDurationMs = if (includeBufferedDuration) {
-                        (player.bufferedPosition - player.currentPosition).coerceAtLeast(0L)
-                    } else {
-                        null
-                    }
-                )
+                delay(POSITION_UPDATE_INTERVAL_MS)
+                ticksSinceBufferedUpdate++
+                ticksSinceStatsUpdate++
             }
         }
     }
@@ -144,8 +173,13 @@ class PlayerStatsCollector(
     }
 
     private companion object {
+        /** Base polling interval. All other intervals are multiples of this. */
         private const val POSITION_UPDATE_INTERVAL_MS = 250L
-        private const val BUFFERED_UPDATE_INTERVAL_MS = 500L
-        private const val STATS_UPDATE_INTERVAL_MS = 1000L
+
+        /** Buffered duration sampled every 2 ticks = 500 ms. */
+        private const val BUFFERED_UPDATE_TICKS = 2
+
+        /** Heavy stats (codec / bitrate / dropped frames) every 4 ticks = 1 000 ms. */
+        private const val STATS_UPDATE_TICKS = 4
     }
 }

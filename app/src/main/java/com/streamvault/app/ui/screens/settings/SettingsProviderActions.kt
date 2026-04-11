@@ -200,11 +200,19 @@ internal class SettingsProviderActions(
     }
 
     private suspend fun runQuickSync(providerId: Long, providerName: String?) {
+        val provider = providerRepository.getProvider(providerId)
+        val pendingXtreamTextRefreshGeneration = provider
+            ?.takeIf { it.type == ProviderType.XTREAM_CODES }
+            ?.let { currentProvider ->
+                val currentGeneration = preferencesRepository.getXtreamTextImportGeneration()
+                val appliedGeneration = preferencesRepository.getXtreamTextImportAppliedGeneration(currentProvider.id)
+                currentGeneration.takeIf { it > appliedGeneration }
+            }
         val beforeMetadata = syncMetadataRepository.getMetadata(providerId) ?: SyncMetadata(providerId)
         val result = syncProvider(
             SyncProviderCommand(
                 providerId = providerId,
-                force = false,
+                force = pendingXtreamTextRefreshGeneration != null,
                 movieFastSyncOverride = true,
                 epgSyncModeOverride = ProviderEpgSyncMode.BACKGROUND
             ),
@@ -219,6 +227,9 @@ internal class SettingsProviderActions(
         )
 
         if (result !is SyncProviderResult.Error) {
+            pendingXtreamTextRefreshGeneration?.let { generation ->
+                preferencesRepository.markXtreamTextImportApplied(providerId, generation)
+            }
             val afterMetadata = syncMetadataRepository.getMetadata(providerId) ?: beforeMetadata
             val liveRefreshed = afterMetadata.lastLiveSync > beforeMetadata.lastLiveSync ||
                 afterMetadata.liveCount != beforeMetadata.liveCount
@@ -267,6 +278,7 @@ internal class SettingsProviderActions(
                 userMessage = when {
                     result is SyncProviderResult.Error -> "Quick sync failed: ${result.message}"
                     (result as? SyncProviderResult.Success)?.isPartial == true -> "Quick sync completed with warnings: $warningsMessage"
+                    pendingXtreamTextRefreshGeneration != null -> "Quick sync completed and reapplied Xtream text decoding"
                     !catalogRefreshed -> "Library already up to date"
                     else -> "Quick sync completed"
                 },
@@ -280,6 +292,14 @@ internal class SettingsProviderActions(
     }
 
     private suspend fun runFullSync(providerId: Long, providerName: String?) {
+        val provider = providerRepository.getProvider(providerId)
+        val pendingXtreamTextRefreshGeneration = provider
+            ?.takeIf { it.type == ProviderType.XTREAM_CODES }
+            ?.let { currentProvider ->
+                val currentGeneration = preferencesRepository.getXtreamTextImportGeneration()
+                val appliedGeneration = preferencesRepository.getXtreamTextImportAppliedGeneration(currentProvider.id)
+                currentGeneration.takeIf { it > appliedGeneration }
+            }
         val result = syncProvider(
             SyncProviderCommand(
                 providerId = providerId,
@@ -294,6 +314,9 @@ internal class SettingsProviderActions(
             }
         )
         if (result !is SyncProviderResult.Error) {
+            pendingXtreamTextRefreshGeneration?.let { generation ->
+                preferencesRepository.markXtreamTextImportApplied(providerId, generation)
+            }
             tvInputChannelSyncManager.refreshTvInputCatalog()
         }
         uiState.update { state ->

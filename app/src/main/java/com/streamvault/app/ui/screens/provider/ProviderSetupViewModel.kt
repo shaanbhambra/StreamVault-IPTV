@@ -2,6 +2,12 @@ package com.streamvault.app.ui.screens.provider
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.streamvault.data.remote.xtream.XtreamAuthenticationException
+import com.streamvault.data.remote.xtream.XtreamNetworkException
+import com.streamvault.data.remote.xtream.XtreamParsingException
+import com.streamvault.data.remote.xtream.XtreamRequestException
+import com.streamvault.data.remote.xtream.XtreamResponseTooLargeException
+import com.streamvault.data.security.CredentialDecryptionException
 import com.streamvault.domain.model.ActiveLiveSource
 import com.streamvault.domain.model.ProviderEpgSyncMode
 import com.streamvault.domain.model.ProviderType
@@ -19,6 +25,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.InterruptedIOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import java.security.cert.CertificateException
+import javax.net.ssl.SSLException
+import javax.net.ssl.SSLPeerUnverifiedException
 
 @HiltViewModel
 class ProviderSetupViewModel @Inject constructor(
@@ -128,28 +142,13 @@ class ProviderSetupViewModel @Inject constructor(
                     }
                 }
                 is ValidateAndAddProviderResult.Error -> {
-                    val normalizedMessage = result.message.lowercase()
-                    val userMessage = when {
-                        normalizedMessage.contains("certificate") ||
-                            normalizedMessage.contains("trust") ->
-                            "Secure connection failed - the server's TLS certificate is not trusted on this device"
-                        normalizedMessage.contains("provider login succeeded") ||
-                            normalizedMessage.contains("initial sync failed") ->
-                            "Login succeeded, but the initial sync failed while loading the playlist"
-                        normalizedMessage.contains("authentication failed") ||
-                            normalizedMessage.contains("invalid credentials") ||
-                            (normalizedMessage.contains("username") && normalizedMessage.contains("password")) ->
-                            "Login failed - please check your credentials and server URL"
-                        normalizedMessage.contains("temporarily busy") ->
-                            "Server is temporarily busy - try syncing again in a moment"
-                        normalizedMessage.contains("unable to connect") ||
-                            normalizedMessage.contains("timeout") ||
-                            normalizedMessage.contains("network") ->
-                            "Cannot reach server - check your internet connection and server URL"
-                        else -> result.message
-                    }
                     _uiState.update {
-                        it.copy(isLoading = false, error = userMessage, validationError = null, syncProgress = null)
+                        it.copy(
+                            isLoading = false,
+                            error = mapXtreamLoginError(result),
+                            validationError = null,
+                            syncProgress = null
+                        )
                     }
                 }
             }
@@ -243,6 +242,65 @@ class ProviderSetupViewModel @Inject constructor(
                 loginSuccess = true
             )
         }
+    }
+
+    private fun mapXtreamLoginError(result: ValidateAndAddProviderResult.Error): String {
+        val failure = result.exception
+        return when {
+            result.message.startsWith(PROVIDER_LOGIN_SYNC_FAILED_PREFIX, ignoreCase = true) ->
+                "Login succeeded, but the initial sync failed while loading the playlist"
+
+            failure.hasCause<CredentialDecryptionException>() ->
+                failure.findCause<CredentialDecryptionException>()?.message
+                    ?: CredentialDecryptionException.MESSAGE
+
+            failure.hasCause<SSLPeerUnverifiedException>() ||
+                failure.hasCause<CertificateException>() ||
+                failure.hasCause<SSLException>() ->
+                "Secure connection failed - the server's TLS certificate is not trusted on this device"
+
+            failure.hasCause<XtreamAuthenticationException>() ->
+                "Login failed - please check your credentials and server URL"
+
+            failure.findCause<XtreamRequestException>()?.statusCode in setOf(403, 408, 429) ->
+                "Server is temporarily busy - try syncing again in a moment"
+
+            failure.findCause<XtreamRequestException>()?.statusCode == 401 ->
+                "Login failed - please check your credentials and server URL"
+
+            failure.findCause<XtreamRequestException>()?.statusCode in 500..599 ->
+                "Server is temporarily busy - try syncing again in a moment"
+
+            failure.hasCause<SocketTimeoutException>() ||
+                failure.hasCause<InterruptedIOException>() ||
+                failure.hasCause<UnknownHostException>() ||
+                failure.hasCause<ConnectException>() ||
+                failure.hasCause<NoRouteToHostException>() ||
+                failure.hasCause<XtreamNetworkException>() ->
+                "Cannot reach server - check your internet connection and server URL"
+
+            failure.hasCause<XtreamResponseTooLargeException>() ->
+                "Server returned an unusually large response - try again later or contact the provider"
+
+            failure.hasCause<XtreamParsingException>() ->
+                "Server returned unreadable data - verify the provider details and try again"
+
+            else -> result.message
+        }
+    }
+
+    private inline fun <reified T : Throwable> Throwable?.findCause(): T? {
+        return generateSequence(this) { it.cause }
+            .filterIsInstance<T>()
+            .firstOrNull()
+    }
+
+    private inline fun <reified T : Throwable> Throwable?.hasCause(): Boolean =
+        findCause<T>() != null
+
+    private companion object {
+        private const val PROVIDER_LOGIN_SYNC_FAILED_PREFIX =
+            "Provider login succeeded, but initial sync failed"
     }
 }
 

@@ -6,6 +6,7 @@ import com.streamvault.domain.model.Series
 import com.streamvault.domain.repository.ChannelRepository
 import com.streamvault.domain.repository.MovieRepository
 import com.streamvault.domain.repository.SeriesRepository
+import com.streamvault.domain.util.shouldRethrowDomainFlowFailure
 import java.util.logging.Level
 import java.util.logging.Logger
 import javax.inject.Inject
@@ -68,6 +69,9 @@ class SearchContent @Inject constructor(
                 series = series.take(maxResultsPerSection)
             )
         }.catch { error ->
+            if (error.shouldRethrowDomainFlowFailure()) {
+                throw error
+            }
             logger.log(Level.WARNING, "Failed to build search results", error)
             emit(SearchContentResult())
         }

@@ -44,7 +44,7 @@ class PlayerRetryPolicyTest {
         val error = BehindLiveWindowException()
         assertThat(policy.shouldRetry(error, liveContext, playbackStarted = false, attempt = 1)).isTrue()
         assertThat(policy.shouldRetry(error, liveContext, playbackStarted = false, attempt = 2)).isFalse()
-        assertThat(policy.retryDelayMs(error, 1)).isEqualTo(0L)
+        assertThat(policy.retryDelayMs(error, 1)).isEqualTo(500L)
     }
 
     @Test

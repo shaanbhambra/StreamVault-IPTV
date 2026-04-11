@@ -61,6 +61,7 @@ class MovieRepositoryImpl @Inject constructor(
     private val categoryDao: CategoryDao,
     private val providerDao: ProviderDao,
     private val xtreamApiService: XtreamApiService,
+    private val credentialCrypto: CredentialCrypto,
     private val preferencesRepository: PreferencesRepository,
     private val favoriteDao: FavoriteDao,
     private val playbackHistoryDao: PlaybackHistoryDao,
@@ -936,13 +937,19 @@ class MovieRepositoryImpl @Inject constructor(
             ?: movie.year?.toLongOrNull()
             ?: 0L
 
-    private fun getOrCreateXtreamProvider(providerId: Long, provider: ProviderEntity): XtreamProvider {
-        val signature = listOf(provider.serverUrl, provider.username, provider.password).joinToString("\u0000")
+    private suspend fun getOrCreateXtreamProvider(providerId: Long, provider: ProviderEntity): XtreamProvider {
+        val enableBase64TextCompatibility = preferencesRepository.xtreamBase64TextCompatibility.first()
+        val signature = listOf(
+            provider.serverUrl,
+            provider.username,
+            provider.password,
+            enableBase64TextCompatibility.toString()
+        ).joinToString("\u0000")
         return xtreamProviderCache.compute(providerId) { _, cached ->
             if (cached != null && cached.signature == signature) {
                 cached
             } else {
-                val decryptedPassword = CredentialCrypto.decryptIfNeeded(provider.password)
+                val decryptedPassword = credentialCrypto.decryptIfNeeded(provider.password)
                 CachedXtreamProvider(
                     signature = signature,
                     provider = XtreamProvider(
@@ -951,7 +958,8 @@ class MovieRepositoryImpl @Inject constructor(
                         serverUrl = provider.serverUrl,
                         username = provider.username,
                         password = decryptedPassword,
-                        allowedOutputFormats = provider.toDomain().allowedOutputFormats
+                        allowedOutputFormats = provider.toDomain().allowedOutputFormats,
+                        enableBase64TextCompatibility = enableBase64TextCompatibility
                     )
                 )
             }

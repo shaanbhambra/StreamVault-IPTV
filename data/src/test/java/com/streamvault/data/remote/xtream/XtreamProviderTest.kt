@@ -144,7 +144,7 @@ class XtreamProviderTest {
     }
 
     @Test
-    fun `getVodInfo decodes common xtream metadata fields`() = runBlocking {
+    fun `getVodInfo keeps names raw while decoding common xtream metadata fields`() = runBlocking {
         val provider = XtreamProvider(
             providerId = 42,
             api = FakeXtreamApiService(
@@ -173,7 +173,7 @@ class XtreamProviderTest {
         val movie = provider.getVodInfo(99).getOrNull()
 
         assertThat(movie).isNotNull()
-        assertThat(movie?.name).isEqualTo("Movie Name")
+        assertThat(movie?.name).isEqualTo("TW92aWUgTmFtZQ==")
         assertThat(movie?.plot).isEqualTo("Some Plot")
         assertThat(movie?.cast).isEqualTo("John Doe")
         assertThat(movie?.director).isEqualTo("Jane Doe")
@@ -181,6 +181,100 @@ class XtreamProviderTest {
         assertThat(movie?.streamUrl).isEqualTo(
             "xtream://42/movie/99?ext=mkv&src=https%3A%2F%2Fcdn.example.com%2Fvod%2F99%2Fmovie.mkv%3Fexp%3D1774017000"
         )
+    }
+
+    @Test
+    fun `getSeriesList keeps plain titles that only accidentally look like base64`() = runBlocking {
+        val provider = XtreamProvider(
+            providerId = 42,
+            api = FakeXtreamApiService(
+                seriesList = listOf(
+                    XtreamSeriesItem(name = "Asaf", seriesId = 1),
+                    XtreamSeriesItem(name = "THEM", seriesId = 2),
+                    XtreamSeriesItem(name = "Silo", seriesId = 3)
+                )
+            ),
+            serverUrl = "https://example.com",
+            username = "user",
+            password = "pass"
+        )
+
+        val names = provider.getSeriesList().getOrNull().orEmpty().map { it.name }
+
+        assertThat(names).containsExactly("Asaf", "THEM", "Silo").inOrder()
+    }
+
+    @Test
+    fun `getSeriesList keeps padded base64 looking titles raw`() {
+        runBlocking {
+            val provider = XtreamProvider(
+                providerId = 42,
+                api = FakeXtreamApiService(
+                    seriesList = listOf(
+                        XtreamSeriesItem(name = "TW92aWUgTmFtZQ==", seriesId = 77)
+                    )
+                ),
+                serverUrl = "https://example.com",
+                username = "user",
+                password = "pass"
+            )
+
+            val names = provider.getSeriesList().getOrNull().orEmpty().map { it.name }
+
+            assertThat(names).containsExactly("TW92aWUgTmFtZQ==")
+        }
+    }
+
+    @Test
+    fun `getSeriesList decodes padded base64 looking titles when compatibility mode is enabled`() {
+        runBlocking {
+            val provider = XtreamProvider(
+                providerId = 42,
+                api = FakeXtreamApiService(
+                    seriesList = listOf(
+                        XtreamSeriesItem(name = "TW92aWUgTmFtZQ==", seriesId = 77)
+                    )
+                ),
+                serverUrl = "https://example.com",
+                username = "user",
+                password = "pass",
+                enableBase64TextCompatibility = true
+            )
+
+            val names = provider.getSeriesList().getOrNull().orEmpty().map { it.name }
+
+            assertThat(names).containsExactly("Movie Name")
+        }
+    }
+
+    @Test
+    fun `getFullEpg still decodes base64 title and description`() = runBlocking {
+        val provider = XtreamProvider(
+            providerId = 42,
+            api = FakeXtreamApiService(
+                fullEpg = XtreamEpgResponse(
+                    epgListings = listOf(
+                        XtreamEpgListing(
+                            id = "15",
+                            channelId = "news",
+                            title = "TmV3cyBIb3Vy",
+                            description = "VG9uaWdodCdzIGhlYWRsaW5lcw==",
+                            startTimestamp = 1_710_000_000L,
+                            stopTimestamp = 1_710_003_600L
+                        )
+                    )
+                )
+            ),
+            serverUrl = "https://example.com",
+            username = "user",
+            password = "pass"
+        )
+
+        val programs = provider.getEpg("news").getOrNull().orEmpty()
+
+        assertThat(programs).hasSize(1)
+        assertThat(programs.single().title).isEqualTo("News Hour")
+        assertThat(programs.single().description).isEqualTo("Tonight's headlines")
     }
 
     @Test

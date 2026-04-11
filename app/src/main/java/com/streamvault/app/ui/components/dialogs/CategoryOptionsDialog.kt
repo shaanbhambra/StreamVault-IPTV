@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -50,6 +51,7 @@ fun CategoryOptionsDialog(
     onReorderChannels: (() -> Unit)? = null
 ) {
     var canInteract by remember { mutableStateOf(false) }
+    val blockOpenGesture = rememberDialogOpenGestureBlocker(canInteract)
     LaunchedEffect(Unit) {
         delay(500)
         canInteract = true
@@ -75,7 +77,9 @@ fun CategoryOptionsDialog(
                 else -> 0.38f
             }
         Surface(
-            modifier = Modifier.fillMaxWidth(dialogWidth),
+            modifier = Modifier
+                .fillMaxWidth(dialogWidth)
+                .onPreviewKeyEvent(blockOpenGesture),
             shape = RoundedCornerShape(24.dp),
             colors = SurfaceDefaults.colors(containerColor = SurfaceElevated)
         ) {

@@ -184,6 +184,20 @@ fun MoviesScreen(
                     subtitle = uiState.errorMessage ?: ""
                 )
             }
+        } else if (!uiState.hasProviders) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                AppMessageState(
+                    title = stringResource(R.string.home_add_first_provider),
+                    subtitle = stringResource(R.string.home_add_first_provider_subtitle)
+                )
+            }
+        } else if (!uiState.hasActiveProvider || (uiState.moviesByCategory.isEmpty() && uiState.libraryCount == 0 && uiState.searchQuery.isBlank() && !uiState.isLoadingPreviewRows)) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                AppMessageState(
+                    title = stringResource(R.string.vod_sync_needed_title),
+                    subtitle = stringResource(R.string.vod_sync_needed_subtitle)
+                )
+            }
         } else if (uiState.moviesByCategory.isEmpty() && !uiState.isLoadingPreviewRows) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 AppMessageState(
@@ -390,10 +404,16 @@ private fun MoviesVodContent(
             category == null || !isCategoryHidden(category)
         }
     }
-    val catEntries = uiState.moviesByCategory.entries
-        .filter { (name, items) ->
-            name != uiState.favoriteCategoryName && name in visibleCategoryNames && items.isNotEmpty()
-        }.toList()
+    val visibleCategoryNameSet = remember(visibleCategoryNames) {
+        visibleCategoryNames.toSet()
+    }
+    val catEntries = remember(uiState.moviesByCategory, visibleCategoryNameSet, uiState.favoriteCategoryName) {
+        uiState.moviesByCategory.entries
+            .filter { (name, items) ->
+                name != uiState.favoriteCategoryName && name in visibleCategoryNameSet && items.isNotEmpty()
+            }
+            .toList()
+    }
     val fallbackMovieId = if (heroMovie == null) {
         favoriteMovies.firstOrNull()?.id
             ?: freshMovies.firstOrNull()?.id

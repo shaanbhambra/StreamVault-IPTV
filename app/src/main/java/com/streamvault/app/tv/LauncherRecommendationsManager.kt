@@ -22,8 +22,12 @@ import com.streamvault.domain.repository.PlaybackHistoryRepository
 import com.streamvault.domain.repository.ProviderRepository
 import com.streamvault.domain.repository.SeriesRepository
 import com.streamvault.domain.usecase.GetRecommendations
+import kotlinx.coroutines.Dispatchers
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.OutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,38 +41,51 @@ class LauncherRecommendationsManager @Inject constructor(
     private val seriesRepository: SeriesRepository
 ) {
     private val getRecommendations = GetRecommendations(movieRepository)
+    private val refreshMutex = Mutex()
+    @Volatile
+    private var lastRefreshAtMs: Long = 0L
 
-    suspend fun refreshRecommendations() {
-        if (!context.isTelevisionDevice()) return
-        val provider = providerRepository.getActiveProvider().first()
-        if (provider == null) {
-            deleteAllManagedChannels()
-            return
-        }
+    suspend fun refreshRecommendations(force: Boolean = false) = withContext(Dispatchers.IO) {
+        if (!context.isTelevisionDevice()) return@withContext
 
-        runCatching {
-            val specs = buildChannelSpecs(provider)
-            val existingChannels = loadExistingChannels()
-            val activeKeys = specs.mapTo(mutableSetOf()) { it.key }
-
-            existingChannels
-                .filterKeys { it !in activeKeys }
-                .values
-                .forEach(::deleteChannel)
-
-            specs.forEach { spec ->
-                if (spec.programs.isEmpty()) {
-                    existingChannels[spec.key]?.let(::deleteChannel)
-                    return@forEach
-                }
-
-                val channelId = existingChannels[spec.key] ?: insertChannel(spec) ?: return@forEach
-                updateChannel(channelId, spec)
-                syncPrograms(channelId, spec)
-                requestChannelBrowsable(channelId)
+        refreshMutex.withLock {
+            val now = System.currentTimeMillis()
+            if (!force && lastRefreshAtMs > 0L && now - lastRefreshAtMs < MIN_REFRESH_INTERVAL_MS) {
+                return@withLock
             }
-        }.onFailure { throwable ->
-            Log.w(TAG, "Launcher recommendation sync failed", throwable)
+
+            val provider = providerRepository.getActiveProvider().first()
+            if (provider == null) {
+                deleteAllManagedChannels()
+                lastRefreshAtMs = now
+                return@withLock
+            }
+
+            runCatching {
+                val specs = buildChannelSpecs(provider)
+                val existingChannels = loadExistingChannels()
+                val activeKeys = specs.mapTo(mutableSetOf()) { it.key }
+
+                existingChannels
+                    .filterKeys { it !in activeKeys }
+                    .values
+                    .forEach(::deleteChannel)
+
+                specs.forEach { spec ->
+                    if (spec.programs.isEmpty()) {
+                        existingChannels[spec.key]?.let(::deleteChannel)
+                        return@forEach
+                    }
+
+                    val channelId = existingChannels[spec.key] ?: insertChannel(spec) ?: return@forEach
+                    updateChannel(channelId, spec)
+                    syncPrograms(channelId, spec)
+                    requestChannelBrowsable(channelId)
+                }
+                lastRefreshAtMs = now
+            }.onFailure { throwable ->
+                Log.w(TAG, "Launcher recommendation sync failed", throwable)
+            }
         }
     }
 
@@ -371,6 +388,7 @@ class LauncherRecommendationsManager @Inject constructor(
 
     private companion object {
         const val TAG = "LauncherRecommendations"
+        const val MIN_REFRESH_INTERVAL_MS = 15 * 60 * 1000L
         const val CHANNEL_CONTINUE_WATCHING = "streamvault_continue_watching"
         const val CHANNEL_TOP_MOVIES = "streamvault_top_movies"
         const val CHANNEL_FRESH_SERIES = "streamvault_fresh_series"

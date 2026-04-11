@@ -158,6 +158,37 @@ class ValidateAndAddProviderTest {
             )
         )
     }
+
+    @Test
+    fun rejects_xtream_playlist_with_oversized_decoded_password() = runTest {
+        val repository = FakeProviderRepository()
+        val oversizedPassword = "p".repeat(257)
+        val encodedPassword = java.net.URLEncoder.encode(oversizedPassword, java.nio.charset.StandardCharsets.UTF_8.name())
+        val useCase = ValidateAndAddProvider(
+            providerSetupInputValidator = FakeProviderSetupInputValidator(
+                m3uResult = Result.success(
+                    ValidatedM3uProviderInput(
+                        url = "https://example.com/get.php?username=user&password=$encodedPassword&type=m3u_plus",
+                        name = "Imported Playlist"
+                    )
+                )
+            ),
+            providerRepository = repository
+        )
+
+        val result = useCase.addM3u(
+            M3uProviderSetupCommand(
+                url = "https://example.com/get.php?username=user&password=$encodedPassword&type=m3u_plus",
+                name = "Imported Playlist"
+            )
+        )
+
+        assertThat(result).isInstanceOf(ValidateAndAddProviderResult.ValidationError::class.java)
+        assertThat((result as ValidateAndAddProviderResult.ValidationError).message)
+            .isEqualTo("Playlist password is too long.")
+        assertThat(repository.lastXtreamCall).isNull()
+        assertThat(repository.lastM3uCall).isNull()
+    }
 }
 
 private class FakeProviderSetupInputValidator(
@@ -253,6 +284,7 @@ private class FakeProviderRepository : ProviderRepository {
         providerId: Long,
         force: Boolean,
         movieFastSyncOverride: Boolean?,
+        epgSyncModeOverride: ProviderEpgSyncMode?,
         onProgress: ((String) -> Unit)?
     ): Result<Unit> = error("Not used in test")
 

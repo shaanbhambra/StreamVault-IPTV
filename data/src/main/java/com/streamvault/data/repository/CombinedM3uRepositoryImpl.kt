@@ -67,7 +67,11 @@ class CombinedM3uRepositoryImpl @Inject constructor(
         if (distinctProviderIds.isEmpty()) {
             return Result.error("Select at least one M3U provider.")
         }
-        val providers = distinctProviderIds.mapNotNull { providerDao.getById(it)?.toDomain() }
+        val providersById = providerDao.getByIds(distinctProviderIds)
+            .associateBy { it.id }
+        val providers = distinctProviderIds.mapNotNull { providerId ->
+            providersById[providerId]?.toDomain()
+        }
         if (providers.size != distinctProviderIds.size || providers.any { it.type != ProviderType.M3U }) {
             return Result.error("Combined profiles support M3U providers only.")
         }

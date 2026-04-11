@@ -58,38 +58,35 @@ class M3uParser {
         var header = M3uHeader()
         var pendingExtinf: ParsedExtinf? = null
 
+        // lineSequence() streams the InputStream one line at a time — only a single
+        // String is allocated per iteration; prior lines are immediately eligible for GC.
+        // This keeps memory flat regardless of playlist size (e.g. 500 MB feeds).
         reader.use {
-            while (true) {
-                val rawLine = reader.readLine() ?: break
-                val line = sanitizeLine(rawLine)
-                if (line.isEmpty()) {
-                    continue
-                }
-
-                when {
-                    line.startsWith("#EXTM3U", ignoreCase = true) -> {
-                        header = parseHeader(line)
-                    }
-                    line.startsWith("#EXTINF", ignoreCase = true) -> {
-                        pendingExtinf = parseExtinf(line)
-                    }
-                    line.startsWith("#") -> {
-                        // Preserve pendingExtinf across known directives that appear
-                        // between #EXTINF and the stream URL (e.g. #EXTVLCOPT, #EXTGRP,
-                        // #KODIPROP, #EXTATTRPARAM). Only reset on another #EXTINF.
-                    }
-                    pendingExtinf != null -> {
-                        val extinf = pendingExtinf
-                        if (extinf != null) {
-                            parseEntry(extinf, line, header.userAgent)?.let(entries::add)
+            reader.lineSequence()
+                .map { sanitizeLine(it) }
+                .filter { it.isNotEmpty() }
+                .forEach { line ->
+                    when {
+                        line.startsWith("#EXTM3U", ignoreCase = true) -> {
+                            header = parseHeader(line)
                         }
-                        pendingExtinf = null
-                    }
-                    else -> {
-                        // Non-comment, non-URL line with no pending EXTINF — skip
+                        line.startsWith("#EXTINF", ignoreCase = true) -> {
+                            pendingExtinf = parseExtinf(line)
+                        }
+                        line.startsWith("#") -> {
+                            // Preserve pendingExtinf across known directives that appear
+                            // between #EXTINF and the stream URL (e.g. #EXTVLCOPT, #EXTGRP,
+                            // #KODIPROP, #EXTATTRPARAM). Only reset on another #EXTINF.
+                        }
+                        pendingExtinf != null -> {
+                            parseEntry(pendingExtinf!!, line, header.userAgent)?.let(entries::add)
+                            pendingExtinf = null
+                        }
+                        else -> {
+                            // Non-comment, non-URL line with no pending EXTINF — skip
+                        }
                     }
                 }
-            }
         }
 
         return ParseResult(header, entries)
@@ -104,13 +101,15 @@ class M3uParser {
         var header = M3uHeader()
         var pendingExtinf: ParsedExtinf? = null
 
+        // Use a for-loop over lineSequence() rather than .forEach{} because onHeader and
+        // onEntry are suspend lambdas. Sequence.forEach is not an inline function, so the
+        // compiler cannot allow coroutine suspension inside it. A for-loop over the same
+        // sequence is fully coroutine-compatible and preserves the one-line-at-a-time
+        // memory profile.
         reader.use {
-            while (true) {
-                val rawLine = reader.readLine() ?: break
+            for (rawLine in reader.lineSequence()) {
                 val line = sanitizeLine(rawLine)
-                if (line.isEmpty()) {
-                    continue
-                }
+                if (line.isEmpty()) continue
 
                 when {
                     line.startsWith("#EXTM3U", ignoreCase = true) -> {
@@ -126,10 +125,7 @@ class M3uParser {
                         // #KODIPROP, #EXTATTRPARAM). Only reset on another #EXTINF.
                     }
                     pendingExtinf != null -> {
-                        val extinf = pendingExtinf
-                        if (extinf != null) {
-                            parseEntry(extinf, line, header.userAgent)?.let { onEntry(it) }
-                        }
+                        parseEntry(pendingExtinf!!, line, header.userAgent)?.let { onEntry(it) }
                         pendingExtinf = null
                     }
                     else -> {

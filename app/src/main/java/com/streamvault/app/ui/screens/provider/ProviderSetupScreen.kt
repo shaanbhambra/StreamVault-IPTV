@@ -1,5 +1,6 @@
 package com.streamvault.app.ui.screens.provider
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -40,6 +41,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -80,6 +82,7 @@ private enum class SourceType { XTREAM, M3U_URL, M3U_FILE }
 @Composable
 fun ProviderSetupScreen(
     onProviderAdded: () -> Unit,
+    onBack: () -> Unit,
     editProviderId: Long? = null,
     initialImportUri: String? = null,
     viewModel: ProviderSetupViewModel = hiltViewModel()
@@ -98,6 +101,7 @@ fun ProviderSetupScreen(
     var password by rememberSaveable { mutableStateOf("") }
     var fileImportError by rememberSaveable { mutableStateOf<String?>(null) }
     var handledInitialImportUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var showDiscardDraftDialog by rememberSaveable { mutableStateOf(false) }
 
     // ?? File import helper ????????????????????????????????????????????????????
     fun importM3uUri(uri: android.net.Uri) {
@@ -236,6 +240,21 @@ fun ProviderSetupScreen(
         }
     }
 
+    val hasUnsavedDraft = !uiState.isEditing && name.isBlank() && (
+        serverUrl.isNotBlank() ||
+            username.isNotBlank() ||
+            password.isNotBlank() ||
+            m3uUrl.isNotBlank()
+        )
+
+    BackHandler {
+        if (hasUnsavedDraft) {
+            showDiscardDraftDialog = true
+        } else {
+            onBack()
+        }
+    }
+
     // ?? Layout ????????????????????????????????????????????????????????????????
     BoxWithConstraints(
         modifier = Modifier
@@ -317,6 +336,29 @@ fun ProviderSetupScreen(
 
     if (uiState.syncProgress != null) {
         SyncProgressDialog(message = uiState.syncProgress!!)
+    }
+
+    if (showDiscardDraftDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showDiscardDraftDialog = false },
+            title = { Text(stringResource(R.string.setup_discard_draft_title)) },
+            text = { Text(stringResource(R.string.setup_discard_draft_body), color = OnSurface) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDiscardDraftDialog = false
+                        onBack()
+                    }
+                ) {
+                    Text(stringResource(R.string.setup_discard_draft_confirm), color = Primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardDraftDialog = false }) {
+                    Text(stringResource(R.string.setup_discard_draft_cancel), color = OnSurface)
+                }
+            }
+        )
     }
 }
 
@@ -917,6 +959,7 @@ private fun ProviderTextField(
     var hasInputFocus by remember { mutableStateOf(false) }
     var acceptsInput by remember(isTelevisionDevice) { mutableStateOf(!isTelevisionDevice) }
     var pendingInputActivation by remember { mutableStateOf(false) }
+    var editBaselineValue by remember { mutableStateOf(value) }
     var fieldValue by remember {
         mutableStateOf(TextFieldValue(text = value, selection = TextRange(value.length)))
     }
@@ -939,6 +982,9 @@ private fun ProviderTextField(
     }
 
     fun activateInput() {
+        if (!acceptsInput) {
+            editBaselineValue = value
+        }
         if (!isTelevisionDevice) {
             acceptsInput = true
             inputFocusRequester.requestFocus()
@@ -1058,6 +1104,20 @@ private fun ProviderTextField(
                     }
                     val cursor = fieldValue.selection.end
                     when (event.nativeKeyEvent.keyCode) {
+                        android.view.KeyEvent.KEYCODE_BACK -> {
+                            fieldValue = TextFieldValue(
+                                text = editBaselineValue,
+                                selection = TextRange(editBaselineValue.length)
+                            )
+                            if (editBaselineValue != value) {
+                                onValueChange(editBaselineValue)
+                            }
+                            acceptsInput = false
+                            pendingInputActivation = false
+                            keyboardController?.hide()
+                            containerFocusRequester.requestFocus()
+                            true
+                        }
                         android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                             val nextCursor = (cursor - 1).coerceAtLeast(0)
                             fieldValue = fieldValue.copy(selection = TextRange(nextCursor))

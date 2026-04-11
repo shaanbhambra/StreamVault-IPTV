@@ -32,7 +32,7 @@ object ProviderInputSanitizer {
     }
 
     private fun sanitizeSingleLine(input: String, maxLength: Int): String {
-        return sanitizeRaw(input, maxLength).replace(LINE_BREAK_REGEX, " ")
+        return sanitizeRaw(input, maxLength).replace(WHITESPACE_REGEX, " ")
     }
 
     private fun sanitizeRaw(input: String, maxLength: Int): String {
@@ -46,6 +46,5 @@ object ProviderInputSanitizer {
         return sanitized.take(maxLength)
     }
 
-    private val LINE_BREAK_REGEX = Regex("\\s+")
     private val WHITESPACE_REGEX = Regex("\\s+")
 }

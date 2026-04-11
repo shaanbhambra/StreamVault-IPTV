@@ -23,6 +23,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
@@ -40,6 +41,7 @@ import com.streamvault.app.localization.supportedAppLanguageTags
 import com.streamvault.app.ui.components.dialogs.PremiumDialog
 import com.streamvault.app.ui.components.dialogs.PremiumDialogActionButton
 import com.streamvault.app.ui.components.dialogs.PremiumDialogFooterButton
+import com.streamvault.app.ui.components.dialogs.rememberDialogOpenGestureBlocker
 import com.streamvault.app.ui.design.FocusSpec
 import com.streamvault.app.ui.interaction.TvButton
 import com.streamvault.app.ui.interaction.TvClickableSurface
@@ -70,13 +72,20 @@ internal fun PremiumSelectionDialog(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val isTelevisionDevice = com.streamvault.app.device.rememberIsTelevisionDevice()
-    Dialog(onDismissRequest = onDismiss) {
+    var canInteract by remember { mutableStateOf(false) }
+    val blockOpenGesture = rememberDialogOpenGestureBlocker(canInteract)
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(500)
+        canInteract = true
+    }
+    Dialog(onDismissRequest = { if (canInteract) onDismiss() }) {
         val dialogContent: @Composable (Modifier) -> Unit = { resolvedModifier ->
             androidx.compose.material3.Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = SurfaceElevated,
                 modifier = resolvedModifier
                     .border(1.dp, Primary.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                    .onPreviewKeyEvent(blockOpenGesture)
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp),
@@ -99,7 +108,7 @@ internal fun PremiumSelectionDialog(
                         horizontalArrangement = Arrangement.End
                     ) {
                         TvClickableSurface(
-                            onClick = onDismiss,
+                            onClick = { if (canInteract) onDismiss() },
                             shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),
                             colors = ClickableSurfaceDefaults.colors(
                                 containerColor = Primary.copy(alpha = 0.2f),

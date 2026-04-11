@@ -1,5 +1,6 @@
 package com.streamvault.data.repository
 
+import com.streamvault.data.local.DatabaseTransactionRunner
 import com.streamvault.data.local.dao.EpisodeDao
 import com.streamvault.data.local.dao.MovieDao
 import com.streamvault.data.local.dao.PlaybackHistoryDao
@@ -23,7 +24,8 @@ class PlaybackHistoryRepositoryImpl @Inject constructor(
     private val dao: PlaybackHistoryDao,
     private val preferencesRepository: PreferencesRepository,
     private val movieDao: MovieDao,
-    private val episodeDao: EpisodeDao
+    private val episodeDao: EpisodeDao,
+    private val transactionRunner: DatabaseTransactionRunner
 ) : PlaybackHistoryRepository {
 
     override fun getRecentlyWatched(limit: Int): Flow<List<PlaybackHistory>> {
@@ -67,8 +69,10 @@ class PlaybackHistoryRepositoryImpl @Inject constructor(
                 watchedStatus = PlaybackWatchedStatus.COMPLETED_MANUAL,
                 lastWatchedAt = System.currentTimeMillis()
             )
-            dao.insertOrUpdate(updatedHistory.toEntity())
-            syncDenormalizedProgress(updatedHistory.contentId, updatedHistory.contentType, updatedHistory.providerId)
+            transactionRunner.inTransaction {
+                dao.insertOrUpdate(updatedHistory.toEntity())
+                syncDenormalizedProgress(updatedHistory.contentId, updatedHistory.contentType, updatedHistory.providerId)
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.error("Failed to mark content as watched", e)
@@ -94,8 +98,10 @@ class PlaybackHistoryRepositoryImpl @Inject constructor(
                 ),
                 lastWatchedAt = System.currentTimeMillis()
             )
-            dao.insertOrUpdate(updatedHistory.toEntity())
-            syncDenormalizedProgress(updatedHistory.contentId, updatedHistory.contentType, updatedHistory.providerId)
+            transactionRunner.inTransaction {
+                dao.insertOrUpdate(updatedHistory.toEntity())
+                syncDenormalizedProgress(updatedHistory.contentId, updatedHistory.contentType, updatedHistory.providerId)
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.error("Failed to record playback history", e)
@@ -121,8 +127,10 @@ class PlaybackHistoryRepositoryImpl @Inject constructor(
                 ),
                 lastWatchedAt = System.currentTimeMillis()
             )
-            dao.insertOrUpdate(updatedHistory.toEntity())
-            syncDenormalizedProgress(updatedHistory.contentId, updatedHistory.contentType, updatedHistory.providerId)
+            transactionRunner.inTransaction {
+                dao.insertOrUpdate(updatedHistory.toEntity())
+                syncDenormalizedProgress(updatedHistory.contentId, updatedHistory.contentType, updatedHistory.providerId)
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.error("Failed to update playback resume position", e)
@@ -130,24 +138,30 @@ class PlaybackHistoryRepositoryImpl @Inject constructor(
     }
 
     override suspend fun removeFromHistory(contentId: Long, contentType: ContentType, providerId: Long): Result<Unit> = try {
-        dao.delete(contentId, contentType.name, providerId)
-        syncDenormalizedProgress(contentId, contentType, providerId)
+        transactionRunner.inTransaction {
+            dao.delete(contentId, contentType.name, providerId)
+            syncDenormalizedProgress(contentId, contentType, providerId)
+        }
         Result.success(Unit)
     } catch (e: Exception) {
         Result.error("Failed to remove playback history item", e)
     }
 
     override suspend fun clearAllHistory(): Result<Unit> = try {
-        dao.deleteAll()
-        syncAllDenormalizedProgress()
+        transactionRunner.inTransaction {
+            dao.deleteAll()
+            syncAllDenormalizedProgress()
+        }
         Result.success(Unit)
     } catch (e: Exception) {
         Result.error("Failed to clear playback history", e)
     }
 
     override suspend fun clearHistoryForProvider(providerId: Long): Result<Unit> = try {
-        dao.deleteByProvider(providerId)
-        syncDenormalizedProgressForProvider(providerId)
+        transactionRunner.inTransaction {
+            dao.deleteByProvider(providerId)
+            syncDenormalizedProgressForProvider(providerId)
+        }
         Result.success(Unit)
     } catch (e: Exception) {
         Result.error("Failed to clear provider playback history", e)

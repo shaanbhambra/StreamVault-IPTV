@@ -16,7 +16,8 @@ data class ResolvedStreamUrl(
 
 @Singleton
 class XtreamStreamUrlResolver @Inject constructor(
-    private val providerDao: ProviderDao
+    private val providerDao: ProviderDao,
+    private val credentialCrypto: CredentialCrypto
 ) {
     fun isInternalStreamUrl(url: String?): Boolean = XtreamUrlFactory.isInternalStreamUrl(url)
 
@@ -64,7 +65,7 @@ class XtreamStreamUrlResolver @Inject constructor(
         val streamId = token?.streamId ?: fallbackStreamId?.takeIf { it > 0 } ?: return null
         val ext = token?.containerExtension ?: fallbackContainerExtension
         val directSource = token?.directSource?.takeIf(UrlSecurityPolicy::isAllowedStreamEntryUrl)
-        val decryptedPassword = CredentialCrypto.decryptIfNeeded(provider.password)
+        val decryptedPassword = credentialCrypto.decryptIfNeeded(provider.password)
 
         val fallbackResolvedUrl = XtreamUrlFactory.buildPlaybackUrl(
             serverUrl = provider.serverUrl,
