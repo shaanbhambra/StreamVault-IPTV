@@ -94,7 +94,7 @@ class SeriesRepositoryImpl @Inject constructor(
             seriesDao.getByProvider(providerId),
             preferencesRepository.parentalControlLevel
         ) { entities, level: Int ->
-            if (level == 2) {
+            if (level >= 3) {
                 entities.filter { !it.isUserProtected }
             } else {
                 entities
@@ -109,7 +109,7 @@ class SeriesRepositoryImpl @Inject constructor(
                     seriesDao.getByCategory(providerId, categoryId),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level: Int ->
-                    if (level == 2) {
+                    if (level >= 3) {
                         entities.filter { !it.isUserProtected }
                     } else {
                         entities
@@ -130,7 +130,7 @@ class SeriesRepositoryImpl @Inject constructor(
                 seriesDao.getByCategoryPage(providerId, categoryId, limit, offset),
                 preferencesRepository.parentalControlLevel
             ) { entities, level: Int ->
-                if (level == 2) {
+                if (level >= 3) {
                     entities.filter { !it.isUserProtected }
                 } else {
                     entities
@@ -147,7 +147,7 @@ class SeriesRepositoryImpl @Inject constructor(
                     seriesDao.getByCategoryPreview(providerId, categoryId, limit),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level: Int ->
-                    if (level == 2) {
+                    if (level >= 3) {
                         entities.filter { !it.isUserProtected }
                     } else {
                         entities
@@ -162,7 +162,7 @@ class SeriesRepositoryImpl @Inject constructor(
             preferencesRepository.parentalControlLevel
         ) { categories, level ->
             val requestedIds = categoryIds.toSet()
-            val filtered = if (level == 2) categories.filter { !it.isAdult && !it.isUserProtected } else categories
+            val filtered = if (level >= 3) categories.filter { !it.isAdult && !it.isUserProtected } else categories
             filtered.filter { it.categoryId in requestedIds } to level
         }.flatMapLatest { (filteredCategories, level) ->
             if (filteredCategories.isEmpty()) {
@@ -180,7 +180,7 @@ class SeriesRepositoryImpl @Inject constructor(
                 val categoryGroupFlows: List<Flow<Pair<Long?, List<Series>>>> = filteredCategories.map { cat ->
                     seriesDao.getByCategoryPreview(providerId, cat.categoryId, limitPerCategory)
                         .map { entities ->
-                            val items = if (level == 2) entities.filter { !it.isUserProtected } else entities
+                            val items = if (level >= 3) entities.filter { !it.isUserProtected } else entities
                             (cat.categoryId as Long?) to items.map { it.toDomain() }
                         }
                 }
@@ -195,7 +195,7 @@ class SeriesRepositoryImpl @Inject constructor(
             seriesDao.getTopRatedPreview(providerId, limit),
             preferencesRepository.parentalControlLevel
         ) { entities, level: Int ->
-            if (level == 2) {
+            if (level >= 3) {
                 entities.filter { !it.isUserProtected }
             } else {
                 entities
@@ -207,7 +207,7 @@ class SeriesRepositoryImpl @Inject constructor(
             seriesDao.getFreshPreview(providerId, limit),
             preferencesRepository.parentalControlLevel
         ) { entities, level: Int ->
-            if (level == 2) {
+            if (level >= 3) {
                 entities.filter { !it.isUserProtected }
             } else {
                 entities
@@ -223,7 +223,7 @@ class SeriesRepositoryImpl @Inject constructor(
             preferencesRepository.parentalControlLevel
         ) { entities: List<CategoryEntity>, level: Int ->
             val mapped = entities.map { it.toDomain() }
-            if (level == 2) {
+            if (level >= 3) {
                 mapped.filter { !it.isAdult && !it.isUserProtected }
             } else {
                 mapped
@@ -253,7 +253,7 @@ class SeriesRepositoryImpl @Inject constructor(
                 safeSeriesSearchFlow(seriesDao.search(providerId, ftsQuery, SEARCH_RESULT_LIMIT)),
                 preferencesRepository.parentalControlLevel
             ) { entities, level: Int ->
-                if (level == 2) {
+                if (level >= 3) {
                     entities.filter { !it.isUserProtected }
                 } else {
                     entities
@@ -444,7 +444,7 @@ class SeriesRepositoryImpl @Inject constructor(
                         safeSeriesSearchFlow(seriesDao.searchByCategory(query.providerId, categoryId, ftsQuery, SEARCH_RESULT_LIMIT)),
                         preferencesRepository.parentalControlLevel
                     ) { entities, level ->
-                        if (level == 2) entities.filter { !it.isUserProtected } else entities
+                        if (level >= 3) entities.filter { !it.isUserProtected } else entities
                     }.map { entities ->
                         entities.map { it.toDomain() }
                             .rankSearchResults(normalizedSearch) { it.name }
@@ -463,7 +463,7 @@ class SeriesRepositoryImpl @Inject constructor(
                                         seriesDao.getTopRatedByCategoryPreview(query.providerId, categoryId, fetchLimit),
                                         preferencesRepository.parentalControlLevel
                                     ) { entities, level ->
-                                        if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                        if (level >= 3) entities.filter { !it.isUserProtected } else entities
                                     }.map { entities -> entities.map { it.toDomain() } }
                                 )
                             }
@@ -478,7 +478,7 @@ class SeriesRepositoryImpl @Inject constructor(
                                         seriesDao.getFreshByCategoryPreview(query.providerId, categoryId, fetchLimit),
                                         preferencesRepository.parentalControlLevel
                                     ) { entities, level ->
-                                        if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                        if (level >= 3) entities.filter { !it.isUserProtected } else entities
                                     }.map { entities -> entities.map { it.toDomain() } }
                                 )
                             }
@@ -493,7 +493,7 @@ class SeriesRepositoryImpl @Inject constructor(
                                         seriesDao.getByCategoryPage(query.providerId, categoryId, fetchLimit, 0),
                                         preferencesRepository.parentalControlLevel
                                     ) { entities, level ->
-                                        if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                        if (level >= 3) entities.filter { !it.isUserProtected } else entities
                                     }.map { entities -> entities.map { it.toDomain() } }
                                 )
                             }
@@ -501,7 +501,7 @@ class SeriesRepositoryImpl @Inject constructor(
                             seriesDao.getByProviderPage(query.providerId, fetchLimit, 0),
                             preferencesRepository.parentalControlLevel
                         ) { entities, level ->
-                            if (level == 2) entities.filter { !it.isUserProtected } else entities
+                            if (level >= 3) entities.filter { !it.isUserProtected } else entities
                         }.map { entities -> entities.map { it.toDomain() } }
                     }
                 }
@@ -517,7 +517,7 @@ class SeriesRepositoryImpl @Inject constructor(
                                 seriesDao.getFavoritesByCategoryPage(query.providerId, categoryId, fetchLimit, 0),
                                 preferencesRepository.parentalControlLevel
                             ) { entities, level ->
-                                if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                if (level >= 3) entities.filter { !it.isUserProtected } else entities
                             }.map { entities -> entities.map { it.toDomain() } }
                         )
                     }
@@ -525,7 +525,7 @@ class SeriesRepositoryImpl @Inject constructor(
                     seriesDao.getFavoritesByProviderPage(query.providerId, fetchLimit, 0),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level ->
-                    if (level == 2) entities.filter { !it.isUserProtected } else entities
+                    if (level >= 3) entities.filter { !it.isUserProtected } else entities
                 }.map { entities -> entities.map { it.toDomain() } }
             }
             normalizedSearch.isBlank() &&
@@ -539,7 +539,7 @@ class SeriesRepositoryImpl @Inject constructor(
                                 seriesDao.getInProgressByCategoryPage(query.providerId, categoryId, fetchLimit, 0),
                                 preferencesRepository.parentalControlLevel
                             ) { entities, level ->
-                                if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                if (level >= 3) entities.filter { !it.isUserProtected } else entities
                             }.map { entities -> entities.map { it.toDomain() } }
                         )
                     }
@@ -547,7 +547,7 @@ class SeriesRepositoryImpl @Inject constructor(
                     seriesDao.getInProgressByProviderPage(query.providerId, fetchLimit, 0),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level ->
-                    if (level == 2) entities.filter { !it.isUserProtected } else entities
+                    if (level >= 3) entities.filter { !it.isUserProtected } else entities
                 }.map { entities -> entities.map { it.toDomain() } }
             }
             normalizedSearch.isBlank() &&
@@ -561,7 +561,7 @@ class SeriesRepositoryImpl @Inject constructor(
                                 seriesDao.getUnwatchedByCategoryPage(query.providerId, categoryId, fetchLimit, 0),
                                 preferencesRepository.parentalControlLevel
                             ) { entities, level ->
-                                if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                if (level >= 3) entities.filter { !it.isUserProtected } else entities
                             }.map { entities -> entities.map { it.toDomain() } }
                         )
                     }
@@ -569,7 +569,7 @@ class SeriesRepositoryImpl @Inject constructor(
                     seriesDao.getUnwatchedByProviderPage(query.providerId, fetchLimit, 0),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level ->
-                    if (level == 2) entities.filter { !it.isUserProtected } else entities
+                    if (level >= 3) entities.filter { !it.isUserProtected } else entities
                 }.map { entities -> entities.map { it.toDomain() } }
             }
             normalizedSearch.isBlank() &&
@@ -583,7 +583,7 @@ class SeriesRepositoryImpl @Inject constructor(
                                 seriesDao.getByWatchCountCategoryPage(query.providerId, categoryId, fetchLimit, 0),
                                 preferencesRepository.parentalControlLevel
                             ) { entities, level ->
-                                if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                if (level >= 3) entities.filter { !it.isUserProtected } else entities
                             }.map { entities -> entities.map { it.toDomain() } }
                         )
                     }
@@ -591,7 +591,7 @@ class SeriesRepositoryImpl @Inject constructor(
                     seriesDao.getByWatchCountProviderPage(query.providerId, fetchLimit, 0),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level ->
-                    if (level == 2) entities.filter { !it.isUserProtected } else entities
+                    if (level >= 3) entities.filter { !it.isUserProtected } else entities
                 }.map { entities -> entities.map { it.toDomain() } }
             }
             else -> null
@@ -744,7 +744,7 @@ class SeriesRepositoryImpl @Inject constructor(
             if (batch.isEmpty()) {
                 return
             }
-            val visibleBatch = if (parentalLevel == 2) {
+            val visibleBatch = if (parentalLevel >= 3) {
                 batch.filterNot { it.isUserProtected }
             } else {
                 batch

@@ -54,6 +54,16 @@ class UrlSecurityPolicyTest {
     }
 
     @Test
+    fun `validateOptionalEpgUrl allows http https and local files`() {
+        assertThat(UrlSecurityPolicy.validateOptionalEpgUrl("")).isNull()
+        assertThat(UrlSecurityPolicy.validateOptionalEpgUrl("http://epg.example.com/guide.xml")).isNull()
+        assertThat(UrlSecurityPolicy.validateOptionalEpgUrl("https://epg.example.com/guide.xml")).isNull()
+        assertThat(UrlSecurityPolicy.validateOptionalEpgUrl("content://downloads/public_downloads/guide.xml")).isNull()
+        assertThat(UrlSecurityPolicy.validateOptionalEpgUrl("ftp://epg.example.com/guide.xml"))
+            .isEqualTo("EPG URLs must use HTTP, HTTPS, or select a local file.")
+    }
+
+    @Test
     fun `sanitizeImportedAssetUrl drops unsupported schemes`() {
         assertThat(UrlSecurityPolicy.sanitizeImportedAssetUrl("ftp://example.com/logo.png")).isNull()
         assertThat(UrlSecurityPolicy.sanitizeImportedAssetUrl("https://example.com/logo.png"))

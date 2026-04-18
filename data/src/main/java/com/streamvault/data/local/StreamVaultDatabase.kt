@@ -45,7 +45,7 @@ import com.streamvault.data.local.entity.*
         ProgramReminderEntity::class,
         RecordingStorageEntity::class
     ],
-    version = 37,
+    version = 38,
     exportSchema = true   // ← was false; schema JSON now tracked in version control
 )
 @TypeConverters(RoomEnumConverters::class)
@@ -1808,6 +1808,13 @@ abstract class StreamVaultDatabase : RoomDatabase() {
                     """.trimIndent()
                 )
                 validateForeignKeys(database)
+            }
+        }
+
+        val MIGRATION_37_38 = object : Migration(37, 38) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE epg_sources ADD COLUMN etag TEXT DEFAULT NULL")
+                database.execSQL("ALTER TABLE epg_sources ADD COLUMN last_modified_header TEXT DEFAULT NULL")
             }
         }
     }

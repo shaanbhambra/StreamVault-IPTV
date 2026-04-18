@@ -20,8 +20,7 @@ data class Program(
         get() = ((endTime - startTime) / 60000).toInt()
 
     fun progressPercent(currentTimeMillis: Long = System.currentTimeMillis()): Float {
-        if (!isNowPlaying) return 0f
-        if (currentTimeMillis < startTime || endTime <= startTime) return 0f
+        if (endTime <= startTime || currentTimeMillis < startTime || currentTimeMillis >= endTime) return 0f
         return ((currentTimeMillis - startTime).toFloat() / (endTime - startTime).toFloat()).coerceIn(0f, 1f)
     }
 }

@@ -255,6 +255,21 @@ abstract class ChannelDao {
 
     @Query("UPDATE channels SET error_count = 0 WHERE id = :id")
     abstract suspend fun resetErrorCount(id: Long)
+
+    @Query("""
+        UPDATE channels SET logo_url = (
+            SELECT ec.icon_url
+            FROM channel_epg_mappings cem
+            JOIN epg_channels ec ON ec.epg_source_id = cem.epg_source_id
+                AND ec.xmltv_channel_id = cem.xmltv_channel_id
+            WHERE cem.provider_channel_id = channels.id
+                AND cem.provider_id = :providerId
+                AND ec.icon_url IS NOT NULL AND ec.icon_url != ''
+            LIMIT 1
+        )
+        WHERE provider_id = :providerId AND (logo_url IS NULL OR logo_url = '')
+    """)
+    abstract suspend fun backfillEpgIcons(providerId: Long)
 }
 
 @Dao
@@ -2012,8 +2027,8 @@ interface ProgramDao {
           AND programs.end_time > :startTime
           AND programs.start_time < :endTime
           AND (
-              programs.title LIKE :queryPattern
-              OR programs.description LIKE :queryPattern
+              programs.title LIKE :queryPattern ESCAPE '\'
+              OR programs.description LIKE :queryPattern ESCAPE '\'
           )
           AND (
               :categoryId IS NULL
@@ -2442,8 +2457,14 @@ interface EpgSourceDao {
     @Query("UPDATE epg_sources SET last_refresh_at = :at, last_error = :error, updated_at = :at WHERE id = :id")
     suspend fun updateRefreshStatus(id: Long, at: Long, error: String?)
 
+    @Query("UPDATE epg_sources SET last_error = :error, updated_at = :at WHERE id = :id")
+    suspend fun updateRefreshError(id: Long, error: String?, at: Long = System.currentTimeMillis())
+
     @Query("UPDATE epg_sources SET last_refresh_at = :at, last_success_at = :at, last_error = NULL, updated_at = :at WHERE id = :id")
     suspend fun updateRefreshSuccess(id: Long, at: Long)
+
+    @Query("UPDATE epg_sources SET etag = :etag, last_modified_header = :lastModified WHERE id = :id")
+    suspend fun updateConditionalHeaders(id: Long, etag: String?, lastModified: String?)
 }
 
 @Dao
@@ -2515,6 +2536,17 @@ interface EpgChannelDao {
     @Query("SELECT * FROM epg_channels WHERE epg_source_id = :sourceId ORDER BY display_name ASC")
     suspend fun getBySource(sourceId: Long): List<EpgChannelEntity>
 
+    @Query("""
+        SELECT * FROM epg_channels
+        WHERE epg_source_id = :sourceId
+          AND (xmltv_channel_id LIKE :pattern ESCAPE '\'
+               OR display_name LIKE :pattern ESCAPE '\'
+               OR normalized_name LIKE :pattern ESCAPE '\')
+        ORDER BY display_name ASC
+        LIMIT :limit
+    """)
+    suspend fun searchBySource(sourceId: Long, pattern: String, limit: Int): List<EpgChannelEntity>
+
     @Query("SELECT * FROM epg_channels WHERE epg_source_id = :sourceId AND xmltv_channel_id = :channelId LIMIT 1")
     suspend fun getBySourceAndChannelId(sourceId: Long, channelId: String): EpgChannelEntity?
 
@@ -2526,6 +2558,9 @@ interface EpgChannelDao {
 
     @Query("DELETE FROM epg_channels WHERE epg_source_id = :sourceId")
     suspend fun deleteBySource(sourceId: Long)
+
+    @Query("UPDATE epg_channels SET epg_source_id = :newSourceId WHERE epg_source_id = :oldSourceId")
+    suspend fun moveToSource(oldSourceId: Long, newSourceId: Long)
 }
 
 @Dao
@@ -2555,6 +2590,9 @@ interface EpgProgrammeDao {
 
     @Query("DELETE FROM epg_programmes WHERE epg_source_id = :sourceId")
     suspend fun deleteBySource(sourceId: Long)
+
+    @Query("UPDATE epg_programmes SET epg_source_id = :newSourceId WHERE epg_source_id = :oldSourceId")
+    suspend fun moveToSource(oldSourceId: Long, newSourceId: Long)
 
     @Query("DELETE FROM epg_programmes WHERE end_time < :beforeTime")
     suspend fun deleteOld(beforeTime: Long): Int

@@ -565,7 +565,9 @@ class SyncManagerTest {
     }
 
     @Test
-    fun `sync_m3u_ignores_insecure_streams_and_header_epg`() = runTest {
+    fun `sync_m3u_accepts_http_header_epg_and_ignores_insecure_streams`() = runTest {
+        // HTTP EPG URLs in the playlist header are now accepted (same policy as playlist sources).
+        // Only stream entry URLs with unsupported schemes (e.g. ftp://) are silently dropped.
         val playlist = tempFolder.newFile("mixed-playlist.m3u")
         playlist.writeText(
             """
@@ -589,7 +591,32 @@ class SyncManagerTest {
         val insertedChannels = argumentCaptor<List<com.streamvault.data.local.entity.ChannelImportStageEntity>>()
         verify(catalogSyncDao, atLeastOnce()).insertChannelStages(insertedChannels.capture())
         assertThat(insertedChannels.allValues.flatten()).hasSize(1)
-        assertThat((state as SyncState.Partial).warnings).contains("Ignored insecure EPG URL from playlist header.")
+        // HTTP EPG header URL should be accepted — no EPG URL warning
+        assertThat((state as SyncState.Partial).warnings).doesNotContain("Ignored unsupported EPG URL from playlist header.")
+        // ftp:// stream URL should still be rejected
+        assertThat(state.warnings).contains("Ignored 1 insecure playlist stream URL(s).")
+    }
+
+    @Test
+    fun `sync_m3u_ignores_unsupported_scheme_header_epg`() = runTest {
+        val playlist = tempFolder.newFile("ftp-epg-playlist.m3u")
+        playlist.writeText(
+            """
+            #EXTM3U x-tvg-url="ftp://epg.example.com/guide.xml"
+            #EXTINF:-1 group-title="News",Channel
+            https://live.example.com/channel.ts
+            """.trimIndent()
+        )
+
+        val provider = sampleProvider(ProviderType.M3U).copy(serverUrl = playlist.toURI().toString(), m3uUrl = playlist.toURI().toString())
+        val mgr = buildManager(providerType = ProviderType.M3U, providerEntity = provider)
+
+        val result = mgr.sync(1L, force = true)
+        advanceUntilIdle()
+
+        assertThat(result.isSuccess).isTrue()
+        assertThat((mgr.currentSyncState(1L) as SyncState.Partial).warnings)
+            .contains("Ignored unsupported EPG URL from playlist header.")
     }
 
     // ── M3U sync failure ────────────────────────────────────────────

@@ -80,7 +80,7 @@ class ChannelRepositoryImpl @Inject constructor(
                     parentalControlManager.unlockedCategoriesForProvider(providerId),
                     preferencesRepository.liveChannelNumberingMode
                 ) { entities, level, unlockedCats, numberingMode ->
-                    val filtered = if (level == 2) {
+                    val filtered = if (level >= 3) {
                         entities.filter { entity ->
                             val isUnlocked = entity.categoryId != null && unlockedCats.contains(entity.categoryId)
                             (!entity.isAdult && !entity.isUserProtected) || isUnlocked
@@ -116,7 +116,7 @@ class ChannelRepositoryImpl @Inject constructor(
                     parentalControlManager.unlockedCategoriesForProvider(providerId),
                     preferencesRepository.liveChannelNumberingMode
                 ) { entities, level, unlockedCats, numberingMode ->
-                    val filtered = if (level == 2) {
+                    val filtered = if (level >= 3) {
                         entities.filter { entity ->
                             val isUnlocked = entity.categoryId != null && unlockedCats.contains(entity.categoryId)
                             (!entity.isAdult && !entity.isUserProtected) || isUnlocked
@@ -146,7 +146,7 @@ class ChannelRepositoryImpl @Inject constructor(
                     domain
                 }
             }
-            val filteredCategories = if (level == 2) {
+            val filteredCategories = if (level >= 3) {
                 mappedCategories.filter { category ->
                     (!category.isAdult && !category.isUserProtected) || unlockedCats.contains(category.id)
                 }
@@ -174,7 +174,7 @@ class ChannelRepositoryImpl @Inject constructor(
                 parentalControlManager.unlockedCategoriesForProvider(providerId),
                 preferencesRepository.liveChannelNumberingMode
             ) { entities, level, unlockedCats, numberingMode ->
-                val filtered = if (level == 2) {
+                val filtered = if (level >= 3) {
                     entities.filter { entity ->
                         val isUnlocked = entity.categoryId != null && unlockedCats.contains(entity.categoryId)
                         (!entity.isAdult && !entity.isUserProtected) || isUnlocked
@@ -297,7 +297,7 @@ class ChannelRepositoryImpl @Inject constructor(
         level: Int,
         unlockedCats: Set<Long>
     ): List<ChannelBrowseEntity> {
-        return if (level == 2) {
+        return if (level >= 3) {
             entities.filter { entity ->
                 val isUnlocked = entity.categoryId != null && unlockedCats.contains(entity.categoryId)
                 (!entity.isAdult && !entity.isUserProtected) || isUnlocked

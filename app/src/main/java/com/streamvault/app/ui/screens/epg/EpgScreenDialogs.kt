@@ -199,7 +199,8 @@ internal fun GuideOptionsOverlay(
     onDensitySelected: (GuideDensity) -> Unit,
     onToggleScheduledOnly: () -> Unit,
     onToggleFavoritesOnly: () -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onManageEpgMatch: (() -> Unit)? = null
 ) {
     val optionsFocusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) {
@@ -282,8 +283,14 @@ internal fun GuideOptionsOverlay(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 24.dp),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                 ) {
+                    if (onManageEpgMatch != null) {
+                        GuideShortcutChip(
+                            label = stringResource(R.string.epg_override_manage),
+                            onClick = onManageEpgMatch
+                        )
+                    }
                     GuideShortcutChip(
                         label = stringResource(R.string.epg_refresh_guide),
                         onClick = onRefresh
@@ -303,12 +310,16 @@ internal fun CompactGuideProgramDialog(
     onDismiss: () -> Unit,
     onWatchLive: () -> Unit,
     onWatchArchive: (() -> Unit)?,
-    onManageEpgMatch: (() -> Unit)?,
     reminderButtonLabel: String?,
-    onToggleReminder: (() -> Unit)?
+    onToggleReminder: (() -> Unit)?,
+    onScheduleRecording: (() -> Unit)?,
+    onScheduleDailyRecording: (() -> Unit)?,
+    onScheduleWeeklyRecording: (() -> Unit)?
 ) {
     var showDetails by rememberSaveable(program.startTime, program.endTime, program.title) { mutableStateOf(false) }
     val format = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val firstButtonFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { firstButtonFocusRequester.requestFocus() }
     GuideModalDialog(onDismiss = onDismiss) {
         Surface(
             modifier = Modifier.widthIn(min = 420.dp, max = 640.dp),
@@ -318,7 +329,8 @@ internal fun CompactGuideProgramDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
@@ -371,7 +383,8 @@ internal fun CompactGuideProgramDialog(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     TvButton(
                         onClick = onWatchLive,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().focusRequester(firstButtonFocusRequester),
+                        scale = ButtonDefaults.scale(focusedScale = 1f)
                     ) {
                         Text(stringResource(R.string.epg_watch_live))
                     }
@@ -379,6 +392,7 @@ internal fun CompactGuideProgramDialog(
                         TvButton(
                             onClick = onWatchArchive,
                             modifier = Modifier.fillMaxWidth(),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
                             colors = ButtonDefaults.colors(
                                 containerColor = Primary,
                                 contentColor = Color.White
@@ -387,22 +401,11 @@ internal fun CompactGuideProgramDialog(
                             Text(stringResource(R.string.epg_watch_archive))
                         }
                     }
-                    if (onManageEpgMatch != null) {
-                        TvButton(
-                            onClick = onManageEpgMatch,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.colors(
-                                containerColor = SurfaceHighlight,
-                                contentColor = OnSurface
-                            )
-                        ) {
-                            Text(stringResource(R.string.epg_override_manage))
-                        }
-                    }
                     if (reminderButtonLabel != null && onToggleReminder != null) {
                         TvButton(
                             onClick = onToggleReminder,
                             modifier = Modifier.fillMaxWidth(),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
                             colors = ButtonDefaults.colors(
                                 containerColor = SurfaceHighlight,
                                 contentColor = OnSurface
@@ -411,9 +414,49 @@ internal fun CompactGuideProgramDialog(
                             Text(reminderButtonLabel)
                         }
                     }
+                    if (onScheduleRecording != null) {
+                        TvButton(
+                            onClick = { onScheduleRecording(); onDismiss() },
+                            modifier = Modifier.fillMaxWidth(),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
+                            colors = ButtonDefaults.colors(
+                                containerColor = com.streamvault.app.ui.theme.AccentRed,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Text(stringResource(R.string.epg_schedule_recording))
+                        }
+                    }
+                    if (onScheduleDailyRecording != null) {
+                        TvButton(
+                            onClick = { onScheduleDailyRecording(); onDismiss() },
+                            modifier = Modifier.fillMaxWidth(),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
+                            colors = ButtonDefaults.colors(
+                                containerColor = SurfaceHighlight,
+                                contentColor = OnSurface
+                            )
+                        ) {
+                            Text(stringResource(R.string.epg_schedule_daily_recording))
+                        }
+                    }
+                    if (onScheduleWeeklyRecording != null) {
+                        TvButton(
+                            onClick = { onScheduleWeeklyRecording(); onDismiss() },
+                            modifier = Modifier.fillMaxWidth(),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
+                            colors = ButtonDefaults.colors(
+                                containerColor = SurfaceHighlight,
+                                contentColor = OnSurface
+                            )
+                        ) {
+                            Text(stringResource(R.string.epg_schedule_weekly_recording))
+                        }
+                    }
                     TvButton(
                         onClick = { showDetails = !showDetails },
                         modifier = Modifier.fillMaxWidth(),
+                        scale = ButtonDefaults.scale(focusedScale = 1f),
                         colors = ButtonDefaults.colors(
                             containerColor = SurfaceHighlight,
                             contentColor = OnSurface
@@ -424,7 +467,15 @@ internal fun CompactGuideProgramDialog(
                             else stringResource(R.string.epg_program_details_show)
                         )
                     }
-                    TextButton(onClick = onDismiss) {
+                    TvButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth(),
+                        scale = ButtonDefaults.scale(focusedScale = 1f),
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.Transparent,
+                            contentColor = OnSurface
+                        )
+                    ) {
                         Text(stringResource(R.string.settings_cancel))
                     }
                 }
@@ -463,6 +514,9 @@ internal fun EpgOverrideDialog(
             stringResource(R.string.epg_override_current_external, currentDescriptor)
     }
 
+    val searchFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { searchFocusRequester.requestFocus() }
+
     GuideModalDialog(onDismiss = onDismiss) {
         Surface(
             modifier = Modifier.widthIn(min = 560.dp, max = 760.dp),
@@ -472,7 +526,8 @@ internal fun EpgOverrideDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
+                    .padding(20.dp)
+                    .focusGroup(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
@@ -518,6 +573,7 @@ internal fun EpgOverrideDialog(
                     onValueChange = onQueryChange,
                     placeholder = stringResource(R.string.epg_override_search_placeholder),
                     modifier = Modifier.fillMaxWidth(),
+                    focusRequester = searchFocusRequester,
                     onSearch = { onQueryChange(it) }
                 )
                 if (state.candidates.isEmpty()) {
@@ -534,7 +590,8 @@ internal fun EpgOverrideDialog(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 320.dp),
+                            .heightIn(max = 320.dp)
+                            .focusGroup(),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         items(
@@ -550,6 +607,7 @@ internal fun EpgOverrideDialog(
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
+                                scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
                                 colors = ClickableSurfaceDefaults.colors(
                                     containerColor = if (isCurrent) SurfaceHighlight else SurfaceElevated,
                                     focusedContainerColor = SurfaceHighlight,
@@ -608,6 +666,7 @@ internal fun EpgOverrideDialog(
                             onClick = onClearOverride,
                             enabled = !state.isSaving,
                             modifier = Modifier.fillMaxWidth(),
+                            scale = ButtonDefaults.scale(focusedScale = 1f),
                             colors = ButtonDefaults.colors(
                                 containerColor = SurfaceHighlight,
                                 contentColor = OnSurface
@@ -616,7 +675,15 @@ internal fun EpgOverrideDialog(
                             Text(stringResource(R.string.epg_override_clear))
                         }
                     }
-                    TextButton(onClick = onDismiss) {
+                    TvButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth(),
+                        scale = ButtonDefaults.scale(focusedScale = 1f),
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.Transparent,
+                            contentColor = OnSurface
+                        )
+                    ) {
                         Text(stringResource(R.string.settings_cancel))
                     }
                 }

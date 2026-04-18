@@ -40,9 +40,11 @@ class RecordingSourceResolver @Inject constructor(
             fallbackProviderId = providerId,
             fallbackStreamId = channelId,
             fallbackContentType = ContentType.LIVE,
-            // Recording jobs can run for minutes or hours; prefer the stable
-            // portal URL over an expiring tokenized direct-source CDN URL.
-            preferStableUrl = true
+            // Use the direct-source CDN URL when available — many Xtream servers
+            // only serve streams via their CDN URLs and return 404 on the
+            // credential-based portal path.  If no direct-source is present the
+            // resolver already falls back to the portal URL automatically.
+            preferStableUrl = false
         ) ?: throw IOException("Recording stream URL could not be resolved.")
 
         val providerLabel = providerDao.getById(providerId)?.let { provider ->
@@ -62,26 +64,52 @@ class RecordingSourceResolver @Inject constructor(
     }
 
     private fun sniffSourceType(resolved: ResolvedStreamUrl): RecordingSourceType {
+        // Prefer the container extension reported by the URL resolver (e.g. from the
+        // Xtream internal token) — this avoids a network probe that many IPTV servers
+        // reject with 404/416 when a Range header is present.
+        resolved.containerExtension?.lowercase(Locale.ROOT)?.let { ext ->
+            return when (ext) {
+                "m3u8" -> RecordingSourceType.HLS
+                "ts" -> RecordingSourceType.TS
+                "mpd" -> RecordingSourceType.DASH
+                else -> RecordingSourceType.TS
+            }
+        }
         val url = resolved.url.lowercase(Locale.ROOT)
         return when {
             url.contains(".mpd") || url.contains("ext=mpd") -> RecordingSourceType.DASH
-            url.contains(".ts") || url.contains("ext=ts") -> RecordingSourceType.TS
-            url.contains(".m3u8") || url.contains("ext=m3u8") || url.contains("/hd") || url.contains("/sd") -> {
-                probeAdaptiveType(resolved.url)
-            }
+            url.endsWith(".ts") || url.contains(".ts?") || url.contains("ext=ts") -> RecordingSourceType.TS
+            url.endsWith(".m3u8") || url.contains(".m3u8?") || url.contains("ext=m3u8") -> RecordingSourceType.HLS
             else -> probeAdaptiveType(resolved.url)
         }
     }
 
     private fun probeAdaptiveType(url: String): RecordingSourceType {
+        // Try HEAD first — lighter and avoids Range-header rejections.
+        val headResult = runCatching {
+            val headRequest = Request.Builder().url(url).head().build()
+            okHttpClient.newCall(headRequest).execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                val contentType = response.header("Content-Type").orEmpty().lowercase(Locale.ROOT)
+                when {
+                    "application/vnd.apple.mpegurl" in contentType || "application/x-mpegurl" in contentType -> RecordingSourceType.HLS
+                    "application/dash+xml" in contentType -> RecordingSourceType.DASH
+                    "video/mp2t" in contentType || "video/mpeg" in contentType -> RecordingSourceType.TS
+                    else -> null
+                }
+            }
+        }.getOrNull()
+        if (headResult != null) return headResult
+
+        // Fall back to a small GET to inspect the body prefix.
         val request = Request.Builder()
             .url(url)
-            .header("Range", "bytes=0-2047")
             .get()
             .build()
 
         val bodyPrefix = runCatching {
             okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use ""
                 val contentType = response.header("Content-Type").orEmpty().lowercase(Locale.ROOT)
                 when {
                     "application/vnd.apple.mpegurl" in contentType || "application/x-mpegurl" in contentType -> return RecordingSourceType.HLS
@@ -94,6 +122,7 @@ class RecordingSourceResolver @Inject constructor(
         return when {
             bodyPrefix.contains("#EXTM3U", ignoreCase = true) -> RecordingSourceType.HLS
             bodyPrefix.contains("<MPD", ignoreCase = true) -> RecordingSourceType.DASH
+            bodyPrefix.isEmpty() -> RecordingSourceType.UNKNOWN
             else -> RecordingSourceType.TS
         }
     }

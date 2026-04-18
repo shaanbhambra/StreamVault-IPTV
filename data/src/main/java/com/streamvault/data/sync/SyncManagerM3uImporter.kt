@@ -60,11 +60,11 @@ internal class SyncManagerM3uImporter(
                     m3uParser.parseStreaming(
                         inputStream = input,
                         onHeader = { parsedHeader ->
-                            val secureEpgUrl = parsedHeader.tvgUrl?.takeIf { UrlSecurityPolicy.isSecureRemoteUrl(it) }
-                            if (parsedHeader.tvgUrl != null && secureEpgUrl == null) {
-                                warnings += "Ignored insecure EPG URL from playlist header."
+                            val validEpgUrl = parsedHeader.tvgUrl?.takeIf { UrlSecurityPolicy.validateOptionalEpgUrl(it) == null }
+                            if (parsedHeader.tvgUrl != null && validEpgUrl == null) {
+                                warnings += "Ignored unsupported EPG URL from playlist header."
                             }
-                            header = parsedHeader.copy(tvgUrl = secureEpgUrl)
+                            header = parsedHeader.copy(tvgUrl = validEpgUrl)
                         }
                     ) { entry ->
                         parsedCount++

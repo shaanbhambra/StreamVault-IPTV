@@ -193,7 +193,9 @@ fun ChannelCard(
     onLongClick: (() -> Unit)? = null,
     isLocked: Boolean = false,
     isReorderMode: Boolean = false,
-    isDragging: Boolean = false
+    isDragging: Boolean = false,
+    isRecording: Boolean = false,
+    isScheduledRecording: Boolean = false
 ) {
     val nowMs by ChannelProgressTicker.nowMs.collectAsStateWithLifecycle()
     val channelCardShape = LocalAppShapes.current.small
@@ -315,6 +317,11 @@ fun ChannelCard(
                 }
                 if (channel.catchUpSupported) {
                     StatusPill(label = stringResource(R.string.badge_catch_up), containerColor = Primary, cornerRadius = 4.dp, horizontalPadding = 6.dp, verticalPadding = 2.dp)
+                }
+                if (isRecording) {
+                    StatusPill(label = stringResource(R.string.badge_recording), containerColor = AccentRed, cornerRadius = 4.dp, horizontalPadding = 6.dp, verticalPadding = 2.dp)
+                } else if (isScheduledRecording) {
+                    StatusPill(label = stringResource(R.string.badge_scheduled), containerColor = AccentAmber, cornerRadius = 4.dp, horizontalPadding = 6.dp, verticalPadding = 2.dp)
                 }
                 StatusPill(
                     label = stringResource(R.string.card_live_badge),

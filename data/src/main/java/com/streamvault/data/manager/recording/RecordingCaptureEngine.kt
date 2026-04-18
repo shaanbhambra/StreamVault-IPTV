@@ -25,6 +25,19 @@ data class CaptureProgress(
     val retryCount: Int = 0
 )
 
+private const val MAX_TRANSIENT_RETRIES = 3
+private const val RETRY_BACKOFF_BASE_MS = 15_000L
+private const val STALL_TIMEOUT_MS = 60_000L
+
+private fun isTransientFailure(error: Throwable): Boolean {
+    val msg = error.message.orEmpty().lowercase(Locale.ROOT)
+    return error is java.net.SocketTimeoutException ||
+        error is java.net.SocketException ||
+        error is java.net.ConnectException ||
+        error is java.net.UnknownHostException ||
+        (error is IOException && ("timeout" in msg || "reset" in msg || "broken pipe" in msg))
+}
+
 interface RecordingCaptureEngine {
     val sourceType: RecordingSourceType
 
@@ -33,7 +46,8 @@ interface RecordingCaptureEngine {
         outputTarget: RecordingOutputTarget,
         contentResolver: ContentResolver,
         scheduledEndMs: Long,
-        onProgress: suspend (CaptureProgress) -> Unit
+        onProgress: suspend (CaptureProgress) -> Unit,
+        maxVideoHeight: Int? = null
     )
 }
 
@@ -48,39 +62,57 @@ class TsPassThroughCaptureEngine @Inject constructor(
         outputTarget: RecordingOutputTarget,
         contentResolver: ContentResolver,
         scheduledEndMs: Long,
-        onProgress: suspend (CaptureProgress) -> Unit
+        onProgress: suspend (CaptureProgress) -> Unit,
+        maxVideoHeight: Int?
     ) {
         val startMs = System.currentTimeMillis()
         var bytesWritten = 0L
-        val request = Request.Builder().url(source.url).apply {
-            source.userAgent?.takeIf { it.isNotBlank() }?.let { header("User-Agent", it) }
-            source.headers.forEach { (key, value) -> header(key, value) }
-        }.build()
-        okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Recording stream failed with HTTP ${response.code}")
-            val body = response.body ?: throw IOException("Recording stream returned an empty body")
-            val output = outputTarget.openOutputStream(contentResolver)
-                ?: throw IOException("Could not open recording output target")
-            output.use { sink ->
-                body.byteStream().use { input ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    while (true) {
-                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                        if (scheduledEndMs <= System.currentTimeMillis()) break
-                        val read = input.read(buffer)
-                        if (read <= 0) break
-                        sink.write(buffer, 0, read)
-                        bytesWritten += read
-                        val elapsedMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
-                        onProgress(
-                            CaptureProgress(
-                                bytesWritten = bytesWritten,
-                                averageThroughputBytesPerSecond = (bytesWritten * 1000L) / elapsedMs,
-                                lastProgressAtMs = System.currentTimeMillis()
-                            )
-                        )
+        var retryCount = 0
+        val output = outputTarget.openOutputStream(contentResolver, append = false)
+            ?: throw IOException("Could not open recording output target")
+        output.use { sink ->
+            while (kotlinx.coroutines.currentCoroutineContext().isActive && System.currentTimeMillis() < scheduledEndMs) {
+                try {
+                    val request = Request.Builder().url(source.url).apply {
+                        source.userAgent?.takeIf { it.isNotBlank() }?.let { header("User-Agent", it) }
+                        source.headers.forEach { (key, value) -> header(key, value) }
+                    }.build()
+                    okHttpClient.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) throw IOException("Recording stream failed with HTTP ${response.code}")
+                        val body = response.body ?: throw IOException("Recording stream returned an empty body")
+                        body.byteStream().use { input ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            var lastDataAt = System.currentTimeMillis()
+                            while (true) {
+                                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                                if (scheduledEndMs <= System.currentTimeMillis()) break
+                                if (System.currentTimeMillis() - lastDataAt > STALL_TIMEOUT_MS) {
+                                    throw IOException("Recording stream stalled — no data received for ${STALL_TIMEOUT_MS / 1000}s")
+                                }
+                                val read = input.read(buffer)
+                                if (read <= 0) break
+                                lastDataAt = System.currentTimeMillis()
+                                sink.write(buffer, 0, read)
+                                bytesWritten += read
+                                val elapsedMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+                                onProgress(
+                                    CaptureProgress(
+                                        bytesWritten = bytesWritten,
+                                        averageThroughputBytesPerSecond = (bytesWritten * 1000L) / elapsedMs,
+                                        lastProgressAtMs = System.currentTimeMillis(),
+                                        retryCount = retryCount
+                                    )
+                                )
+                            }
+                            sink.flush()
+                        }
                     }
-                    sink.flush()
+                    break // Normal completion
+                } catch (e: Throwable) {
+                    if (!isTransientFailure(e) || retryCount >= MAX_TRANSIENT_RETRIES) throw e
+                    retryCount++
+                    val backoff = RETRY_BACKOFF_BASE_MS * (1L shl (retryCount - 1).coerceAtMost(3))
+                    delay(backoff.coerceAtMost(scheduledEndMs - System.currentTimeMillis()).coerceAtLeast(0))
                 }
             }
         }
@@ -98,7 +130,8 @@ class HlsLiveCaptureEngine @Inject constructor(
         outputTarget: RecordingOutputTarget,
         contentResolver: ContentResolver,
         scheduledEndMs: Long,
-        onProgress: suspend (CaptureProgress) -> Unit
+        onProgress: suspend (CaptureProgress) -> Unit,
+        maxVideoHeight: Int?
     ) {
         val startMs = System.currentTimeMillis()
         var bytesWritten = 0L
@@ -111,10 +144,29 @@ class HlsLiveCaptureEngine @Inject constructor(
             ?: throw IOException("Could not open recording output target")
         output.use { sink ->
             var currentPlaylistUrl = source.url
-            val seenSegments = linkedSetOf<String>()
+            val maxSeenSegments = 10_000
+            val seenSegments = object : LinkedHashSet<String>() {
+                override fun add(element: String): Boolean {
+                    val added = super.add(element)
+                    if (size > maxSeenSegments) remove(first())
+                    return added
+                }
+            }
+            var lastDataAt = System.currentTimeMillis()
+            var consecutiveEmptyPlaylists = 0
             while (kotlinx.coroutines.currentCoroutineContext().isActive && System.currentTimeMillis() < scheduledEndMs) {
-                val playlistText = fetchText(currentPlaylistUrl, headers)
-                val playlist = parsePlaylist(currentPlaylistUrl, playlistText)
+                if (System.currentTimeMillis() - lastDataAt > STALL_TIMEOUT_MS) {
+                    throw IOException("HLS recording stalled — no new segments for ${STALL_TIMEOUT_MS / 1000}s")
+                }
+                val playlistText = try {
+                    fetchText(currentPlaylistUrl, headers)
+                } catch (e: Throwable) {
+                    if (!isTransientFailure(e) || retryCount >= MAX_TRANSIENT_RETRIES) throw e
+                    retryCount++
+                    delay(RETRY_BACKOFF_BASE_MS * (1L shl (retryCount - 1).coerceAtMost(3)))
+                    continue
+                }
+                val playlist = parsePlaylist(currentPlaylistUrl, playlistText, maxVideoHeight)
                 when (playlist) {
                     is ParsedHlsPlaylist.Master -> {
                         currentPlaylistUrl = playlist.bestVariantUrl
@@ -135,20 +187,29 @@ class HlsLiveCaptureEngine @Inject constructor(
                             }
                         // Cache key bytes by URI so rotated keys are fetched once each
                         val keyCache = mutableMapOf<String, ByteArray>()
+                        var newSegmentsThisRound = false
                         playlist.segments.forEach { segment ->
                             kotlinx.coroutines.currentCoroutineContext().ensureActive()
                             if (segment.uri in seenSegments) return@forEach
                             seenSegments += segment.uri
-                            val bytes = fetchBytes(segment.uri, headers)
+                            val bytes = try {
+                                fetchBytes(segment.uri, headers)
+                            } catch (e: Throwable) {
+                                if (!isTransientFailure(e) || retryCount >= MAX_TRANSIENT_RETRIES) throw e
+                                retryCount++
+                                return@forEach // Skip this segment, retry on next playlist refresh
+                            }
                             val segKey = segment.key?.takeIf { it.method.equals("AES-128", ignoreCase = true) }
                             val payload = if (segKey != null) {
                                 val keyBytes = keyCache.getOrPut(segKey.uri) { fetchBytes(segKey.uri, headers) }
-                                decryptAes128(bytes, keyBytes, segKey.iv)
+                                decryptAes128(bytes, keyBytes, segKey.iv, segment.mediaSequenceNumber)
                             } else {
                                 bytes
                             }
                             sink.write(payload)
                             bytesWritten += payload.size
+                            newSegmentsThisRound = true
+                            lastDataAt = System.currentTimeMillis()
                             val elapsedMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
                             onProgress(
                                 CaptureProgress(
@@ -161,7 +222,7 @@ class HlsLiveCaptureEngine @Inject constructor(
                             if (System.currentTimeMillis() >= scheduledEndMs) return@forEach
                         }
                         sink.flush()
-                        retryCount = 0
+                        if (newSegmentsThisRound) retryCount = 0
                         if (playlist.endList) break
                         delay((playlist.targetDurationSeconds.coerceAtLeast(2) * 1000L) / 2L)
                     }
@@ -190,36 +251,49 @@ class HlsLiveCaptureEngine @Inject constructor(
         }
     }
 
-    private fun decryptAes128(payload: ByteArray, keyBytes: ByteArray, ivHex: String?): ByteArray {
-        val iv = ivHex?.removePrefix("0x")
-            ?.chunked(2)
-            ?.mapNotNull { it.toIntOrNull(16)?.toByte() }
-            ?.toByteArray()
-            ?.takeIf { it.size == 16 }
-            ?: ByteArray(16)
+    private fun decryptAes128(payload: ByteArray, keyBytes: ByteArray, ivHex: String?, mediaSequenceNumber: Long): ByteArray {
+        val iv = if (ivHex != null) {
+            ivHex.removePrefix("0x")
+                .chunked(2)
+                .mapNotNull { it.toIntOrNull(16)?.toByte() }
+                .toByteArray()
+                .takeIf { it.size == 16 }
+                ?: throw IOException("Malformed AES-128 IV in HLS key: $ivHex")
+        } else {
+            // Per RFC 8216 §5.2: use media sequence number as big-endian 128-bit integer
+            java.nio.ByteBuffer.allocate(16).apply {
+                position(8)
+                putLong(mediaSequenceNumber)
+            }.array()
+        }
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(iv))
         return cipher.doFinal(payload)
     }
 
-    private fun parsePlaylist(baseUrl: String, rawText: String): ParsedHlsPlaylist {
+    private fun parsePlaylist(baseUrl: String, rawText: String, maxVideoHeight: Int? = null): ParsedHlsPlaylist {
         val lines = rawText.lineSequence().map(String::trim).filter { it.isNotEmpty() }.toList()
         if (lines.any { it.startsWith("#EXT-X-STREAM-INF", ignoreCase = true) }) {
-            val variants = mutableListOf<Pair<Int, String>>()
-            var pendingBandwidth = 0
+            data class HlsVariant(val bandwidth: Int, val height: Int?, val url: String)
+            val variants = mutableListOf<HlsVariant>()
             lines.forEachIndexed { index, line ->
                 if (line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) {
-                    pendingBandwidth = Regex("""BANDWIDTH=(\d+)""")
+                    val bandwidth = Regex("""BANDWIDTH=(\d+)""")
                         .find(line)
-                        ?.groupValues
-                        ?.getOrNull(1)
-                        ?.toIntOrNull()
-                        ?: 0
+                        ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                    val height = Regex("""RESOLUTION=\d+x(\d+)""")
+                        .find(line)
+                        ?.groupValues?.getOrNull(1)?.toIntOrNull()
                     val next = lines.getOrNull(index + 1)?.takeIf { !it.startsWith("#") } ?: return@forEachIndexed
-                    variants += pendingBandwidth to resolveRelativeUrl(baseUrl, next)
+                    variants += HlsVariant(bandwidth, height, resolveRelativeUrl(baseUrl, next))
                 }
             }
-            val bestVariantUrl = variants.maxByOrNull { it.first }?.second
+            val eligible = if (maxVideoHeight != null) {
+                variants.filter { it.height == null || it.height <= maxVideoHeight }.ifEmpty { variants }
+            } else {
+                variants
+            }
+            val bestVariantUrl = eligible.maxByOrNull { it.bandwidth }?.url
                 ?: throw IOException("No playable HLS variants were available.")
             return ParsedHlsPlaylist.Master(bestVariantUrl)
         }
@@ -227,11 +301,17 @@ class HlsLiveCaptureEngine @Inject constructor(
         var targetDuration = 6
         var endList = false
         var currentKey: HlsKey? = null
+        var mediaSequence = 0L
         val segments = mutableListOf<HlsSegment>()
+        var segmentIndex = 0L
         lines.forEach { line ->
             when {
                 line.startsWith("#EXT-X-TARGETDURATION", ignoreCase = true) -> {
                     targetDuration = line.substringAfter(':', "6").toIntOrNull() ?: 6
+                }
+                line.startsWith("#EXT-X-MEDIA-SEQUENCE", ignoreCase = true) -> {
+                    mediaSequence = line.substringAfter(':', "0").toLongOrNull() ?: 0L
+                    segmentIndex = 0L
                 }
                 line.startsWith("#EXT-X-ENDLIST", ignoreCase = true) -> {
                     endList = true
@@ -248,8 +328,10 @@ class HlsLiveCaptureEngine @Inject constructor(
                 else -> {
                     segments += HlsSegment(
                         uri = resolveRelativeUrl(baseUrl, line),
-                        key = currentKey?.copy()
+                        key = currentKey?.copy(),
+                        mediaSequenceNumber = mediaSequence + segmentIndex
                     )
+                    segmentIndex++
                 }
             }
         }
@@ -289,7 +371,8 @@ private sealed interface ParsedHlsPlaylist {
 
 private data class HlsSegment(
     val uri: String,
-    val key: HlsKey? = null
+    val key: HlsKey? = null,
+    val mediaSequenceNumber: Long = 0
 )
 
 private data class HlsKey(

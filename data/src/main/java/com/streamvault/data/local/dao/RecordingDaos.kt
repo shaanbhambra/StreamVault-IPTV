@@ -100,6 +100,46 @@ interface RecordingRunDao {
 
     @Query("SELECT * FROM recording_runs WHERE status = 'RECORDING'")
     suspend fun getRecordingRuns(): List<RecordingRunEntity>
+
+    @Query(
+        """
+        SELECT * FROM recording_runs
+        WHERE status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+          AND terminal_at_ms IS NOT NULL
+          AND terminal_at_ms < :thresholdMs
+        ORDER BY terminal_at_ms ASC
+        """
+    )
+    suspend fun getExpiredRuns(thresholdMs: Long): List<RecordingRunEntity>
+
+    @Query(
+        """
+        SELECT * FROM recording_runs
+        WHERE recurring_rule_id = :recurringRuleId
+          AND status = 'SCHEDULED'
+        """
+    )
+    suspend fun getScheduledByRecurringRuleId(recurringRuleId: String): List<RecordingRunEntity>
+
+    @Query(
+        """
+        UPDATE recording_runs
+        SET bytes_written = :bytesWritten,
+            average_throughput_bps = :averageThroughputBytesPerSecond,
+            retry_count = MAX(retry_count, :retryCount),
+            last_progress_at_ms = :lastProgressAtMs,
+            updated_at = :updatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun updateProgress(
+        id: String,
+        bytesWritten: Long,
+        averageThroughputBytesPerSecond: Long,
+        retryCount: Int,
+        lastProgressAtMs: Long,
+        updatedAt: Long
+    )
 }
 
 @Dao

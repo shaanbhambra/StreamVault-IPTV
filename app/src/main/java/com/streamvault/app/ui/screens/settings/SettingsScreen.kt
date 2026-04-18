@@ -183,7 +183,8 @@ fun SettingsScreen(
         when (uiState.parentalControlLevel) {
             0 -> context.getString(R.string.settings_level_off)
             1 -> context.getString(R.string.settings_level_locked)
-            2 -> context.getString(R.string.settings_level_hidden)
+            2 -> context.getString(R.string.settings_level_private)
+            3 -> context.getString(R.string.settings_level_hidden)
             else -> context.getString(R.string.settings_level_unknown)
         }
     }
@@ -241,6 +242,7 @@ fun SettingsScreen(
     var showRecordingPatternDialog by rememberSaveable { mutableStateOf(false) }
     var showRecordingRetentionDialog by rememberSaveable { mutableStateOf(false) }
     var showRecordingConcurrencyDialog by rememberSaveable { mutableStateOf(false) }
+    var showRecordingPaddingDialog by rememberSaveable { mutableStateOf(false) }
     var showRecordingBrowserDialog by rememberSaveable { mutableStateOf(false) }
     var selectedRecordingId by rememberSaveable { mutableStateOf<String?>(null) }
     var categorySortDialogType by rememberSaveable { mutableStateOf<String?>(null) }
@@ -873,15 +875,15 @@ fun SettingsScreen(
                                         Text(text = stringResource(R.string.settings_clear_history_subtitle), style = MaterialTheme.typography.bodySmall, color = OnBackground.copy(alpha = 0.6f))
                                     }
                                     Text(text = stringResource(R.string.settings_clear_history_confirm), style = MaterialTheme.typography.labelLarge, color = Primary)
-                }
-            }
-        }
-    }
+                                }
+                            }
+                        }
+                    }
 
                     // ג”€ג”€ 3: Recordings ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€ג”€
                     else if (selectedCategory == 4) {
                         item {
-                            RecordingDashboardSection(
+                            RecordingInfoCard(
                                 treeLabel = uiState.recordingStorageState.displayName,
                                 outputDirectory = uiState.recordingStorageState.outputDirectory,
                                 availableBytes = uiState.recordingStorageState.availableBytes,
@@ -891,11 +893,20 @@ fun SettingsScreen(
                                 fileNamePattern = uiState.recordingStorageState.fileNamePattern,
                                 retentionDays = uiState.recordingStorageState.retentionDays,
                                 maxSimultaneousRecordings = uiState.recordingStorageState.maxSimultaneousRecordings,
+                                paddingBeforeMinutes = uiState.recordingPaddingBeforeMinutes,
+                                paddingAfterMinutes = uiState.recordingPaddingAfterMinutes
+                            )
+                        }
+                        item {
+                            RecordingActionsCard(
+                                wifiOnlyRecording = uiState.wifiOnlyRecording,
+                                onWifiOnlyRecordingChange = { viewModel.setRecordingWifiOnly(it) },
                                 onChooseFolder = { recordingFolderLauncher.launch(null) },
                                 onUseAppStorage = { viewModel.updateRecordingFolder(null, null) },
                                 onChangePattern = { showRecordingPatternDialog = true },
                                 onChangeRetention = { showRecordingRetentionDialog = true },
                                 onChangeConcurrency = { showRecordingConcurrencyDialog = true },
+                                onChangePadding = { showRecordingPaddingDialog = true },
                                 onRepairSchedule = { viewModel.reconcileRecordings() },
                                 onOpenBrowser = { showRecordingBrowserDialog = true }
                             )
@@ -1087,8 +1098,8 @@ fun SettingsScreen(
                         Routes.player(
                             streamUrl = playbackUrl,
                             title = item.programTitle ?: item.channelName,
-                            internalId = -1L,
-                            providerId = null,
+                            internalId = item.id.hashCode().toLong().and(0x7FFFFFFFL),
+                            providerId = item.providerId,
                             contentType = "MOVIE",
                             returnRoute = currentRoute
                         )
@@ -1097,6 +1108,7 @@ fun SettingsScreen(
             },
             onStop = { item -> viewModel.stopRecording(item.id) },
             onCancel = { item -> viewModel.cancelRecording(item.id) },
+            onSkipOccurrence = { item -> viewModel.skipOccurrence(item.id) },
             onDelete = { item -> viewModel.deleteRecording(item.id) },
             onRetry = { item -> viewModel.retryRecording(item.id) },
             onToggleSchedule = { item, enabled ->
@@ -1168,6 +1180,8 @@ fun SettingsScreen(
         onShowRecordingRetentionDialogChange = { showRecordingRetentionDialog = it },
         showRecordingConcurrencyDialog = showRecordingConcurrencyDialog,
         onShowRecordingConcurrencyDialogChange = { showRecordingConcurrencyDialog = it },
+        showRecordingPaddingDialog = showRecordingPaddingDialog,
+        onShowRecordingPaddingDialogChange = { showRecordingPaddingDialog = it },
         showClearHistoryDialog = showClearHistoryDialog,
         onShowClearHistoryDialogChange = { showClearHistoryDialog = it },
         showCreateCombinedDialog = showCreateCombinedDialog,

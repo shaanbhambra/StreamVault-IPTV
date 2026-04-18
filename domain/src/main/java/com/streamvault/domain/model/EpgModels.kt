@@ -13,7 +13,9 @@ data class EpgSource(
     val lastError: String? = null,
     val priority: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val etag: String? = null,
+    val lastModifiedHeader: String? = null
 )
 
 /**

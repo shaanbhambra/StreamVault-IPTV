@@ -7,7 +7,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -100,7 +102,10 @@ internal fun PremiumSelectionDialog(
                     HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
                     Column(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(top = 6.dp)
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState())
                     ) {
                         content()
                     }
@@ -206,7 +211,13 @@ internal fun TimeoutValueDialog(
 }
 
 @Composable
-internal fun LevelOption(level: Int, text: String, currentLevel: Int, onSelect: () -> Unit) {
+internal fun LevelOption(
+    level: Int,
+    text: String,
+    currentLevel: Int,
+    subtitle: String? = null,
+    onSelect: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -219,7 +230,14 @@ internal fun LevelOption(level: Int, text: String, currentLevel: Int, onSelect: 
             onClick = onSelect
         )
         Spacer(modifier = Modifier.width(8.dp))
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = OnBackground)
+        if (subtitle != null) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(text, style = MaterialTheme.typography.titleSmall, color = OnBackground)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+            }
+        } else {
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = OnBackground)
+        }
     }
 }
 
@@ -428,7 +446,8 @@ internal fun ParentalControlCard(
                     text = when(level) {
                         0 -> stringResource(R.string.settings_level_off)
                         1 -> stringResource(R.string.settings_level_locked)
-                        2 -> stringResource(R.string.settings_level_hidden)
+                        2 -> stringResource(R.string.settings_level_private)
+                        3 -> stringResource(R.string.settings_level_hidden)
                         else -> stringResource(R.string.settings_level_unknown)
                     },
                     style = MaterialTheme.typography.bodyMedium,

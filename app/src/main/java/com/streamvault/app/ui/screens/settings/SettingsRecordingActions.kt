@@ -45,6 +45,21 @@ internal class SettingsRecordingActions(
         }
     }
 
+    fun skipOccurrence(scope: CoroutineScope, recordingId: String) {
+        scope.launch {
+            val result = recordingManager.skipOccurrence(recordingId)
+            uiState.update {
+                it.copy(
+                    userMessage = if (result is Result.Error) {
+                        appContext.getString(R.string.settings_recording_skip_failed, result.message)
+                    } else {
+                        appContext.getString(R.string.settings_recording_skipped)
+                    }
+                )
+            }
+        }
+    }
+
     fun deleteRecording(scope: CoroutineScope, recordingId: String) {
         scope.launch {
             val result = recordingManager.deleteRecording(recordingId)

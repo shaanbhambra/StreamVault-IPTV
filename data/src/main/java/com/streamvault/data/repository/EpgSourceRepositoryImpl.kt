@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import com.streamvault.data.epg.EpgNameNormalizer
 import com.streamvault.data.epg.EpgResolutionEngine
+import com.streamvault.data.local.DatabaseTransactionRunner
 import com.streamvault.data.local.dao.ChannelEpgMappingDao
 import com.streamvault.data.local.dao.EpgChannelDao
 import com.streamvault.data.local.dao.EpgProgrammeDao
@@ -56,14 +57,16 @@ class EpgSourceRepositoryImpl @Inject constructor(
     private val epgProgrammeDao: EpgProgrammeDao,
     private val xmltvParser: XmltvParser,
     private val okHttpClient: OkHttpClient,
-    private val resolutionEngine: EpgResolutionEngine
+    private val resolutionEngine: EpgResolutionEngine,
+    private val transactionRunner: DatabaseTransactionRunner
 ) : EpgSourceRepository {
 
     companion object {
         private const val TAG = "EpgSourceRepo"
-        private const val MAX_EPG_SIZE_BYTES = 200L * 1_048_576 // 200 MB
+        private const val MAX_EPG_SIZE_BYTES = NetworkTimeoutConfig.EPG_MAX_SIZE_BYTES
         private const val CHANNEL_BATCH_SIZE = 500
         private const val PROGRAMME_BATCH_SIZE = 500
+        private const val MIN_REFRESH_INTERVAL_MS = 5L * 60L * 1000L // 5 minutes
     }
 
     private val sourceRefreshMutexes = ConcurrentHashMap<Long, Mutex>()
@@ -207,14 +210,23 @@ class EpgSourceRepositoryImpl @Inject constructor(
                 ?: return@withLock Result.error("Source not found")
 
             val now = System.currentTimeMillis()
+
+            // Rate-limit: skip if last successful refresh was less than 5 minutes ago
+            if (source.lastRefreshAt > 0 && now - source.lastRefreshAt < MIN_REFRESH_INTERVAL_MS) {
+                Log.d(TAG, "Skipping refresh for source $sourceId: last refresh was ${(now - source.lastRefreshAt) / 1000}s ago")
+                return@withLock Result.success(Unit)
+            }
+
             try {
-                epgSourceDao.updateRefreshStatus(sourceId, now, null)
+
+                var responseEtag: String? = null
+                var responseLastModified: String? = null
 
                 val rawInputStream: java.io.InputStream = if (source.url.startsWith("content://")) {
                     context.contentResolver.openInputStream(Uri.parse(source.url))
                         ?: run {
                             val err = "Cannot open local file"
-                            epgSourceDao.updateRefreshStatus(sourceId, now, err)
+                            epgSourceDao.updateRefreshError(sourceId, err)
                             return@withLock Result.error(err)
                         }
                 } else {
@@ -225,13 +237,24 @@ class EpgSourceRepositoryImpl @Inject constructor(
                     val request = Request.Builder()
                         .url(source.url)
                         .header("Accept-Encoding", "identity")
+                        .apply {
+                            source.etag?.let { header("If-None-Match", it) }
+                            source.lastModifiedHeader?.let { header("If-Modified-Since", it) }
+                        }
                         .build()
                     val response = epgHttpClient.newCall(request).execute()
+
+                    if (response.code == 304) {
+                        response.close()
+                        val now = System.currentTimeMillis()
+                        epgSourceDao.updateRefreshSuccess(sourceId, now)
+                        return@withLock Result.success(Unit)
+                    }
 
                     if (!response.isSuccessful) {
                         val err = "HTTP ${response.code}"
                         response.close()
-                        epgSourceDao.updateRefreshStatus(sourceId, now, err)
+                        epgSourceDao.updateRefreshError(sourceId, err)
                         return@withLock Result.error("Failed to download EPG: $err")
                     }
 
@@ -239,14 +262,16 @@ class EpgSourceRepositoryImpl @Inject constructor(
                     if (contentLength > MAX_EPG_SIZE_BYTES) {
                         response.close()
                         val err = "File too large (${contentLength / 1_048_576}MB)"
-                        epgSourceDao.updateRefreshStatus(sourceId, now, err)
+                        epgSourceDao.updateRefreshError(sourceId, err)
                         return@withLock Result.error(err)
                     }
 
                     val bodyStream = response.body?.byteStream() ?: run {
-                        epgSourceDao.updateRefreshStatus(sourceId, now, "Empty response")
+                        epgSourceDao.updateRefreshError(sourceId, "Empty response")
                         return@withLock Result.error("Empty EPG response")
                     }
+                    responseEtag = response.header("ETag")
+                    responseLastModified = response.header("Last-Modified")
                     // Some servers send Content-Encoding: gzip even when identity was requested.
                     // Since OkHttp no longer decompresses (we set Accept-Encoding manually),
                     // we must handle it here.
@@ -263,9 +288,11 @@ class EpgSourceRepositoryImpl @Inject constructor(
                 var channelCount = 0
                 var programmeCount = 0
 
-                // Delete old data before ingesting
-                epgChannelDao.deleteBySource(sourceId)
-                epgProgrammeDao.deleteBySource(sourceId)
+                // Stage new data under a negative source ID to avoid clobbering
+                // live data during download/parse. Swap atomically on success.
+                val stagingId = -sourceId
+                epgChannelDao.deleteBySource(stagingId)
+                epgProgrammeDao.deleteBySource(stagingId)
 
                 rawInputStream.use { raw ->
                     val limited = object : FilterInputStream(raw) {
@@ -285,7 +312,7 @@ class EpgSourceRepositoryImpl @Inject constructor(
                             onChannel = { xmltvChannel ->
                                 channelBatch.add(
                                     EpgChannelEntity(
-                                        epgSourceId = sourceId,
+                                        epgSourceId = stagingId,
                                         xmltvChannelId = xmltvChannel.id,
                                         displayName = xmltvChannel.displayName,
                                         normalizedName = EpgNameNormalizer.normalize(xmltvChannel.displayName),
@@ -301,7 +328,7 @@ class EpgSourceRepositoryImpl @Inject constructor(
                             onProgramme = { programme ->
                                 programmeBatch.add(
                                     EpgProgrammeEntity(
-                                        epgSourceId = sourceId,
+                                        epgSourceId = stagingId,
                                         xmltvChannelId = programme.channelId,
                                         startTime = programme.startTime,
                                         endTime = programme.endTime,
@@ -325,7 +352,7 @@ class EpgSourceRepositoryImpl @Inject constructor(
                     }
                 }
 
-                // Flush remaining
+                // Flush remaining staging batches
                 if (channelBatch.isNotEmpty()) {
                     epgChannelDao.insertAll(channelBatch.toList())
                 }
@@ -333,7 +360,16 @@ class EpgSourceRepositoryImpl @Inject constructor(
                     epgProgrammeDao.insertAll(programmeBatch.toList())
                 }
 
+                // Atomically swap staging data into the real source ID
+                transactionRunner.inTransaction {
+                    epgChannelDao.deleteBySource(sourceId)
+                    epgProgrammeDao.deleteBySource(sourceId)
+                    epgChannelDao.moveToSource(stagingId, sourceId)
+                    epgProgrammeDao.moveToSource(stagingId, sourceId)
+                }
+
                 epgSourceDao.updateRefreshSuccess(sourceId, System.currentTimeMillis())
+                epgSourceDao.updateConditionalHeaders(sourceId, responseEtag, responseLastModified)
                 if (resolveAffectedProviders) {
                     resolveAffectedProviders(providerEpgSourceDao.getProviderIdsForSourceSync(sourceId))
                 }
@@ -341,13 +377,19 @@ class EpgSourceRepositoryImpl @Inject constructor(
                 Result.success(Unit)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to refresh source $sourceId", e)
+                // Clean up any staged rows on failure
+                val stagingId = -sourceId
+                runCatching {
+                    epgChannelDao.deleteBySource(stagingId)
+                    epgProgrammeDao.deleteBySource(stagingId)
+                }
                 val isOversizeError = e is IOException && e.message?.contains("too large", ignoreCase = true) == true
                 val statusMessage = if (isOversizeError) {
                     "EPG response exceeded 200 MB limit"
                 } else {
                     e.message ?: "Unknown error"
                 }
-                epgSourceDao.updateRefreshStatus(sourceId, now, statusMessage)
+                epgSourceDao.updateRefreshError(sourceId, statusMessage)
                 if (isOversizeError) {
                     Result.error("EPG response exceeded 200 MB limit", e)
                 } else {
@@ -396,22 +438,22 @@ class EpgSourceRepositoryImpl @Inject constructor(
         if (assignments.isEmpty()) return emptyList()
 
         val sourceNamesById = epgSourceDao.getAllSync().associate { it.id to it.name }
-        val normalizedQuery = EpgNameNormalizer.normalize(query)
         val trimmedQuery = query.trim()
+
+        // Build escaped LIKE pattern; blank query fetches all (up to limit per source)
+        val pattern = if (trimmedQuery.isBlank()) {
+            "%"
+        } else {
+            val escaped = trimmedQuery
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            "%$escaped%"
+        }
 
         return assignments.flatMap { assignment ->
             val sourceName = sourceNamesById[assignment.epgSourceId].orEmpty()
-            epgChannelDao.getBySource(assignment.epgSourceId)
-                .asSequence()
-                .filter { candidate ->
-                    if (trimmedQuery.isBlank()) {
-                        true
-                    } else {
-                        candidate.xmltvChannelId.contains(trimmedQuery, ignoreCase = true) ||
-                            candidate.displayName.contains(trimmedQuery, ignoreCase = true) ||
-                            candidate.normalizedName.contains(normalizedQuery, ignoreCase = true)
-                    }
-                }
+            epgChannelDao.searchBySource(assignment.epgSourceId, pattern, limit)
                 .map { candidate ->
                     EpgOverrideCandidate(
                         epgSourceId = assignment.epgSourceId,
@@ -421,7 +463,6 @@ class EpgSourceRepositoryImpl @Inject constructor(
                         iconUrl = candidate.iconUrl
                     )
                 }
-                .toList()
         }.sortedWith(compareBy<EpgOverrideCandidate>({ it.epgSourceName.lowercase() }, { it.displayName.lowercase() }, { it.xmltvChannelId.lowercase() }))
             .take(limit)
     }

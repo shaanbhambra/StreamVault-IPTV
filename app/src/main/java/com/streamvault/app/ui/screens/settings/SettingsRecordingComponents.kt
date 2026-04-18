@@ -2,12 +2,17 @@ package com.streamvault.app.ui.screens.settings
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -20,7 +25,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
@@ -319,7 +327,7 @@ private fun BackupToggleRow(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun RecordingOverviewCard(
+internal fun RecordingInfoCard(
     treeLabel: String?,
     outputDirectory: String?,
     availableBytes: Long?,
@@ -329,18 +337,24 @@ internal fun RecordingOverviewCard(
     fileNamePattern: String,
     retentionDays: Int?,
     maxSimultaneousRecordings: Int,
-    onChooseFolder: () -> Unit,
-    onUseAppStorage: () -> Unit,
-    onChangePattern: () -> Unit,
-    onChangeRetention: () -> Unit,
-    onChangeConcurrency: () -> Unit,
-    onOpenBrowser: () -> Unit,
-    onRepairSchedule: () -> Unit
+    paddingBeforeMinutes: Int,
+    paddingAfterMinutes: Int
 ) {
-    Surface(
+    TvClickableSurface(
+        onClick = { },
         modifier = Modifier.fillMaxWidth(),
-        colors = SurfaceDefaults.colors(containerColor = SurfaceElevated),
-        shape = RoundedCornerShape(16.dp)
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = SurfaceElevated,
+            focusedContainerColor = SurfaceElevated
+        ),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(16.dp)),
+        border = ClickableSurfaceDefaults.border(
+            focusedBorder = Border(
+                border = BorderStroke(2.dp, FocusBorder),
+                shape = RoundedCornerShape(16.dp)
+            )
+        )
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
@@ -424,111 +438,152 @@ internal fun RecordingOverviewCard(
                     label = stringResource(R.string.settings_recording_concurrency_title),
                     value = maxSimultaneousRecordings.toString()
                 )
-            }
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    RecordingActionButton(
-                        label = stringResource(R.string.settings_recording_choose_folder),
-                        accent = OnBackground,
-                        modifier = Modifier.weight(1f),
-                        onClick = onChooseFolder
-                    )
-                    RecordingActionButton(
-                        label = stringResource(R.string.settings_recording_use_app_storage),
-                        accent = OnBackground,
-                        modifier = Modifier.weight(1f),
-                        onClick = onUseAppStorage
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    RecordingActionButton(
-                        label = stringResource(R.string.settings_recording_pattern_title),
-                        accent = OnBackground,
-                        modifier = Modifier.weight(1f),
-                        onClick = onChangePattern
-                    )
-                    RecordingActionButton(
-                        label = stringResource(R.string.settings_recording_retention_title),
-                        accent = OnBackground,
-                        modifier = Modifier.weight(1f),
-                        onClick = onChangeRetention
-                    )
-                    RecordingActionButton(
-                        label = stringResource(R.string.settings_recording_concurrency_title),
-                        accent = OnBackground,
-                        modifier = Modifier.weight(1f),
-                        onClick = onChangeConcurrency
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    RecordingActionButton(
-                        label = stringResource(R.string.settings_recording_open_browser),
-                        accent = OnBackground,
-                        modifier = Modifier.weight(1f),
-                        onClick = onOpenBrowser
-                    )
-                    RecordingActionButton(
-                        label = stringResource(R.string.settings_recording_reconcile),
-                        accent = OnBackground,
-                        modifier = Modifier.weight(1f),
-                        onClick = onRepairSchedule
-                    )
-                }
+                RecordingMetaPill(
+                    label = stringResource(R.string.settings_recording_padding_before),
+                    value = if (paddingBeforeMinutes > 0) {
+                        stringResource(R.string.settings_recording_padding_minutes, paddingBeforeMinutes)
+                    } else {
+                        stringResource(R.string.settings_recording_padding_none)
+                    }
+                )
+                RecordingMetaPill(
+                    label = stringResource(R.string.settings_recording_padding_after),
+                    value = if (paddingAfterMinutes > 0) {
+                        stringResource(R.string.settings_recording_padding_minutes, paddingAfterMinutes)
+                    } else {
+                        stringResource(R.string.settings_recording_padding_none)
+                    }
+                )
             }
         }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun RecordingDashboardSection(
-    treeLabel: String?,
-    outputDirectory: String?,
-    availableBytes: Long?,
-    isWritable: Boolean,
-    activeCount: Int,
-    scheduledCount: Int,
-    fileNamePattern: String,
-    retentionDays: Int?,
-    maxSimultaneousRecordings: Int,
+internal fun RecordingActionsCard(
+    wifiOnlyRecording: Boolean,
+    onWifiOnlyRecordingChange: (Boolean) -> Unit,
     onChooseFolder: () -> Unit,
     onUseAppStorage: () -> Unit,
     onChangePattern: () -> Unit,
     onChangeRetention: () -> Unit,
     onChangeConcurrency: () -> Unit,
-    onRepairSchedule: () -> Unit,
-    onOpenBrowser: () -> Unit
+    onChangePadding: () -> Unit,
+    onOpenBrowser: () -> Unit,
+    onRepairSchedule: () -> Unit
 ) {
-    RecordingOverviewCard(
-        treeLabel = treeLabel,
-        outputDirectory = outputDirectory,
-        availableBytes = availableBytes,
-        isWritable = isWritable,
-        activeCount = activeCount,
-        scheduledCount = scheduledCount,
-        fileNamePattern = fileNamePattern,
-        retentionDays = retentionDays,
-        maxSimultaneousRecordings = maxSimultaneousRecordings,
-        onChooseFolder = onChooseFolder,
-        onUseAppStorage = onUseAppStorage,
-        onChangePattern = onChangePattern,
-        onChangeRetention = onChangeRetention,
-        onChangeConcurrency = onChangeConcurrency,
-        onOpenBrowser = onOpenBrowser,
-        onRepairSchedule = onRepairSchedule
-    )
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        colors = SurfaceDefaults.colors(containerColor = SurfaceElevated),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                RecordingActionButton(
+                    label = stringResource(R.string.settings_recording_choose_folder),
+                    accent = OnBackground,
+                    modifier = Modifier.weight(1f),
+                    onClick = onChooseFolder
+                )
+                RecordingActionButton(
+                    label = stringResource(R.string.settings_recording_use_app_storage),
+                    accent = OnBackground,
+                    modifier = Modifier.weight(1f),
+                    onClick = onUseAppStorage
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                RecordingActionButton(
+                    label = stringResource(R.string.settings_recording_pattern_title),
+                    accent = OnBackground,
+                    modifier = Modifier.weight(1f),
+                    onClick = onChangePattern
+                )
+                RecordingActionButton(
+                    label = stringResource(R.string.settings_recording_retention_title),
+                    accent = OnBackground,
+                    modifier = Modifier.weight(1f),
+                    onClick = onChangeRetention
+                )
+                RecordingActionButton(
+                    label = stringResource(R.string.settings_recording_concurrency_title),
+                    accent = OnBackground,
+                    modifier = Modifier.weight(1f),
+                    onClick = onChangeConcurrency
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                RecordingActionButton(
+                    label = stringResource(R.string.settings_recording_open_browser),
+                    accent = OnBackground,
+                    modifier = Modifier.weight(1f),
+                    onClick = onOpenBrowser
+                )
+                RecordingActionButton(
+                    label = stringResource(R.string.settings_recording_reconcile),
+                    accent = OnBackground,
+                    modifier = Modifier.weight(1f),
+                    onClick = onRepairSchedule
+                )
+                RecordingActionButton(
+                    label = stringResource(R.string.settings_recording_padding_title),
+                    accent = OnBackground,
+                    modifier = Modifier.weight(1f),
+                    onClick = onChangePadding
+                )
+            }
+            TvClickableSurface(
+                onClick = { onWifiOnlyRecordingChange(!wifiOnlyRecording) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+                colors = ClickableSurfaceDefaults.colors(
+                    containerColor = Color.Transparent,
+                    focusedContainerColor = Primary.copy(alpha = 0.12f)
+                ),
+                border = ClickableSurfaceDefaults.border(
+                    focusedBorder = Border(
+                        border = BorderStroke(2.dp, Color.White),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                ),
+                scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_recording_wifi_only),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OnSurface
+                    )
+                    Switch(
+                        checked = wifiOnlyRecording,
+                        onCheckedChange = null,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Primary,
+                            checkedTrackColor = Primary.copy(alpha = 0.3f),
+                            uncheckedThumbColor = OnSurfaceDim,
+                            uncheckedTrackColor = OnSurfaceDim.copy(alpha = 0.2f)
+                        )
+                    )
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -541,6 +596,7 @@ internal fun RecordingBrowserDialog(
     onPlay: (RecordingItem) -> Unit,
     onStop: (RecordingItem) -> Unit,
     onCancel: (RecordingItem) -> Unit,
+    onSkipOccurrence: (RecordingItem) -> Unit,
     onDelete: (RecordingItem) -> Unit,
     onRetry: (RecordingItem) -> Unit,
     onToggleSchedule: (RecordingItem, Boolean) -> Unit
@@ -616,6 +672,7 @@ internal fun RecordingBrowserDialog(
                             onPlay = onPlay,
                             onStop = onStop,
                             onCancel = onCancel,
+                            onSkipOccurrence = onSkipOccurrence,
                             onDelete = onDelete,
                             onRetry = onRetry,
                             onToggleSchedule = onToggleSchedule
@@ -636,11 +693,23 @@ private fun RecordingBrowserPanel(
     onPlay: (RecordingItem) -> Unit,
     onStop: (RecordingItem) -> Unit,
     onCancel: (RecordingItem) -> Unit,
+    onSkipOccurrence: (RecordingItem) -> Unit,
     onDelete: (RecordingItem) -> Unit,
     onRetry: (RecordingItem) -> Unit,
     onToggleSchedule: (RecordingItem, Boolean) -> Unit
 ) {
     val selectedItem = recordingItems.firstOrNull { it.id == selectedRecordingId } ?: recordingItems.first()
+    var searchQuery by remember { mutableStateOf("") }
+    var statusFilter by remember { mutableStateOf<RecordingStatus?>(null) }
+    val filteredItems = remember(recordingItems, searchQuery, statusFilter) {
+        recordingItems.filter { item ->
+            val matchesSearch = searchQuery.isBlank() ||
+                item.channelName.contains(searchQuery, ignoreCase = true) ||
+                item.programTitle?.contains(searchQuery, ignoreCase = true) == true
+            val matchesStatus = statusFilter == null || item.status == statusFilter
+            matchesSearch && matchesStatus
+        }
+    }
 
     Row(
         modifier = Modifier.fillMaxSize(),
@@ -656,7 +725,7 @@ private fun RecordingBrowserPanel(
         ) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
@@ -665,17 +734,103 @@ private fun RecordingBrowserPanel(
                         color = Primary
                     )
                     Text(
-                        text = "${recordingItems.size} items",
+                        text = "${filteredItems.size} of ${recordingItems.size} items",
                         style = MaterialTheme.typography.bodySmall,
                         color = OnSurfaceDim
                     )
+                }
+                androidx.compose.foundation.layout.FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    CompactRecordingActionChip(
+                        label = "All",
+                        accent = if (statusFilter == null) Primary else OnSurfaceDim,
+                        onClick = { statusFilter = null }
+                    )
+                    RecordingStatus.entries.forEach { status ->
+                        CompactRecordingActionChip(
+                            label = recordingStatusLabel(status),
+                            accent = if (statusFilter == status) recordingStatusAccent(status) else OnSurfaceDim,
+                            onClick = { statusFilter = if (statusFilter == status) null else status }
+                        )
+                    }
+                }
+                val isTelevisionDevice = com.streamvault.app.device.rememberIsTelevisionDevice()
+                val searchFocusRequester = remember { FocusRequester() }
+                val inputFocusRequester = remember { FocusRequester() }
+                val keyboardController = LocalSoftwareKeyboardController.current
+                var acceptsInput by remember(isTelevisionDevice) { mutableStateOf(!isTelevisionDevice) }
+                TvClickableSurface(
+                    onClick = {
+                        acceptsInput = true
+                        inputFocusRequester.requestFocus()
+                        keyboardController?.show()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(searchFocusRequester),
+                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = SurfaceElevated,
+                        focusedContainerColor = SurfaceHighlight
+                    ),
+                    border = ClickableSurfaceDefaults.border(
+                        border = Border(
+                            border = BorderStroke(1.dp, OnSurfaceDim.copy(alpha = 0.3f)),
+                            shape = RoundedCornerShape(8.dp)
+                        ),
+                        focusedBorder = Border(
+                            border = BorderStroke(2.dp, FocusBorder),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                    ),
+                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        if (searchQuery.isEmpty()) {
+                            Text(
+                                text = "Search recordings…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OnSurfaceDim
+                            )
+                        }
+                        BasicTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            textStyle = MaterialTheme.typography.bodySmall.copy(color = OnBackground),
+                            singleLine = true,
+                            cursorBrush = SolidColor(Primary),
+                            readOnly = isTelevisionDevice && !acceptsInput,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = {
+                                acceptsInput = false
+                                keyboardController?.hide()
+                                searchFocusRequester.requestFocus()
+                            }),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(inputFocusRequester)
+                                .onFocusChanged {
+                                    if (!it.isFocused && isTelevisionDevice) {
+                                        acceptsInput = false
+                                        keyboardController?.hide()
+                                    }
+                                }
+                        )
+                    }
                 }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(bottom = 4.dp)
                 ) {
-                    items(recordingItems, key = { item -> item.id }) { item ->
+                    items(filteredItems, key = { item -> item.id }) { item ->
                         RecordingPickerRow(
                             item = item,
                             selected = item.id == selectedItem.id,
@@ -694,6 +849,7 @@ private fun RecordingBrowserPanel(
             onPlay = { onPlay(selectedItem) },
             onStop = { onStop(selectedItem) },
             onCancel = { onCancel(selectedItem) },
+            onSkipOccurrence = { onSkipOccurrence(selectedItem) },
             onDelete = { onDelete(selectedItem) },
             onRetry = { onRetry(selectedItem) },
             onToggleSchedule = { enabled -> onToggleSchedule(selectedItem, enabled) }
@@ -784,6 +940,7 @@ private fun RecordingDetailPanel(
     onPlay: () -> Unit,
     onStop: () -> Unit,
     onCancel: () -> Unit,
+    onSkipOccurrence: () -> Unit,
     onDelete: () -> Unit,
     onRetry: () -> Unit,
     onToggleSchedule: (Boolean) -> Unit
@@ -935,6 +1092,13 @@ private fun RecordingDetailPanel(
                         accent = Secondary,
                         onClick = { onToggleSchedule(!item.scheduleEnabled) }
                     )
+                    if (item.recurringRuleId != null) {
+                        CompactRecordingActionChip(
+                            label = stringResource(R.string.settings_recording_skip),
+                            accent = OnBackground,
+                            onClick = onSkipOccurrence
+                        )
+                    }
                     CompactRecordingActionChip(
                         label = stringResource(R.string.settings_recording_cancel),
                         accent = OnBackground,
@@ -1048,6 +1212,7 @@ internal fun RecordingItemCard(
     onPlay: () -> Unit,
     onStop: () -> Unit,
     onCancel: () -> Unit,
+    onSkipOccurrence: () -> Unit,
     onDelete: () -> Unit,
     onRetry: () -> Unit,
     onToggleSchedule: (Boolean) -> Unit
@@ -1210,6 +1375,13 @@ internal fun RecordingItemCard(
                         accent = Secondary,
                         onClick = { onToggleSchedule(!item.scheduleEnabled) }
                     )
+                    if (item.recurringRuleId != null) {
+                        CompactRecordingActionChip(
+                            label = stringResource(R.string.settings_recording_skip),
+                            accent = OnBackground,
+                            onClick = onSkipOccurrence
+                        )
+                    }
                     CompactRecordingActionChip(
                         label = stringResource(R.string.settings_recording_cancel),
                         accent = OnBackground,
