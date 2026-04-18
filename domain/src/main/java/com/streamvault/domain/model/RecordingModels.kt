@@ -46,7 +46,9 @@ data class RecordingRequest(
     val recurrence: RecordingRecurrence = RecordingRecurrence.NONE,
     val recurringRuleId: String? = null,
     val recordNextProgram: Boolean = false,
-    val priority: Int = 0
+    val priority: Int = 0,
+    val paddingBeforeMs: Long = 0L,
+    val paddingAfterMs: Long = 0L
 ) {
     init {
         require(channelName.isNotBlank()) { "channelName must not be blank" }

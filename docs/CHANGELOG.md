@@ -15,6 +15,8 @@ All notable product changes are recorded in this document.
 - Added incremental channel loading for large providers.
 - Added incremental search results with automatic loading on scroll.
 - Added automatic paging when reaching the end of the channel list.
+- Added HTTP conditional requests (`ETag` / `If-Modified-Since`) to EPG refresh — unchanged feeds return `304 Not Modified` and skip download and parse entirely.
+- Added EPG channel icon fallback — channels without a provider logo now use the icon from their matched EPG source.
 
 #### System & Settings
 - Added timeshift storage manager with automatic cleanup.
@@ -22,12 +24,32 @@ All notable product changes are recorded in this document.
 - Added automatic update download option.
 - Added options to show/hide “All Channels” and “Recent Channels”.
 - Added "Hidden" option to Live TV Channel Numbering — hides channel numbers everywhere in the app (channel lists, player overlay, EPG, zap banner).
-
+#### Recording
+- Schedule recordings directly from the EPG guide — Record, Record Daily, and Record Weekly buttons on any future program.
+- Configurable pre/post recording padding (start early / end late) — applied automatically to all scheduled recordings.
+- WiFi-only recording restriction — optionally prevent recordings from starting on mobile data.
+- HLS recording quality cap — respects the per-network video quality preference instead of always picking the highest bandwidth variant.
+- Recording conflict resolution dialog — shows which recordings overlap and offers to replace them instead of just showing an error.
+- Recording status indicators on channel cards — REC and Scheduled badges on Dashboard and Search screens.
+- Skip single occurrence of a recurring recording without cancelling the series.
+- Search and filter in the recordings browser by title, channel, or status.
+- Stalled-capture watchdog — recordings that stop receiving data for 60 seconds are automatically aborted.
+- Automatic retry with exponential backoff on transient network failures during capture.
+- Low disk space pre-flight check — scheduled recordings fail early with a clear message instead of writing partial files.
+- Push notification on recording failure with channel name and reason.
+- Completed recordings open in the player with resume position tracking.
 #### VOD
 - "Filter & Sort" button now shows active selections as a subtitle (e.g. "Favorites · Rating") and highlights with brand colour when non-default settings are applied — applies to both Movies and Series, modern and classic views.
 
 #### Search
 - Long-pressing a channel, movie, or series in Search now opens a context menu with Add/Remove Favorites, Hide, and Parental Lock/Unlock actions — consistent with the same actions available in other screens.
+
+#### Parental Controls
+- Added **PRIVATE** protection level — adult categories appear in the sidebar with a PIN lock, but are excluded from Search, EPG Guide, All Channels, and Recent so individual channel names (e.g. explicit titles) are never shown in mixed lists.
+- PRIVATE is now the default protection level for new installs.
+- Existing users with the old HIDDEN level are automatically migrated to the new HIDDEN (level 3); users previously on LOCKED remain on LOCKED.
+- Protection level selection dialog upgraded to a title + description card layout matching other mode-selection dialogs.
+- LOCKED level now correctly shows adult content in all views (EPG, Search, All Channels, Recent) — it previously blocked adult content from the EPG guide despite that not being the intended behaviour.
 
 #### Database & Sync
 - Search now indexes title, cast, director, and genre with BM25 relevance ranking — results are ordered by match quality.
@@ -97,6 +119,21 @@ All notable product changes are recorded in this document.
 - Fixed `.gz` EPG feeds being double-decompressed and failing to parse.
 - Fixed blank URL accepted past the scheme validator when adding an EPG source.
 - Fixed EPG list always appearing empty after a fresh install (list was never populated into the UI state).
+- Fixed EPG sync rejecting plain HTTP URLs — M3U playlist header EPG (`x-tvg-url`), manual EPG sources, and M3U provider EPG fields now accept HTTP and HTTPS, matching the same policy already applied to Xtream providers.
+- Fixed EPG search not escaping `%` and `_` wildcards, returning too many results on certain queries.
+- Fixed "now & next" picking the wrong next program when programs had gaps.
+- Fixed EPG channel-matching trimming whitespace inconsistently between ID index build and lookup.
+- Fixed EPG source refresh not recording errors on failure, leaving stale "refreshing" status.
+- Fixed EPG source refresh replacing live data non-atomically — writes now go to a staging area and swap in a single transaction.
+- Fixed EPG override-candidates query loading all channels into memory instead of filtering in SQL.
+- Fixed `MAX_EPG_SIZE_BYTES` duplicated across two repositories — now defined once in shared config.
+- Fixed EPG source refresh not being rate-limited, allowing rapid repeated fetches.
+- Fixed `jumpToDay` and `jumpToPrimeTime` using UTC epoch modulo instead of local-timezone arithmetic.
+- Fixed guide timeline and program times using hardcoded 24-hour format instead of respecting the device locale.
+- Fixed program progress bar gated on `isNowPlaying` flag instead of computing from timestamps.
+- Fixed `EpgUiState` using `System.currentTimeMillis()` in default field values, causing inconsistent anchor times.
+- Fixed guide search query not debounced, firing a database query on every keystroke.
+- Fixed `nowTicker` flow restarting a new timer per collector instead of sharing a single upstream.
 
 #### VOD
 - Fixed "New to Old" sort not working for Movies. The `added` timestamp is now correctly used across the full pipeline, matching how series sorting works.

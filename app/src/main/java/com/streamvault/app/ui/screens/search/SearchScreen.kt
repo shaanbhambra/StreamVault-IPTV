@@ -66,6 +66,9 @@ import com.streamvault.domain.repository.FavoriteRepository
 import com.streamvault.domain.repository.ProviderRepository
 import com.streamvault.domain.usecase.SearchContent
 import com.streamvault.domain.usecase.SearchContentScope
+import com.streamvault.domain.manager.RecordingManager
+import com.streamvault.domain.model.RecordingStatus
+import com.streamvault.domain.util.AdultContentVisibilityPolicy
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -82,7 +85,8 @@ class SearchViewModel @Inject constructor(
     private val preferencesRepository: com.streamvault.data.preferences.PreferencesRepository,
     private val parentalControlManager: ParentalControlManager,
     private val favoriteRepository: FavoriteRepository,
-    private val categoryRepository: CategoryRepository
+    private val categoryRepository: CategoryRepository,
+    private val recordingManager: RecordingManager
 ) : ViewModel() {
     private companion object {
         const val MAX_RESULTS_PER_SECTION = 120
@@ -97,6 +101,13 @@ class SearchViewModel @Inject constructor(
 
     private val _parentalControlLevel = MutableStateFlow(0)
     private val _activeProviderId = MutableStateFlow<Long?>(null)
+
+    private val _recordingChannelIds = MutableStateFlow<Set<Long>>(emptySet())
+    val recordingChannelIds: StateFlow<Set<Long>> = _recordingChannelIds.asStateFlow()
+
+    private val _scheduledChannelIds = MutableStateFlow<Set<Long>>(emptySet())
+    val scheduledChannelIds: StateFlow<Set<Long>> = _scheduledChannelIds.asStateFlow()
+
     private val unlockedCategoryIds = providerRepository.getActiveProvider()
         .onEach { provider -> _activeProviderId.value = provider?.id }
         .flatMapLatest { provider ->
@@ -107,6 +118,16 @@ class SearchViewModel @Inject constructor(
         viewModelScope.launch {
             preferencesRepository.parentalControlLevel.collect { level ->
                 _parentalControlLevel.value = level
+            }
+        }
+        viewModelScope.launch {
+            recordingManager.observeRecordingItems().collect { items ->
+                _recordingChannelIds.value = items
+                    .filter { it.status == RecordingStatus.RECORDING }
+                    .map { it.channelId }.toSet()
+                _scheduledChannelIds.value = items
+                    .filter { it.status == RecordingStatus.SCHEDULED }
+                    .map { it.channelId }.toSet()
             }
         }
     }
@@ -156,10 +177,17 @@ class SearchViewModel @Inject constructor(
                 scope = tab.toSearchScope(),
                 maxResultsPerSection = MAX_RESULTS_PER_SECTION
             ).map { results ->
+                val filterAdult = !AdultContentVisibilityPolicy.showInAggregatedSurfaces(level)
                 SearchUiState(
-                    channels = results.channels,
-                    movies = results.movies,
-                    series = results.series,
+                    channels = if (filterAdult)
+                        results.channels.filterNot { it.isAdult || it.isUserProtected }
+                    else results.channels,
+                    movies = if (filterAdult)
+                        results.movies.filterNot { it.isAdult || it.isUserProtected }
+                    else results.movies,
+                    series = if (filterAdult)
+                        results.series.filterNot { it.isAdult || it.isUserProtected }
+                    else results.series,
                     isLoading = false,
                     hasSearched = true,
                     parentalControlLevel = level,
@@ -322,6 +350,8 @@ fun SearchScreen(
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val recentQueries by viewModel.recentQueries.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val recordingChannelIds by viewModel.recordingChannelIds.collectAsStateWithLifecycle()
+    val scheduledChannelIds by viewModel.scheduledChannelIds.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
     val searchFocusRequester = remember { FocusRequester() }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -566,6 +596,8 @@ fun SearchScreen(
                                     ChannelCard(
                                         channel = channel,
                                         isLocked = channelLocked,
+                                        isRecording = channel.id in recordingChannelIds,
+                                        isScheduledRecording = channel.id in scheduledChannelIds,
                                         onClick = {
                                             if (channelLocked) {
                                                 pendingChannel = channel
@@ -656,6 +688,8 @@ fun SearchScreen(
                             }) { row ->
                                 SearchChannelGridRow(
                                     channels = row,
+                                    recordingChannelIds = recordingChannelIds,
+                                    scheduledChannelIds = scheduledChannelIds,
                                     isLocked = { channel ->
                                         isLocked(
                                             categoryId = channel.categoryId,
@@ -962,6 +996,8 @@ private fun <T : Any> SearchResultRail(
 @Composable
 private fun SearchChannelGridRow(
     channels: List<Channel>,
+    recordingChannelIds: Set<Long> = emptySet(),
+    scheduledChannelIds: Set<Long> = emptySet(),
     isLocked: (Channel) -> Boolean,
     onChannelClick: (Channel, Boolean) -> Unit,
     onChannelLongClick: (Channel) -> Unit
@@ -975,6 +1011,8 @@ private fun SearchChannelGridRow(
             ChannelCard(
                 channel = channel,
                 isLocked = locked,
+                isRecording = channel.id in recordingChannelIds,
+                isScheduledRecording = channel.id in scheduledChannelIds,
                 onClick = { onChannelClick(channel, locked) },
                 onLongClick = { onChannelLongClick(channel) }
             )

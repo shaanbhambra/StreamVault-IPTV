@@ -8,7 +8,10 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -102,6 +105,8 @@ internal fun SettingsScreenDialogs(
     onShowRecordingRetentionDialogChange: (Boolean) -> Unit,
     showRecordingConcurrencyDialog: Boolean,
     onShowRecordingConcurrencyDialogChange: (Boolean) -> Unit,
+    showRecordingPaddingDialog: Boolean,
+    onShowRecordingPaddingDialogChange: (Boolean) -> Unit,
     showClearHistoryDialog: Boolean,
     onShowClearHistoryDialogChange: (Boolean) -> Unit,
     showCreateCombinedDialog: Boolean,
@@ -488,11 +493,21 @@ internal fun SettingsScreenDialogs(
             title = stringResource(R.string.settings_select_level),
             onDismiss = { onShowLevelDialogChange(false) }
         ) {
-            LevelOption(0, stringResource(R.string.settings_level_off_desc), uiState.parentalControlLevel) {
+            LevelOption(
+                level = 0,
+                text = stringResource(R.string.settings_level_off_desc),
+                subtitle = stringResource(R.string.settings_level_off_subtitle),
+                currentLevel = uiState.parentalControlLevel
+            ) {
                 viewModel.setParentalControlLevel(0)
                 onShowLevelDialogChange(false)
             }
-            LevelOption(1, stringResource(R.string.settings_level_locked_desc), uiState.parentalControlLevel) {
+            LevelOption(
+                level = 1,
+                text = stringResource(R.string.settings_level_locked_desc),
+                subtitle = stringResource(R.string.settings_level_locked_subtitle),
+                currentLevel = uiState.parentalControlLevel
+            ) {
                 if (uiState.hasParentalPin) {
                     viewModel.setParentalControlLevel(1)
                 } else {
@@ -502,11 +517,31 @@ internal fun SettingsScreenDialogs(
                 }
                 onShowLevelDialogChange(false)
             }
-            LevelOption(2, stringResource(R.string.settings_level_hidden_desc), uiState.parentalControlLevel) {
+            LevelOption(
+                level = 2,
+                text = stringResource(R.string.settings_level_private_desc),
+                subtitle = stringResource(R.string.settings_level_private_subtitle),
+                currentLevel = uiState.parentalControlLevel
+            ) {
                 if (uiState.hasParentalPin) {
                     viewModel.setParentalControlLevel(2)
                 } else {
                     onPendingProtectionLevelChange(2)
+                    onPendingActionChange(ParentalAction.SetNewPin)
+                    onShowPinDialogChange(true)
+                }
+                onShowLevelDialogChange(false)
+            }
+            LevelOption(
+                level = 3,
+                text = stringResource(R.string.settings_level_hidden_desc),
+                subtitle = stringResource(R.string.settings_level_hidden_subtitle),
+                currentLevel = uiState.parentalControlLevel
+            ) {
+                if (uiState.hasParentalPin) {
+                    viewModel.setParentalControlLevel(3)
+                } else {
+                    onPendingProtectionLevelChange(3)
                     onPendingActionChange(ParentalAction.SetNewPin)
                     onShowPinDialogChange(true)
                 }
@@ -603,6 +638,56 @@ internal fun SettingsScreenDialogs(
                     onSelect = {
                         viewModel.updateRecordingMaxSimultaneous(value)
                         onShowRecordingConcurrencyDialogChange(false)
+                    }
+                )
+            }
+        }
+    }
+
+    if (showRecordingPaddingDialog) {
+        val paddingOptions = listOf(0, 1, 2, 3, 5, 10, 15, 30)
+        PremiumSelectionDialog(
+            title = stringResource(R.string.settings_recording_padding_title),
+            onDismiss = { onShowRecordingPaddingDialogChange(false) }
+        ) {
+            Text(
+                text = stringResource(R.string.settings_recording_padding_before),
+                style = MaterialTheme.typography.labelMedium,
+                color = OnSurfaceDim,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            paddingOptions.forEach { minutes ->
+                LevelOption(
+                    level = minutes,
+                    text = if (minutes == 0) {
+                        stringResource(R.string.settings_recording_padding_none)
+                    } else {
+                        stringResource(R.string.settings_recording_padding_minutes, minutes)
+                    },
+                    currentLevel = uiState.recordingPaddingBeforeMinutes,
+                    onSelect = {
+                        viewModel.setRecordingPaddingBeforeMinutes(minutes)
+                    }
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = stringResource(R.string.settings_recording_padding_after),
+                style = MaterialTheme.typography.labelMedium,
+                color = OnSurfaceDim,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            paddingOptions.forEach { minutes ->
+                LevelOption(
+                    level = minutes,
+                    text = if (minutes == 0) {
+                        stringResource(R.string.settings_recording_padding_none)
+                    } else {
+                        stringResource(R.string.settings_recording_padding_minutes, minutes)
+                    },
+                    currentLevel = uiState.recordingPaddingAfterMinutes,
+                    onSelect = {
+                        viewModel.setRecordingPaddingAfterMinutes(minutes)
                     }
                 )
             }

@@ -29,6 +29,8 @@ import com.streamvault.domain.repository.SeriesRepository
 import com.streamvault.domain.usecase.ContinueWatchingScope
 import com.streamvault.domain.usecase.GetContinueWatching
 import com.streamvault.domain.usecase.GetCustomCategories
+import com.streamvault.domain.manager.RecordingManager
+import com.streamvault.domain.model.RecordingStatus
 import android.content.Context
 import com.streamvault.app.R
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -47,6 +49,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import com.streamvault.domain.util.AdultContentVisibilityPolicy
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
@@ -67,7 +70,8 @@ class DashboardViewModel @Inject constructor(
     private val getContinueWatching: GetContinueWatching,
     private val getCustomCategories: GetCustomCategories,
     private val syncManager: SyncManager,
-    private val appUpdateInstaller: AppUpdateInstaller
+    private val appUpdateInstaller: AppUpdateInstaller,
+    private val recordingManager: RecordingManager
 ) : ViewModel() {
     private companion object {
         const val FAVORITE_CHANNEL_LIMIT = 12
@@ -81,7 +85,23 @@ class DashboardViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(DashboardUiState())
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
 
+    private val _recordingChannelIds = MutableStateFlow<Set<Long>>(emptySet())
+    val recordingChannelIds: StateFlow<Set<Long>> = _recordingChannelIds.asStateFlow()
+
+    private val _scheduledChannelIds = MutableStateFlow<Set<Long>>(emptySet())
+    val scheduledChannelIds: StateFlow<Set<Long>> = _scheduledChannelIds.asStateFlow()
+
     init {
+        viewModelScope.launch {
+            recordingManager.observeRecordingItems().collect { items ->
+                _recordingChannelIds.value = items
+                    .filter { it.status == RecordingStatus.RECORDING }
+                    .map { it.channelId }.toSet()
+                _scheduledChannelIds.value = items
+                    .filter { it.status == RecordingStatus.SCHEDULED }
+                    .map { it.channelId }.toSet()
+            }
+        }
         viewModelScope.launch {
             combine(
                 combinedM3uRepository.getActiveLiveSource(),
@@ -141,22 +161,30 @@ class DashboardViewModel @Inject constructor(
         liveProviderIds: List<Long>,
         combinedProfileId: Long?
     ): Flow<DashboardUiState> {
+        val movieShelf = combine(
+            movieRepository.getMovies(provider.id),
+            preferencesRepository.parentalControlLevel
+        ) { movies, level ->
+            movies
+                .filter { !shouldHideVodFromHome(it, level) }
+                .sortedByDescending(::movieFreshnessScore)
+                .take(MOVIE_SHELF_LIMIT)
+        }
+        val seriesShelf = combine(
+            seriesRepository.getSeries(provider.id),
+            preferencesRepository.parentalControlLevel
+        ) { series, level ->
+            series
+                .filter { !shouldHideVodFromHome(it, level) }
+                .sortedByDescending(::seriesFreshnessScore)
+                .take(SERIES_SHELF_LIMIT)
+        }
         val contentShelves = combine(
             observeFavoriteChannels(liveProviderIds).onStart { emit(emptyList()) },
             observeRecentChannels(liveProviderIds).onStart { emit(emptyList()) },
             observeContinueWatching(provider.id).onStart { emit(emptyList()) },
-            movieRepository.getMovies(provider.id).map { movies ->
-                movies
-                    .filterNot(::shouldHideVodFromHome)
-                    .sortedByDescending(::movieFreshnessScore)
-                    .take(MOVIE_SHELF_LIMIT)
-            }.onStart { emit(emptyList()) },
-            seriesRepository.getSeries(provider.id).map { series ->
-                series
-                    .filterNot(::shouldHideVodFromHome)
-                    .sortedByDescending(::seriesFreshnessScore)
-                    .take(SERIES_SHELF_LIMIT)
-            }.onStart { emit(emptyList()) }
+            movieShelf.onStart { emit(emptyList()) },
+            seriesShelf.onStart { emit(emptyList()) }
         ) { favoriteChannels, recentChannels, continueWatching, recentMovies, recentSeries ->
             DashboardContentShelves(
                 favoriteChannels = favoriteChannels,
@@ -245,13 +273,17 @@ class DashboardViewModel @Inject constructor(
             .flatMapLatest(::loadChannelsByOrderedIds)
 
     private fun observeRecentChannels(providerIds: List<Long>): Flow<List<Channel>> =
-        preferencesRepository.showRecentChannelsCategory.flatMapLatest { show ->
-            if (!show) {
-                flowOf(emptyList())
-            } else {
-                observeRecentLiveIds(providerIds, RECENT_CHANNEL_LIMIT)
+        combine(
+            preferencesRepository.showRecentChannelsCategory.flatMapLatest { show ->
+                if (!show) flowOf(emptyList())
+                else observeRecentLiveIds(providerIds, RECENT_CHANNEL_LIMIT)
                     .flatMapLatest(::loadChannelsByOrderedIds)
-            }
+            },
+            preferencesRepository.parentalControlLevel
+        ) { channels, level ->
+            AdultContentVisibilityPolicy.filterForAggregatedSurface(
+                channels, level
+            ) { isAdult || isUserProtected }
         }
 
     private fun observeContinueWatching(providerId: Long): Flow<List<PlaybackHistory>> =
@@ -484,12 +516,14 @@ class DashboardViewModel @Inject constructor(
             ?: series.id
     }
 
-    private fun shouldHideVodFromHome(movie: Movie): Boolean {
+    private fun shouldHideVodFromHome(movie: Movie, level: Int): Boolean {
+        if (AdultContentVisibilityPolicy.showInAggregatedSurfaces(level)) return false
         if (movie.isAdult || movie.isUserProtected) return true
         return titleLooksExplicit(movie.name)
     }
 
-    private fun shouldHideVodFromHome(series: Series): Boolean {
+    private fun shouldHideVodFromHome(series: Series, level: Int): Boolean {
+        if (AdultContentVisibilityPolicy.showInAggregatedSurfaces(level)) return false
         if (series.isAdult || series.isUserProtected) return true
         return titleLooksExplicit(series.name)
     }

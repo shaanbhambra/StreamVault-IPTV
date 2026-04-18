@@ -379,14 +379,14 @@ private fun MoviesVodContent(
     val isCategoryLocked = remember(uiState.parentalControlLevel, uiState.unlockedCategoryIds, categoryByName) {
         { category: Category ->
             (category.isAdult || category.isUserProtected) &&
-                uiState.parentalControlLevel == 1 &&
+                uiState.parentalControlLevel in 1..2 &&
                 kotlin.math.abs(category.id) !in uiState.unlockedCategoryIds
         }
     }
     val isCategoryHidden = remember(uiState.parentalControlLevel, uiState.unlockedCategoryIds, categoryByName) {
         { category: Category ->
             (category.isAdult || category.isUserProtected) &&
-                uiState.parentalControlLevel >= 2 &&
+                uiState.parentalControlLevel >= 3 &&
                 kotlin.math.abs(category.id) !in uiState.unlockedCategoryIds
         }
     }
@@ -394,7 +394,7 @@ private fun MoviesVodContent(
         { movie: Movie ->
             val categoryId = movie.categoryId
             (movie.isAdult || movie.isUserProtected) &&
-                uiState.parentalControlLevel == 1 &&
+                uiState.parentalControlLevel in 1..2 &&
                 (categoryId == null || kotlin.math.abs(categoryId) !in uiState.unlockedCategoryIds)
         }
     }
@@ -909,14 +909,14 @@ private fun MoviesVodClassicContent(
     val isCategoryLocked = remember(uiState.parentalControlLevel, uiState.unlockedCategoryIds, categoryByName) {
         { category: Category ->
             (category.isAdult || category.isUserProtected) &&
-                uiState.parentalControlLevel == 1 &&
+                uiState.parentalControlLevel in 1..2 &&
                 kotlin.math.abs(category.id) !in uiState.unlockedCategoryIds
         }
     }
     val isCategoryHidden = remember(uiState.parentalControlLevel, uiState.unlockedCategoryIds, categoryByName) {
         { category: Category ->
             (category.isAdult || category.isUserProtected) &&
-                uiState.parentalControlLevel >= 2 &&
+                uiState.parentalControlLevel >= 3 &&
                 kotlin.math.abs(category.id) !in uiState.unlockedCategoryIds
         }
     }
@@ -924,7 +924,7 @@ private fun MoviesVodClassicContent(
         { movie: Movie ->
             val categoryId = movie.categoryId
             (movie.isAdult || movie.isUserProtected) &&
-                uiState.parentalControlLevel == 1 &&
+                uiState.parentalControlLevel in 1..2 &&
                 (categoryId == null || kotlin.math.abs(categoryId) !in uiState.unlockedCategoryIds)
         }
     }

@@ -241,6 +241,24 @@ class SettingsViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            preferencesRepository.recordingWifiOnly.collect { wifiOnly ->
+                _uiState.update { it.copy(wifiOnlyRecording = wifiOnly) }
+            }
+        }
+
+        viewModelScope.launch {
+            preferencesRepository.recordingPaddingBeforeMinutes.collect { minutes ->
+                _uiState.update { it.copy(recordingPaddingBeforeMinutes = minutes) }
+            }
+        }
+
+        viewModelScope.launch {
+            preferencesRepository.recordingPaddingAfterMinutes.collect { minutes ->
+                _uiState.update { it.copy(recordingPaddingAfterMinutes = minutes) }
+            }
+        }
+
+        viewModelScope.launch {
             epgSourceRepository.getAllSources().collect { sources ->
                 _uiState.update { it.copy(epgSources = sources) }
             }
@@ -473,6 +491,24 @@ class SettingsViewModel @Inject constructor(
     fun setZapAutoRevert(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setZapAutoRevert(enabled)
+        }
+    }
+
+    fun setRecordingWifiOnly(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setRecordingWifiOnly(enabled)
+        }
+    }
+
+    fun setRecordingPaddingBeforeMinutes(minutes: Int) {
+        viewModelScope.launch {
+            preferencesRepository.setRecordingPaddingBeforeMinutes(minutes)
+        }
+    }
+
+    fun setRecordingPaddingAfterMinutes(minutes: Int) {
+        viewModelScope.launch {
+            preferencesRepository.setRecordingPaddingAfterMinutes(minutes)
         }
     }
 
@@ -749,6 +785,10 @@ class SettingsViewModel @Inject constructor(
 
     fun cancelRecording(recordingId: String) {
         recordingActions.cancelRecording(viewModelScope, recordingId)
+    }
+
+    fun skipOccurrence(recordingId: String) {
+        recordingActions.skipOccurrence(viewModelScope, recordingId)
     }
 
     fun deleteRecording(recordingId: String) {

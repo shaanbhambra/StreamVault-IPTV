@@ -113,7 +113,7 @@ class MovieRepositoryImpl @Inject constructor(
 
     override fun getMovies(providerId: Long): Flow<List<Movie>> =
         preferencesRepository.parentalControlLevel.flatMapLatest { level ->
-            if (level == 2) movieDao.getByProviderUnprotected(providerId)
+            if (level >= 3) movieDao.getByProviderUnprotected(providerId)
             else movieDao.getByProvider(providerId)
         }.map { list -> list.map { it.toDomain() } }
 
@@ -122,7 +122,7 @@ class MovieRepositoryImpl @Inject constructor(
             ensureXtreamCategoryLoaded(providerId, categoryId, fetchIfMissing = true, refreshStaleInBackground = true)
             emitAll(
                 preferencesRepository.parentalControlLevel.flatMapLatest { level ->
-                    if (level == 2) movieDao.getByCategoryUnprotected(providerId, categoryId)
+                    if (level >= 3) movieDao.getByCategoryUnprotected(providerId, categoryId)
                     else movieDao.getByCategory(providerId, categoryId)
                 }.map { list -> list.map { it.toDomain() } }
             )
@@ -140,7 +140,7 @@ class MovieRepositoryImpl @Inject constructor(
                 movieDao.getByCategoryPage(providerId, categoryId, limit, offset),
                 preferencesRepository.parentalControlLevel
             ) { entities, level: Int ->
-                if (level == 2) {
+                if (level >= 3) {
                     entities.filter { !it.isUserProtected }
                 } else {
                     entities
@@ -157,7 +157,7 @@ class MovieRepositoryImpl @Inject constructor(
                     movieDao.getByCategoryPreview(providerId, categoryId, limit),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level: Int ->
-                    if (level == 2) {
+                    if (level >= 3) {
                         entities.filter { !it.isUserProtected }
                     } else {
                         entities
@@ -172,7 +172,7 @@ class MovieRepositoryImpl @Inject constructor(
             preferencesRepository.parentalControlLevel
         ) { categories, level ->
             val requestedIds = categoryIds.toSet()
-            val filtered = if (level == 2) categories.filter { !it.isAdult && !it.isUserProtected } else categories
+            val filtered = if (level >= 3) categories.filter { !it.isAdult && !it.isUserProtected } else categories
             filtered.filter { it.categoryId in requestedIds } to level
         }.flatMapLatest { (filteredCategories, level) ->
             if (filteredCategories.isEmpty()) {
@@ -190,7 +190,7 @@ class MovieRepositoryImpl @Inject constructor(
                 val categoryGroupFlows: List<Flow<Pair<Long?, List<Movie>>>> = filteredCategories.map { cat ->
                     movieDao.getByCategoryPreview(providerId, cat.categoryId, limitPerCategory)
                         .map { entities ->
-                            val items = if (level == 2) entities.filter { !it.isUserProtected } else entities
+                            val items = if (level >= 3) entities.filter { !it.isUserProtected } else entities
                             (cat.categoryId as Long?) to items.map { it.toDomain() }
                         }
                 }
@@ -205,7 +205,7 @@ class MovieRepositoryImpl @Inject constructor(
             movieDao.getTopRatedPreview(providerId, limit),
             preferencesRepository.parentalControlLevel
         ) { entities, level: Int ->
-            if (level == 2) {
+            if (level >= 3) {
                 entities.filter { !it.isUserProtected }
             } else {
                 entities
@@ -217,7 +217,7 @@ class MovieRepositoryImpl @Inject constructor(
             movieDao.getFreshPreview(providerId, limit),
             preferencesRepository.parentalControlLevel
         ) { entities, level: Int ->
-            if (level == 2) {
+            if (level >= 3) {
                 entities.filter { !it.isUserProtected }
             } else {
                 entities
@@ -275,7 +275,7 @@ class MovieRepositoryImpl @Inject constructor(
             preferencesRepository.parentalControlLevel
         ) { entities: List<CategoryEntity>, level: Int ->
             val mapped = entities.map { it.toDomain() }
-            if (level == 2) {
+            if (level >= 3) {
                 mapped.filter { !it.isAdult && !it.isUserProtected }
             } else {
                 mapped
@@ -312,7 +312,7 @@ class MovieRepositoryImpl @Inject constructor(
                 safeMovieSearchFlow(movieDao.search(providerId, ftsQuery, SEARCH_RESULT_LIMIT)),
                 preferencesRepository.parentalControlLevel
             ) { entities, level: Int ->
-                if (level == 2) {
+                if (level >= 3) {
                     entities.filter { !it.isUserProtected }
                 } else {
                     entities
@@ -525,7 +525,7 @@ class MovieRepositoryImpl @Inject constructor(
                         safeMovieSearchFlow(movieDao.searchByCategory(query.providerId, categoryId, ftsQuery, SEARCH_RESULT_LIMIT)),
                         preferencesRepository.parentalControlLevel
                     ) { entities, level ->
-                        if (level == 2) entities.filter { !it.isUserProtected } else entities
+                        if (level >= 3) entities.filter { !it.isUserProtected } else entities
                     }.map { entities ->
                         entities.map { it.toDomain() }
                             .rankSearchResults(normalizedSearch) { it.name }
@@ -544,7 +544,7 @@ class MovieRepositoryImpl @Inject constructor(
                                         movieDao.getTopRatedByCategoryPreview(query.providerId, categoryId, fetchLimit),
                                         preferencesRepository.parentalControlLevel
                                     ) { entities, level ->
-                                        if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                        if (level >= 3) entities.filter { !it.isUserProtected } else entities
                                     }.map { entities -> entities.map { it.toDomain() } }
                                 )
                             }
@@ -559,7 +559,7 @@ class MovieRepositoryImpl @Inject constructor(
                                         movieDao.getFreshByCategoryPreview(query.providerId, categoryId, fetchLimit),
                                         preferencesRepository.parentalControlLevel
                                     ) { entities, level ->
-                                        if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                        if (level >= 3) entities.filter { !it.isUserProtected } else entities
                                     }.map { entities -> entities.map { it.toDomain() } }
                                 )
                             }
@@ -574,7 +574,7 @@ class MovieRepositoryImpl @Inject constructor(
                                         movieDao.getByCategoryPage(query.providerId, categoryId, fetchLimit, 0),
                                         preferencesRepository.parentalControlLevel
                                     ) { entities, level ->
-                                        if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                        if (level >= 3) entities.filter { !it.isUserProtected } else entities
                                     }.map { entities -> entities.map { it.toDomain() } }
                                 )
                             }
@@ -582,7 +582,7 @@ class MovieRepositoryImpl @Inject constructor(
                             movieDao.getByProviderPage(query.providerId, fetchLimit, 0),
                             preferencesRepository.parentalControlLevel
                         ) { entities, level ->
-                            if (level == 2) entities.filter { !it.isUserProtected } else entities
+                            if (level >= 3) entities.filter { !it.isUserProtected } else entities
                         }.map { entities -> entities.map { it.toDomain() } }
                     }
                 }
@@ -598,7 +598,7 @@ class MovieRepositoryImpl @Inject constructor(
                                 movieDao.getFavoritesByCategoryPage(query.providerId, categoryId, fetchLimit, 0),
                                 preferencesRepository.parentalControlLevel
                             ) { entities, level ->
-                                if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                if (level >= 3) entities.filter { !it.isUserProtected } else entities
                             }.map { entities -> entities.map { it.toDomain() } }
                         )
                     }
@@ -606,7 +606,7 @@ class MovieRepositoryImpl @Inject constructor(
                     movieDao.getFavoritesByProviderPage(query.providerId, fetchLimit, 0),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level ->
-                    if (level == 2) entities.filter { !it.isUserProtected } else entities
+                    if (level >= 3) entities.filter { !it.isUserProtected } else entities
                 }.map { entities -> entities.map { it.toDomain() } }
             }
             normalizedSearch.isBlank() &&
@@ -620,7 +620,7 @@ class MovieRepositoryImpl @Inject constructor(
                                 movieDao.getInProgressByCategoryPage(query.providerId, categoryId, fetchLimit, 0),
                                 preferencesRepository.parentalControlLevel
                             ) { entities, level ->
-                                if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                if (level >= 3) entities.filter { !it.isUserProtected } else entities
                             }.map { entities -> entities.map { it.toDomain() } }
                         )
                     }
@@ -628,7 +628,7 @@ class MovieRepositoryImpl @Inject constructor(
                     movieDao.getInProgressByProviderPage(query.providerId, fetchLimit, 0),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level ->
-                    if (level == 2) entities.filter { !it.isUserProtected } else entities
+                    if (level >= 3) entities.filter { !it.isUserProtected } else entities
                 }.map { entities -> entities.map { it.toDomain() } }
             }
             normalizedSearch.isBlank() &&
@@ -642,7 +642,7 @@ class MovieRepositoryImpl @Inject constructor(
                                 movieDao.getUnwatchedByCategoryPage(query.providerId, categoryId, fetchLimit, 0),
                                 preferencesRepository.parentalControlLevel
                             ) { entities, level ->
-                                if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                if (level >= 3) entities.filter { !it.isUserProtected } else entities
                             }.map { entities -> entities.map { it.toDomain() } }
                         )
                     }
@@ -650,7 +650,7 @@ class MovieRepositoryImpl @Inject constructor(
                     movieDao.getUnwatchedByProviderPage(query.providerId, fetchLimit, 0),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level ->
-                    if (level == 2) entities.filter { !it.isUserProtected } else entities
+                    if (level >= 3) entities.filter { !it.isUserProtected } else entities
                 }.map { entities -> entities.map { it.toDomain() } }
             }
             normalizedSearch.isBlank() &&
@@ -664,7 +664,7 @@ class MovieRepositoryImpl @Inject constructor(
                                 movieDao.getByWatchCountCategoryPage(query.providerId, categoryId, fetchLimit, 0),
                                 preferencesRepository.parentalControlLevel
                             ) { entities, level ->
-                                if (level == 2) entities.filter { !it.isUserProtected } else entities
+                                if (level >= 3) entities.filter { !it.isUserProtected } else entities
                             }.map { entities -> entities.map { it.toDomain() } }
                         )
                     }
@@ -672,7 +672,7 @@ class MovieRepositoryImpl @Inject constructor(
                     movieDao.getByWatchCountProviderPage(query.providerId, fetchLimit, 0),
                     preferencesRepository.parentalControlLevel
                 ) { entities, level ->
-                    if (level == 2) entities.filter { !it.isUserProtected } else entities
+                    if (level >= 3) entities.filter { !it.isUserProtected } else entities
                 }.map { entities -> entities.map { it.toDomain() } }
             }
             else -> null
@@ -821,7 +821,7 @@ class MovieRepositoryImpl @Inject constructor(
             if (batch.isEmpty()) {
                 return
             }
-            val visibleBatch = if (parentalLevel == 2) {
+            val visibleBatch = if (parentalLevel >= 3) {
                 batch.filterNot { it.isUserProtected }
             } else {
                 batch

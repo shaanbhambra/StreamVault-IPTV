@@ -6,8 +6,6 @@ import android.net.Uri
 import android.os.Environment
 import android.os.StatFs
 import androidx.documentfile.provider.DocumentFile
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.streamvault.data.local.entity.RecordingRunEntity
 import com.streamvault.data.local.entity.RecordingRunWithSchedule
 import com.streamvault.data.local.entity.RecordingStorageEntity
@@ -20,6 +18,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONObject
 
 private const val DEFAULT_RECORDINGS_DIR_NAME = "recordings"
 
@@ -76,17 +75,31 @@ internal fun RecordingStorageConfig.toEntity(existing: RecordingStorageEntity?, 
         updatedAt = System.currentTimeMillis()
     )
 
-internal fun headersToJson(gson: Gson, headers: Map<String, String>): String =
-    gson.toJson(headers)
-
-internal fun headersFromJson(gson: Gson, raw: String?): Map<String, String> {
-    if (raw.isNullOrBlank()) return emptyMap()
-    val type = object : TypeToken<Map<String, String>>() {}.type
-    return runCatching { gson.fromJson<Map<String, String>>(raw, type).orEmpty() }.getOrDefault(emptyMap())
+internal fun headersToJson(headers: Map<String, String>): String {
+    val obj = JSONObject()
+    headers.forEach { (k, v) -> obj.put(k, v) }
+    return obj.toString()
 }
 
-internal fun inferFailureCategory(message: String?, fallback: RecordingFailureCategory = RecordingFailureCategory.UNKNOWN): RecordingFailureCategory {
-    val normalized = message.orEmpty().lowercase(Locale.ROOT)
+internal fun headersFromJson(raw: String?): Map<String, String> {
+    if (raw.isNullOrBlank()) return emptyMap()
+    return runCatching {
+        val obj = JSONObject(raw)
+        buildMap { obj.keys().forEach { key -> put(key, obj.getString(key)) } }
+    }.getOrDefault(emptyMap())
+}
+
+internal fun inferFailureCategory(error: Throwable?, fallback: RecordingFailureCategory = RecordingFailureCategory.UNKNOWN): RecordingFailureCategory {
+    if (error is UnsupportedRecordingException) return error.category
+    val rootCause = error?.cause ?: error
+    when (rootCause) {
+        is java.net.SocketTimeoutException,
+        is java.net.SocketException,
+        is java.net.UnknownHostException,
+        is java.net.ConnectException -> return RecordingFailureCategory.NETWORK
+        is javax.net.ssl.SSLException -> return RecordingFailureCategory.NETWORK
+    }
+    val normalized = error?.message.orEmpty().lowercase(Locale.ROOT)
     return when {
         normalized.isBlank() -> fallback
         "drm" in normalized -> RecordingFailureCategory.DRM_UNSUPPORTED
@@ -108,9 +121,9 @@ internal fun sanitizeRecordingFileName(
 ): String {
     val formatter = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.US)
     val startLabel = formatter.format(Date(startMs))
-    val safeChannel = channelName.replace(Regex("[^a-zA-Z0-9._ -]"), "_").trim().ifBlank { "Channel" }
+    val safeChannel = channelName.replace(Regex("[^a-zA-Z0-9_ -]"), "_").trim().ifBlank { "Channel" }
     val safeProgram = programTitle
-        ?.replace(Regex("[^a-zA-Z0-9._ -]"), "_")
+        ?.replace(Regex("[^a-zA-Z0-9_ -]"), "_")
         ?.trim()
         ?.takeIf { it.isNotBlank() }
         ?: "Program"
@@ -161,10 +174,16 @@ internal fun createOutputTarget(
     val uri = Uri.parse(treeUri)
     val documentTree = DocumentFile.fromTreeUri(context, uri)
         ?: throw IllegalStateException("Recording folder is unavailable.")
-    val existing = documentTree.findFile(fileName)
-    val document = existing ?: documentTree.createFile("video/mp2t", fileName.removeSuffix(".ts"))
+    val baseName = fileName.removeSuffix(".ts")
+    var candidateName = fileName
+    var counter = 1
+    while (documentTree.findFile(candidateName) != null) {
+        candidateName = "${baseName}_$counter.ts"
+        counter++
+    }
+    val document = documentTree.createFile("video/mp2t", candidateName.removeSuffix(".ts"))
     requireNotNull(document?.uri) { "Failed to create recording file." }
-    return RecordingOutputTarget.DocumentTarget(document.uri, "${documentTree.name ?: "Recordings"}/$fileName")
+    return RecordingOutputTarget.DocumentTarget(document.uri, "${documentTree.name ?: "Recordings"}/$candidateName")
 }
 
 internal fun deleteOutputTarget(context: Context, outputUri: String?, outputPath: String?) {

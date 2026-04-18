@@ -11,16 +11,20 @@ import com.streamvault.domain.model.Program
 import com.streamvault.domain.model.Result
 import com.streamvault.domain.repository.EpgRepository
 import com.streamvault.domain.repository.EpgSourceRepository
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -55,10 +59,15 @@ class EpgRepositoryImpl @Inject constructor(
     }
 
     companion object {
-        private const val MAX_EPG_SIZE_BYTES = 200L * 1_048_576 // 200 MB
+        private const val MAX_EPG_SIZE_BYTES = NetworkTimeoutConfig.EPG_MAX_SIZE_BYTES
         private const val NOW_AND_NEXT_LOOKBACK_MS = 60L * 60L * 1000L
         private const val NOW_AND_NEXT_LOOKAHEAD_MS = 2L * 60L * 60L * 1000L
         private const val NOW_AND_NEXT_REFRESH_INTERVAL_MS = 60L * 1000L
+
+        private fun String.escapeSqlLike(escape: Char = '\\'): String =
+            this.replace("$escape", "$escape$escape")
+                .replace("%", "$escape%")
+                .replace("_", "${escape}_")
     }
 
     override fun getProgramsForChannel(
@@ -127,9 +136,10 @@ class EpgRepositoryImpl @Inject constructor(
     ): Flow<List<Program>> {
         val normalizedQuery = query.trim()
         if (normalizedQuery.length < 2) return flowOf(emptyList())
+        val escaped = normalizedQuery.escapeSqlLike()
         return programDao.searchPrograms(
             providerId = providerId,
-            queryPattern = "%$normalizedQuery%",
+            queryPattern = "%$escaped%",
             startTime = startTime,
             endTime = endTime,
             categoryId = categoryId,
@@ -141,7 +151,7 @@ class EpgRepositoryImpl @Inject constructor(
     }
 
     override fun getNowPlaying(providerId: Long, channelId: String): Flow<Program?> =
-        nowTicker().flatMapLatest { now ->
+        nowTicker.flatMapLatest { now ->
             programDao.getNowPlaying(providerId, channelId, now)
                 .map { it?.toDomain() }
         }
@@ -185,7 +195,7 @@ class EpgRepositoryImpl @Inject constructor(
     }
 
     override fun getNowAndNext(providerId: Long, channelId: String): Flow<Pair<Program?, Program?>> =
-        nowTicker().flatMapLatest { now ->
+        nowTicker.flatMapLatest { now ->
             programDao.getForChannel(
                 providerId = providerId,
                 channelId = channelId,
@@ -194,7 +204,8 @@ class EpgRepositoryImpl @Inject constructor(
             ).map { entities ->
                 val programs = entities.map { it.toDomain() }
                 val current = programs.find { it.startTime <= now && it.endTime > now }
-                val next = programs.find { it.startTime > now }
+                val nextStart = current?.endTime ?: now
+                val next = programs.firstOrNull { it.startTime >= nextStart && it != current }
                 current to next
             }
         }
@@ -335,12 +346,14 @@ class EpgRepositoryImpl @Inject constructor(
         return emptyList()
     }
 
-    private fun nowTicker(): Flow<Long> = flow {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private val nowTicker: Flow<Long> = flow {
         while (true) {
             emit(System.currentTimeMillis())
             delay(NOW_AND_NEXT_REFRESH_INTERVAL_MS)
         }
-    }
+    }.shareIn(scope, SharingStarted.WhileSubscribed(), replay = 1)
 
     private fun providerRefreshMutex(providerId: Long): Mutex =
         providerRefreshMutexes.computeIfAbsent(providerId) { Mutex() }

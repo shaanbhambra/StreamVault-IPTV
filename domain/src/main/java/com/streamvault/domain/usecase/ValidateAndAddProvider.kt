@@ -24,7 +24,7 @@ data class M3uProviderSetupCommand(
     val url: String,
     val name: String,
     val epgSyncMode: ProviderEpgSyncMode = ProviderEpgSyncMode.UPFRONT,
-    val m3uVodClassificationEnabled: Boolean = true,
+    val m3uVodClassificationEnabled: Boolean = false,
     val existingProviderId: Long? = null
 )
 

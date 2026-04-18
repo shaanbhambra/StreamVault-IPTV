@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import com.google.common.truth.Truth.assertThat
 import com.streamvault.data.epg.EpgResolutionEngine
+import com.streamvault.data.local.DatabaseTransactionRunner
 import com.streamvault.data.local.dao.ChannelEpgMappingDao
 import com.streamvault.data.local.dao.EpgChannelDao
 import com.streamvault.data.local.dao.EpgProgrammeDao
@@ -44,6 +45,9 @@ class EpgSourceRepositoryImplTest {
     private val xmltvParser: XmltvParser = mock()
     private val okHttpClient: OkHttpClient = mock()
     private val resolutionEngine: EpgResolutionEngine = mock()
+    private val transactionRunner = object : DatabaseTransactionRunner {
+        override suspend fun <T> inTransaction(block: suspend () -> T): T = block()
+    }
 
     private lateinit var repository: EpgSourceRepositoryImpl
 
@@ -59,7 +63,8 @@ class EpgSourceRepositoryImplTest {
             epgProgrammeDao = epgProgrammeDao,
             xmltvParser = xmltvParser,
             okHttpClient = okHttpClient,
-            resolutionEngine = resolutionEngine
+            resolutionEngine = resolutionEngine,
+            transactionRunner = transactionRunner
         )
     }
 

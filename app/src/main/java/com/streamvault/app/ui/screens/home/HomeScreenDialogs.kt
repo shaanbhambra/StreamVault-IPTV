@@ -123,7 +123,7 @@ internal fun HomeDialogsHost(
         val category = uiState.selectedCategoryForOptions
         val isCategoryLocked =
             (category.isAdult || category.isUserProtected) &&
-                uiState.parentalControlLevel == 1 &&
+                uiState.parentalControlLevel in 1..2 &&
                 kotlin.math.abs(category.id) !in uiState.unlockedCategoryIds
         CategoryOptionsDialog(
             category = category,

@@ -65,7 +65,9 @@ class RecordingAlarmScheduler @Inject constructor(
                 whenMs,
                 pendingIntent
             )
-        }.getOrElse {
+        }.getOrElse { ex ->
+            android.util.Log.w("RecordingAlarmScheduler",
+                "Exact alarm denied (SCHEDULE_EXACT_ALARM may be revoked), falling back to inexact alarm for $recordingId", ex)
             AlarmManagerCompat.setAndAllowWhileIdle(
                 manager,
                 AlarmManager.RTC_WAKEUP,
@@ -87,6 +89,13 @@ class RecordingAlarmScheduler @Inject constructor(
         )
     }
 
-    private fun requestCode(action: String, recordingId: String): Int =
-        31 * action.hashCode() + recordingId.hashCode()
+    private fun requestCode(action: String, recordingId: String): Int {
+        val uuid = runCatching { java.util.UUID.fromString(recordingId) }.getOrNull()
+        val idHash = if (uuid != null) {
+            (uuid.mostSignificantBits xor uuid.leastSignificantBits).toInt()
+        } else {
+            recordingId.hashCode()
+        }
+        return 31 * action.hashCode() + idHash
+    }
 }

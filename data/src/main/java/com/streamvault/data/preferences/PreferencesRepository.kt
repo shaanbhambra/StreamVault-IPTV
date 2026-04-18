@@ -61,6 +61,7 @@ class PreferencesRepository @Inject constructor(
         val ACTIVE_LIVE_SOURCE_ID = longPreferencesKey("active_live_source_id")
         val DEFAULT_VIEW_MODE = stringPreferencesKey("default_view_mode")
         val PARENTAL_CONTROL_LEVEL = intPreferencesKey("parental_control_level")
+        val PARENTAL_V2_MIGRATED = booleanPreferencesKey("parental_v2_migrated")
         val LEGACY_PARENTAL_PIN = stringPreferencesKey("parental_pin")
         val PARENTAL_PIN_HASH = stringPreferencesKey("parental_pin_hash")
         val PARENTAL_PIN_SALT = stringPreferencesKey("parental_pin_salt")
@@ -115,6 +116,9 @@ class PreferencesRepository @Inject constructor(
         val PREVENT_STANDBY_DURING_PLAYBACK = booleanPreferencesKey("prevent_standby_during_playback")
         val AUTO_CHECK_APP_UPDATES = booleanPreferencesKey("auto_check_app_updates")
         val AUTO_DOWNLOAD_APP_UPDATES = booleanPreferencesKey("auto_download_app_updates")
+        val RECORDING_WIFI_ONLY = booleanPreferencesKey("recording_wifi_only")
+        val RECORDING_PADDING_BEFORE_MINUTES = intPreferencesKey("recording_padding_before_minutes")
+        val RECORDING_PADDING_AFTER_MINUTES = intPreferencesKey("recording_padding_after_minutes")
         val LAST_APP_UPDATE_CHECK_TIMESTAMP = longPreferencesKey("last_app_update_check_timestamp")
         val APP_UPDATE_DOWNLOAD_ID = longPreferencesKey("app_update_download_id")
         val APP_UPDATE_DOWNLOADED_VERSION_NAME = stringPreferencesKey("app_update_downloaded_version_name")
@@ -301,7 +305,12 @@ class PreferencesRepository @Inject constructor(
 
     val parentalControlLevel: Flow<Int> = context.dataStore.data
         .map { preferences ->
-            preferences[PreferencesKeys.PARENTAL_CONTROL_LEVEL] ?: 1 // Default to 1 = LOCKED
+            val stored = preferences[PreferencesKeys.PARENTAL_CONTROL_LEVEL] ?: 2 // Default to 2 = PRIVATE
+            // Migration: users who had the old HIDDEN level (stored as 2) are promoted to the new
+            // HIDDEN level (3). The v2-migrated flag prevents re-mapping after the user explicitly
+            // sets level 2 (PRIVATE) in the new scheme.
+            val migrated = preferences[PreferencesKeys.PARENTAL_V2_MIGRATED] ?: false
+            if (!migrated && stored == 2) 3 else stored
         }
 
     val hasParentalPin: Flow<Boolean> = context.dataStore.data.map(::hasStoredParentalPin)
@@ -341,6 +350,7 @@ class PreferencesRepository @Inject constructor(
     suspend fun setParentalControlLevel(level: Int) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.PARENTAL_CONTROL_LEVEL] = level
+            preferences[PreferencesKeys.PARENTAL_V2_MIGRATED] = true
         }
     }
 
@@ -466,9 +476,39 @@ class PreferencesRepository @Inject constructor(
         preferences[PreferencesKeys.ZAP_AUTO_REVERT] ?: true
     }
 
+    val recordingWifiOnly: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.RECORDING_WIFI_ONLY] ?: false
+    }
+
+    val recordingPaddingBeforeMinutes: Flow<Int> = context.dataStore.data.map { preferences ->
+        (preferences[PreferencesKeys.RECORDING_PADDING_BEFORE_MINUTES] ?: 0).coerceIn(0, 30)
+    }
+
+    val recordingPaddingAfterMinutes: Flow<Int> = context.dataStore.data.map { preferences ->
+        (preferences[PreferencesKeys.RECORDING_PADDING_AFTER_MINUTES] ?: 0).coerceIn(0, 30)
+    }
+
     suspend fun setZapAutoRevert(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.ZAP_AUTO_REVERT] = enabled
+        }
+    }
+
+    suspend fun setRecordingWifiOnly(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.RECORDING_WIFI_ONLY] = enabled
+        }
+    }
+
+    suspend fun setRecordingPaddingBeforeMinutes(minutes: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.RECORDING_PADDING_BEFORE_MINUTES] = minutes.coerceIn(0, 30)
+        }
+    }
+
+    suspend fun setRecordingPaddingAfterMinutes(minutes: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.RECORDING_PADDING_AFTER_MINUTES] = minutes.coerceIn(0, 30)
         }
     }
 

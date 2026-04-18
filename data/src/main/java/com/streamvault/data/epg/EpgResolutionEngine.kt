@@ -77,13 +77,13 @@ class EpgResolutionEngine @Inject constructor(
         }
 
         // Build lookup indexes for fast matching
-        // sourceId -> (xmltvChannelId -> EpgChannelEntity)
-        val exactIdIndex = mutableMapOf<Long, Map<String, String>>()
+        // sourceId -> set of trimmed xmltvChannelIds for existence checks
+        val exactIdIndex = mutableMapOf<Long, Set<String>>()
         // sourceId -> (normalizedName -> xmltvChannelId)
         val nameIndex = mutableMapOf<Long, Map<String, String>>()
 
         for ((sourceId, epgChannels) in epgChannelsBySource) {
-            exactIdIndex[sourceId] = epgChannels.associate { it.xmltvChannelId to it.xmltvChannelId }
+            exactIdIndex[sourceId] = epgChannels.map { it.xmltvChannelId.trim() }.toHashSet()
             // For name index, first occurrence wins (avoids ambiguity)
             val nameMap = mutableMapOf<String, String>()
             for (ch in epgChannels) {
@@ -200,6 +200,11 @@ class EpgResolutionEngine @Inject constructor(
 
             // 5. No EPG
             unresolvedCount++
+            Log.v(TAG, "Unresolved: channel=${channel.name} (id=${channel.id}), " +
+                "epgId=${channelEpgId ?: "null"}, " +
+                "normalizedName=$channelNormalizedName, " +
+                "idInAnySource=${enabledAssignments.any { channelEpgId != null && channelEpgId in (exactIdIndex[it.epgSourceId] ?: emptySet()) }}, " +
+                "nameInAnySource=${enabledAssignments.any { channelNormalizedName in (nameIndex[it.epgSourceId] ?: emptyMap()) }}")
             ChannelEpgMappingEntity(
                 providerChannelId = channel.id,
                 providerId = providerId,
@@ -216,6 +221,7 @@ class EpgResolutionEngine @Inject constructor(
         }
 
         channelEpgMappingDao.replaceForProvider(providerId, mappings)
+        channelDao.backfillEpgIcons(providerId)
 
         val summary = EpgResolutionSummary(
             totalChannels = channels.size,

@@ -23,10 +23,20 @@ import com.streamvault.domain.repository.EpgSourceRepository
 import com.streamvault.domain.repository.FavoriteRepository
 import com.streamvault.domain.repository.LiveStreamProgramRequest
 import com.streamvault.domain.repository.ProviderRepository
+import com.streamvault.domain.model.RecordingRecurrence
+import com.streamvault.domain.model.RecordingItem
+import com.streamvault.domain.model.RecordingRequest
+import com.streamvault.domain.model.Result
+import com.streamvault.domain.manager.RecordingManager
 import com.streamvault.domain.usecase.GetCustomCategories
+import com.streamvault.domain.usecase.ScheduleRecording
+import com.streamvault.domain.usecase.ScheduleRecordingCommand
+import com.streamvault.domain.util.AdultContentVisibilityPolicy
 import com.streamvault.data.preferences.PreferencesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -36,6 +46,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
@@ -43,7 +54,15 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.Instant
+import java.time.ZoneId
 import javax.inject.Inject
+
+data class RecordingConflictInfo(
+    val conflictingItems: List<RecordingItem>,
+    val pendingRequest: RecordingRequest,
+    val programTitle: String
+)
 
 data class EpgUiState(
     val currentProviderName: String? = null,
@@ -69,10 +88,16 @@ data class EpgUiState(
     val failedScheduleCount: Int = 0,
     val lastUpdatedAt: Long? = null,
     val isGuideStale: Boolean = false,
-    val guideAnchorTime: Long = System.currentTimeMillis(),
-    val guideWindowStart: Long = System.currentTimeMillis() - EpgViewModel.LOOKBACK_MS,
-    val guideWindowEnd: Long = System.currentTimeMillis() + EpgViewModel.LOOKAHEAD_MS
-)
+    val guideAnchorTime: Long = DEFAULT_NOW,
+    val guideWindowStart: Long = DEFAULT_NOW - EpgViewModel.LOOKBACK_MS,
+    val guideWindowEnd: Long = DEFAULT_NOW + EpgViewModel.LOOKAHEAD_MS,
+    val recordingMessage: String? = null,
+    val pendingRecordingConflict: RecordingConflictInfo? = null
+) {
+    companion object {
+        private val DEFAULT_NOW = System.currentTimeMillis()
+    }
+}
 
 data class EpgOverrideUiState(
     val channel: Channel? = null,
@@ -191,6 +216,7 @@ private data class CombinedGuideRequest(
 )
 
 @HiltViewModel
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class EpgViewModel @Inject constructor(
     private val providerRepository: ProviderRepository,
     private val combinedM3uRepository: CombinedM3uRepository,
@@ -201,7 +227,9 @@ class EpgViewModel @Inject constructor(
     private val preferencesRepository: PreferencesRepository,
     private val parentalControlManager: ParentalControlManager,
     private val programReminderManager: ProgramReminderManager,
-    private val getCustomCategories: GetCustomCategories
+    private val getCustomCategories: GetCustomCategories,
+    private val scheduleRecording: ScheduleRecording,
+    private val recordingManager: RecordingManager
 ) : ViewModel() {
 
     companion object {
@@ -357,6 +385,79 @@ class EpgViewModel @Inject constructor(
             }
             loadProgramReminderState(channel, program)
         }
+    }
+
+    fun scheduleRecording(channel: Channel, program: Program, recurrence: RecordingRecurrence = RecordingRecurrence.NONE) {
+        viewModelScope.launch {
+            val command = ScheduleRecordingCommand(
+                contentType = ContentType.LIVE,
+                providerId = channel.providerId,
+                channel = channel,
+                streamUrl = channel.streamUrl,
+                currentProgram = program,
+                nextProgram = null,
+                recurrence = recurrence
+            )
+            val result = scheduleRecording(command)
+            when (result) {
+                is Result.Success -> {
+                    _uiState.update { it.copy(recordingMessage = "Recording scheduled: ${program.title}") }
+                }
+                is Result.Error -> {
+                    val msg = result.message.orEmpty()
+                    if (msg.contains("conflicts", ignoreCase = true)) {
+                        val scheduledStartMs = maxOf(System.currentTimeMillis(), program.startTime)
+                        val conflicts = recordingManager.getConflictingRecordings(
+                            scheduledStartMs, program.endTime, channel.providerId
+                        )
+                        if (conflicts.isNotEmpty()) {
+                            _uiState.update {
+                                it.copy(
+                                    pendingRecordingConflict = RecordingConflictInfo(
+                                        conflictingItems = conflicts,
+                                        pendingRequest = RecordingRequest(
+                                            providerId = channel.providerId,
+                                            channelId = channel.id,
+                                            channelName = channel.name,
+                                            streamUrl = channel.streamUrl,
+                                            scheduledStartMs = scheduledStartMs,
+                                            scheduledEndMs = program.endTime,
+                                            programTitle = program.title,
+                                            recurrence = recurrence
+                                        ),
+                                        programTitle = program.title ?: channel.name
+                                    )
+                                )
+                            }
+                            return@launch
+                        }
+                    }
+                    _uiState.update { it.copy(recordingMessage = msg.ifBlank { "Failed to schedule recording" }) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    fun forceScheduleRecording() {
+        val conflict = _uiState.value.pendingRecordingConflict ?: return
+        viewModelScope.launch {
+            val result = recordingManager.forceScheduleRecording(conflict.pendingRequest)
+            val message = when (result) {
+                is Result.Success -> "Recording scheduled: ${conflict.programTitle}"
+                is Result.Error -> result.message ?: "Failed to schedule recording"
+                else -> return@launch
+            }
+            _uiState.update { it.copy(recordingMessage = message, pendingRecordingConflict = null) }
+        }
+    }
+
+    fun dismissRecordingConflict() {
+        _uiState.update { it.copy(pendingRecordingConflict = null) }
+    }
+
+    fun clearRecordingMessage() {
+        _uiState.update { it.copy(recordingMessage = null) }
     }
 
     fun updateEpgOverrideSearch(query: String) {
@@ -894,7 +995,7 @@ class EpgViewModel @Inject constructor(
         viewModelScope.launch {
             combine(
                 baseGuideSnapshot,
-                programSearchQuery,
+                programSearchQuery.debounce(150L),
                 showScheduledOnly,
                 selectedChannelMode,
                 selectedDensity
@@ -1358,10 +1459,12 @@ class EpgViewModel @Inject constructor(
         parentalControlLevel: Int,
         unlockedCategoryIds: Set<Long>
     ): Boolean {
-        if (parentalControlLevel != 1) {
-            return true
-        }
-        return (!category.isAdult && !category.isUserProtected) || unlockedCategoryIds.contains(category.id)
+        // Non-adult/protected categories are always accessible
+        if (!category.isAdult && !category.isUserProtected) return true
+        // Adult/protected: accessible if level permits aggregated surfaces (OFF or LOCKED),
+        // OR if the user has explicitly unlocked this category
+        return AdultContentVisibilityPolicy.showInAggregatedSurfaces(parentalControlLevel) ||
+            unlockedCategoryIds.contains(category.id)
     }
 }
 

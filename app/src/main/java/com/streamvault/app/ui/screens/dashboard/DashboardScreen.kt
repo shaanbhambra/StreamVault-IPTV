@@ -97,6 +97,8 @@ fun DashboardScreen(
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val recordingChannelIds by viewModel.recordingChannelIds.collectAsStateWithLifecycle()
+    val scheduledChannelIds by viewModel.scheduledChannelIds.collectAsStateWithLifecycle()
     val provider = uiState.provider
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -189,6 +191,8 @@ fun DashboardScreen(
                     ) { channel ->
                         ChannelCard(
                             channel = channel,
+                            isRecording = channel.id in recordingChannelIds,
+                            isScheduledRecording = channel.id in scheduledChannelIds,
                             onClick = { onRecentChannelClick(channel, uiState.currentCombinedProfileId) }
                         )
                     }

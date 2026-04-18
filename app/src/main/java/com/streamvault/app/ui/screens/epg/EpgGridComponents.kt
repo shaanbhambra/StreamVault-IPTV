@@ -59,8 +59,10 @@ import com.streamvault.app.ui.theme.TextPrimary
 import com.streamvault.app.ui.theme.TextSecondary
 import com.streamvault.domain.model.Channel
 import com.streamvault.domain.model.Program
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.Locale
 import kotlin.math.max
 
@@ -205,12 +207,13 @@ private fun GuideTimelineHeader(
     scrollState: androidx.compose.foundation.ScrollState
 ) {
     val now = currentGuideNow()
-    val hourFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val hourFormat = remember { DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT) }
+    val zone = remember { ZoneId.systemDefault() }
     val totalDuration = (windowEnd - windowStart).coerceAtLeast(1L)
     val clampedNow = now.coerceIn(windowStart, windowEnd)
     val elapsedRatio = ((clampedNow - windowStart).toFloat() / totalDuration.toFloat()).coerceIn(0f, 1f)
     val markerLabel = if (now in windowStart..windowEnd) {
-        stringResource(R.string.epg_now_marker, hourFormat.format(Date(now)))
+        stringResource(R.string.epg_now_marker, hourFormat.format(Instant.ofEpochMilli(now).atZone(zone)))
     } else {
         stringResource(R.string.epg_outside_window)
     }
@@ -278,7 +281,7 @@ private fun GuideTimelineHeader(
                                 verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 Text(
-                                    text = hourFormat.format(Date(marker)),
+                                    text = hourFormat.format(Instant.ofEpochMilli(marker).atZone(zone)),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = OnSurfaceDim
                                 )
@@ -507,9 +510,10 @@ fun ProgramItem(
     val now = currentGuideNow()
     val isCurrent = now in program.startTime until program.endTime
 
-    val format = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-    val startStr = format.format(Date(program.startTime))
-    val endStr = format.format(Date(program.endTime))
+    val format = remember { DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT) }
+    val zone = remember { ZoneId.systemDefault() }
+    val startStr = format.format(Instant.ofEpochMilli(program.startTime).atZone(zone))
+    val endStr = format.format(Instant.ofEpochMilli(program.endTime).atZone(zone))
     val totalDuration = (windowEnd - windowStart).coerceAtLeast(1L)
     val visibleStart = max(program.startTime, windowStart)
     val visibleEnd = max(visibleStart + 1, minOf(program.endTime, windowEnd))
@@ -570,7 +574,6 @@ fun ProgramItem(
             .padding(start = itemStart, top = outerVerticalPadding, bottom = outerVerticalPadding)
             .width(itemWidth)
             .fillMaxHeight()
-            .clip(RoundedCornerShape(8.dp))
             .onFocusChanged {
                 if (it.isFocused && !isFocused) {
                     onFocused()
@@ -583,6 +586,10 @@ fun ProgramItem(
         ),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         border = ClickableSurfaceDefaults.border(
+            border = Border(
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                shape = RoundedCornerShape(8.dp)
+            ),
             focusedBorder = Border(
                 border = BorderStroke(2.dp, FocusBorder),
                 shape = RoundedCornerShape(8.dp)

@@ -28,4 +28,10 @@ interface RecordingManager {
     suspend fun reconcileRecordingState(): Result<Unit> = Result.success(Unit)
     suspend fun promoteScheduledRecording(recordingId: String): Result<Unit> =
         Result.error("Scheduled promotion is not supported by this recording manager.")
+    suspend fun skipOccurrence(recordingId: String): Result<Unit> =
+        Result.error("Skip occurrence is not supported by this recording manager.")
+    suspend fun forceScheduleRecording(request: RecordingRequest): Result<RecordingItem> =
+        Result.error("Force scheduling is not supported by this recording manager.")
+    suspend fun getConflictingRecordings(startMs: Long, endMs: Long, providerId: Long): List<RecordingItem> =
+        emptyList()
 }

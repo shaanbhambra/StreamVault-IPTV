@@ -38,6 +38,7 @@ import com.streamvault.domain.repository.FavoriteRepository
 import com.streamvault.domain.repository.LiveStreamProgramRequest
 import com.streamvault.domain.repository.PlaybackHistoryRepository
 import com.streamvault.domain.repository.ProviderRepository
+import com.streamvault.domain.util.AdultContentVisibilityPolicy
 import com.streamvault.domain.usecase.GetCustomCategories
 import com.streamvault.domain.usecase.UnlockParentalCategory
 import com.streamvault.domain.usecase.UnlockParentalCategoryCommand
@@ -762,18 +763,26 @@ class HomeViewModel @Inject constructor(
                 combine(
                     channelsFlow,
                     preferencesRepository.liveChannelNumberingMode,
-                    _uiState.map { it.selectedCombinedSourceProviderId }.distinctUntilChanged()
-                ) { channels, numberingMode, selectedCombinedSourceProviderId ->
-                    val visibleChannels = selectedCombinedSourceProviderId?.let { selectedProviderId ->
+                    _uiState.map { it.selectedCombinedSourceProviderId }.distinctUntilChanged(),
+                    _uiState.map { it.parentalControlLevel }.distinctUntilChanged()
+                ) { channels, numberingMode, selectedCombinedSourceProviderId, level ->
+                    val byProvider = selectedCombinedSourceProviderId?.let { selectedProviderId ->
                         channels.filter { it.providerId == selectedProviderId }
                     } ?: channels
-                    when (numberingMode) {
-                        ChannelNumberingMode.GROUP -> visibleChannels.mapIndexed { index, channel ->
+                    val numbered = when (numberingMode) {
+                        ChannelNumberingMode.GROUP -> byProvider.mapIndexed { index, channel ->
                             channel.copy(number = index + 1)
                         }
-                        ChannelNumberingMode.PROVIDER -> visibleChannels
-                        ChannelNumberingMode.HIDDEN -> visibleChannels.map { it.copy(number = 0) }
+                        ChannelNumberingMode.PROVIDER -> byProvider
+                        ChannelNumberingMode.HIDDEN -> byProvider.map { it.copy(number = 0) }
                     }
+                    val isAggregatedSurface = category.id == ChannelRepository.ALL_CHANNELS_ID ||
+                        category.id == VirtualCategoryIds.RECENT
+                    if (isAggregatedSurface) {
+                        AdultContentVisibilityPolicy.filterForAggregatedSurface(
+                            numbered, level
+                        ) { isAdult || isUserProtected }
+                    } else numbered
                 }.collect { displayedChannels ->
                     val currentQuery = _uiState.value.channelSearchQuery.trim()
                     val currentLimit = if (currentQuery.length < MIN_CHANNEL_SEARCH_QUERY_LENGTH) {
@@ -1155,13 +1164,19 @@ class HomeViewModel @Inject constructor(
     private fun observeRecentChannels(providerId: Long) {
         recentChannelsJob?.cancel()
         recentChannelsJob = viewModelScope.launch {
-            playbackHistoryRepository.getRecentlyWatchedByProvider(providerId, limit = 12)
-                .map { it.toRecentLiveContentIds() }
-                .flatMapLatest { ids -> loadChannelsByOrderedIds(ids) }
-                .collect { channels ->
-                    _uiState.update { it.copy(recentChannels = channels) }
-                    updateRecentCategoryCount(channels.size)
-                }
+            combine(
+                playbackHistoryRepository.getRecentlyWatchedByProvider(providerId, limit = 12)
+                    .map { it.toRecentLiveContentIds() }
+                    .flatMapLatest { ids -> loadChannelsByOrderedIds(ids) },
+                preferencesRepository.parentalControlLevel
+            ) { channels, level ->
+                AdultContentVisibilityPolicy.filterForAggregatedSurface(
+                    channels, level
+                ) { isAdult || isUserProtected }
+            }.collect { visible ->
+                _uiState.update { it.copy(recentChannels = visible) }
+                updateRecentCategoryCount(visible.size)
+            }
         }
     }
 

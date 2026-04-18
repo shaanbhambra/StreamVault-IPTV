@@ -214,6 +214,53 @@ fun FullEpgScreen(
         )
     }
 
+    uiState.recordingMessage?.let { message ->
+        LaunchedEffect(message) {
+            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+            viewModel.clearRecordingMessage()
+        }
+    }
+
+    uiState.pendingRecordingConflict?.let { conflict ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { viewModel.dismissRecordingConflict() },
+            title = {
+                androidx.compose.material3.Text(
+                    text = stringResource(R.string.epg_recording_conflict_title),
+                    color = com.streamvault.app.ui.theme.OnSurface
+                )
+            },
+            text = {
+                val conflictNames = conflict.conflictingItems.joinToString(", ") {
+                    it.programTitle ?: it.channelName
+                }
+                androidx.compose.material3.Text(
+                    text = stringResource(R.string.epg_recording_conflict_body, conflict.programTitle, conflictNames),
+                    color = com.streamvault.app.ui.theme.TextSecondary
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { viewModel.forceScheduleRecording() }) {
+                    androidx.compose.material3.Text(
+                        text = stringResource(R.string.epg_recording_conflict_replace),
+                        color = com.streamvault.app.ui.theme.Primary
+                    )
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { viewModel.dismissRecordingConflict() }) {
+                    androidx.compose.material3.Text(
+                        text = stringResource(R.string.epg_recording_conflict_cancel),
+                        color = com.streamvault.app.ui.theme.OnSurface
+                    )
+                }
+            },
+            containerColor = com.streamvault.app.ui.theme.SurfaceElevated,
+            titleContentColor = com.streamvault.app.ui.theme.OnSurface,
+            textContentColor = com.streamvault.app.ui.theme.TextSecondary
+        )
+    }
+
     LaunchedEffect(uiState.channels, uiState.programsByChannel) {
         if (uiState.channels.isEmpty()) {
             focusedChannel = null
@@ -463,7 +510,13 @@ fun FullEpgScreen(
             onDensitySelected = viewModel::selectDensity,
             onToggleScheduledOnly = viewModel::toggleScheduledOnly,
             onToggleFavoritesOnly = viewModel::toggleFavoritesOnly,
-            onRefresh = viewModel::refresh
+            onRefresh = viewModel::refresh,
+            onManageEpgMatch = focusedChannel?.takeIf { it.providerId > 0L }?.let { ch ->
+                {
+                    showGuideOptions = false
+                    viewModel.openEpgOverride(ch)
+                }
+            }
         )
     }
 
@@ -567,17 +620,24 @@ fun FullEpgScreen(
                 } else {
                     null
                 },
-                onManageEpgMatch = if (channel.providerId > 0L) {
-                    {
-                        selectedProgram = null
-                        viewModel.openEpgOverride(channel)
-                    }
-                } else {
-                    null
-                },
                 reminderButtonLabel = reminderButtonLabel,
                 onToggleReminder = reminderButtonLabel?.let {
                     { viewModel.toggleProgramReminder(channel, program) }
+                },
+                onScheduleRecording = if (channel.streamUrl.isNotBlank() && program.endTime > currentGuideNow()) {
+                    { viewModel.scheduleRecording(channel, program) }
+                } else {
+                    null
+                },
+                onScheduleDailyRecording = if (channel.streamUrl.isNotBlank() && program.endTime > currentGuideNow()) {
+                    { viewModel.scheduleRecording(channel, program, com.streamvault.domain.model.RecordingRecurrence.DAILY) }
+                } else {
+                    null
+                },
+                onScheduleWeeklyRecording = if (channel.streamUrl.isNotBlank() && program.endTime > currentGuideNow()) {
+                    { viewModel.scheduleRecording(channel, program, com.streamvault.domain.model.RecordingRecurrence.WEEKLY) }
+                } else {
+                    null
                 }
             )
         }
@@ -714,14 +774,14 @@ private fun GuideProviderTroubleshootingCard(
 }
 
 internal fun isGuideCategoryLocked(category: Category, parentalControlLevel: Int): Boolean =
-    parentalControlLevel == 1 && (category.isAdult || category.isUserProtected)
+    parentalControlLevel in 1..2 && (category.isAdult || category.isUserProtected)
 
 private fun isGuideChannelLocked(
     channel: Channel,
     categoriesById: Map<Long, Category>,
     parentalControlLevel: Int
 ): Boolean {
-    if (parentalControlLevel != 1) {
+    if (parentalControlLevel !in 1..2) {
         return false
     }
     val categoryLocked = channel.categoryId?.let(categoriesById::get)?.let { category ->

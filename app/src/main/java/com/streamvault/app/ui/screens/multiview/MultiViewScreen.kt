@@ -630,7 +630,7 @@ private fun ReplaceSlotDialog(
     var pendingLockedCategory by remember { mutableStateOf<com.streamvault.domain.model.Category?>(null) }
 
     fun isCategoryLocked(cat: com.streamvault.domain.model.Category): Boolean =
-        parentalControlLevel == 1 && (cat.isAdult || cat.isUserProtected)
+        parentalControlLevel in 1..2 && (cat.isAdult || cat.isUserProtected)
 
     PremiumDialog(
         title = if (selectedCategory == null) stringResource(R.string.multiview_replace_title) else selectedCategory.name,
