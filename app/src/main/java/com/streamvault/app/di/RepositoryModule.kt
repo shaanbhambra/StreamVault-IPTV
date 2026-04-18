@@ -18,6 +18,9 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import javax.inject.Singleton
 
 @Module
@@ -88,6 +91,12 @@ abstract class RepositoryModule {
     abstract fun bindCredentialCrypto(impl: AndroidKeystoreCredentialCrypto): CredentialCrypto
 
     companion object {
+        @Provides
+        @Singleton
+        fun provideRepositoryCoroutineScope(): CoroutineScope {
+            return CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        }
+
         @Provides
         @Singleton
         fun provideM3uParser(): com.streamvault.data.parser.M3uParser {
