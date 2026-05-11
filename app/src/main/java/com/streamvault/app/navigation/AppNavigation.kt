@@ -11,8 +11,10 @@ import androidx.navigation.NavOptionsBuilder
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.streamvault.app.ui.model.isArchivePlayable
 import com.streamvault.domain.model.Channel
 import com.streamvault.domain.model.Episode
 import com.streamvault.domain.model.Movie
@@ -50,7 +52,8 @@ data class PlayerNavigationRequest(
     val returnRoute: String? = null,
     val seriesId: Long? = null,
     val seasonNumber: Int? = null,
-    val episodeNumber: Int? = null
+    val episodeNumber: Int? = null,
+    val episodeId: Long? = null
 ) : Serializable
 
 object Routes {
@@ -63,6 +66,7 @@ object Routes {
     const val EPG = "epg"
     const val EPG_DESTINATION = "epg?categoryId={categoryId}&anchorTime={anchorTime}&favoritesOnly={favoritesOnly}"
     const val SETTINGS = "settings"
+    const val SETTINGS_DESTINATION = "settings?backupUri={backupUri}"
     const val PLAYER = "player"
     const val SEARCH = "search"
     const val SEARCH_DESTINATION = "search?query={query}"
@@ -132,12 +136,16 @@ object Routes {
             artworkUrl = episode.coverUrl,
             seriesId = episode.seriesId.takeIf { it > 0L },
             seasonNumber = episode.seasonNumber,
-            episodeNumber = episode.episodeNumber
+            episodeNumber = episode.episodeNumber,
+            episodeId = episode.episodeId.takeIf { it > 0L }
         )
     }
 
     fun search(query: String? = null): String =
         if (query.isNullOrBlank()) SEARCH else "$SEARCH?query=${Uri.encode(query)}"
+
+    fun settings(backupUri: String? = null): String =
+        if (backupUri.isNullOrBlank()) SETTINGS else "$SETTINGS?backupUri=${Uri.encode(backupUri)}"
 
     fun player(
         streamUrl: String,
@@ -157,7 +165,8 @@ object Routes {
         returnRoute: String? = null,
         seriesId: Long? = null,
         seasonNumber: Int? = null,
-        episodeNumber: Int? = null
+        episodeNumber: Int? = null,
+        episodeId: Long? = null
     ): PlayerNavigationRequest {
         return PlayerNavigationRequest(
             streamUrl = streamUrl,
@@ -177,7 +186,8 @@ object Routes {
             returnRoute = returnRoute,
             seriesId = seriesId,
             seasonNumber = seasonNumber,
-            episodeNumber = episodeNumber
+            episodeNumber = episodeNumber,
+            episodeId = episodeId
         )
     }
 
@@ -196,47 +206,62 @@ private fun isStreamUrlSafe(url: String?): Boolean {
 }
 
 /** Navigate only when the current destination is fully resumed – prevents double-navigation during transitions. */
-private fun NavHostController.navigateIfResumed(route: String, builder: NavOptionsBuilder.() -> Unit = {}) {
-    if (currentBackStackEntry?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) != true) return
+private fun NavHostController.navigateIfResumed(route: String, builder: NavOptionsBuilder.() -> Unit = {}): Boolean {
+    if (currentBackStackEntry?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) != true) return false
     navigate(route, builder)
+    return true
 }
 
-private fun NavHostController.navigateToPlayer(request: PlayerNavigationRequest) {
-    if (currentBackStackEntry?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) != true) return
+private fun NavHostController.navigateToPlayer(request: PlayerNavigationRequest): Boolean {
+    if (currentBackStackEntry?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) != true) return false
     currentBackStackEntry?.savedStateHandle?.set(PLAYER_REQUEST_KEY, request)
     navigate(Routes.PLAYER) { launchSingleTop = true }
+    return true
 }
 
-private fun NavHostController.navigateToExternalPlayer(request: PlayerNavigationRequest) {
+private fun NavHostController.navigateToExternalPlayer(request: PlayerNavigationRequest): Boolean {
+    if (currentBackStackEntry?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) != true) return false
     currentBackStackEntry?.savedStateHandle?.set(PLAYER_REQUEST_KEY, request)
     navigate(Routes.PLAYER) { launchSingleTop = true }
+    return true
 }
 
 @Composable
 fun AppNavigation(mainActivity: MainActivity) {
     val navController = rememberNavController()
+    val currentBackStackEntry = navController.currentBackStackEntryAsState().value
     val externalNavigationRequest = mainActivity.externalNavigationRequestFlow.collectAsStateWithLifecycle().value
 
-    LaunchedEffect(externalNavigationRequest) {
+    LaunchedEffect(externalNavigationRequest, currentBackStackEntry?.lifecycle?.currentState) {
         when (val request = externalNavigationRequest) {
             is ExternalNavigationRequest.Player -> {
-                navController.navigateToExternalPlayer(request.request)
-                mainActivity.clearExternalNavigationRequest()
+                if (navController.navigateToExternalPlayer(request.request)) {
+                    mainActivity.clearExternalNavigationRequest()
+                }
             }
 
-            is ExternalNavigationRequest.Route -> {
-                navController.navigate(request.route) { launchSingleTop = true }
-                mainActivity.clearExternalNavigationRequest()
+            is ExternalNavigationRequest.Destination -> {
+                if (navController.navigateIfResumed(request.destination.toRoute()) { launchSingleTop = true }) {
+                    mainActivity.clearExternalNavigationRequest()
+                }
             }
 
             is ExternalNavigationRequest.ImportM3u -> {
-                navController.navigate(Routes.providerSetup(importUri = request.uri)) { launchSingleTop = true }
-                mainActivity.clearExternalNavigationRequest()
+                if (navController.navigateIfResumed(Routes.providerSetup(importUri = request.uri)) { launchSingleTop = true }) {
+                    mainActivity.clearExternalNavigationRequest()
+                }
+            }
+
+            is ExternalNavigationRequest.ImportBackup -> {
+                if (navController.navigateIfResumed(Routes.settings(backupUri = request.uri)) { launchSingleTop = true }) {
+                    mainActivity.clearExternalNavigationRequest()
+                }
             }
 
             is ExternalNavigationRequest.Search -> {
-                navController.navigate(Routes.search(request.query)) { launchSingleTop = true }
-                mainActivity.clearExternalNavigationRequest()
+                if (navController.navigateIfResumed(Routes.search(request.query)) { launchSingleTop = true }) {
+                    mainActivity.clearExternalNavigationRequest()
+                }
             }
 
             null -> Unit
@@ -420,6 +445,11 @@ fun AppNavigation(mainActivity: MainActivity) {
                 onMovieClick = { movie ->
                     navController.navigateIfResumed(Routes.movieDetail(movie.id, Routes.MOVIES))
                 },
+                onContinueWatchingPlay = { history ->
+                    navController.navigateToPlayer(
+                        history.toPlayerNavigationRequest().copy(returnRoute = Routes.MOVIES)
+                    )
+                },
                 onNavigate = { route -> tabNavigate(route) },
                 currentRoute = Routes.MOVIES
             )
@@ -464,6 +494,9 @@ fun AppNavigation(mainActivity: MainActivity) {
                     )
                 },
                 onPlayArchive = { channel, program, categoryId, isVirtual, combinedProfileId, returnRoute ->
+                    if (!channel.isArchivePlayable(program)) {
+                        return@FullEpgScreen
+                    }
                     navController.navigateToPlayer(
                         Routes.player(
                             streamUrl = channel.streamUrl,
@@ -486,7 +519,13 @@ fun AppNavigation(mainActivity: MainActivity) {
             )
         }
 
-        composable(Routes.SETTINGS) {
+        composable(
+            route = Routes.SETTINGS_DESTINATION,
+            arguments = listOf(
+                navArgument("backupUri") { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { backStackEntry ->
+            val backupUri = backStackEntry.arguments?.getString("backupUri")?.takeIf { it.isNotBlank() }
             SettingsScreen(
                 onNavigate = { route -> tabNavigate(route) },
                 onAddProvider = dropUnlessResumed {
@@ -498,7 +537,8 @@ fun AppNavigation(mainActivity: MainActivity) {
                 onNavigateToParentalControl = { providerId ->
                     navController.navigateIfResumed(Routes.parentalControlGroups(providerId))
                 },
-                currentRoute = Routes.SETTINGS
+                currentRoute = Routes.SETTINGS,
+                initialBackupImportUri = backupUri
             )
         }
 
@@ -574,6 +614,7 @@ fun AppNavigation(mainActivity: MainActivity) {
                 seriesId = playerRequest?.seriesId,
                 seasonNumber = playerRequest?.seasonNumber,
                 episodeNumber = playerRequest?.episodeNumber,
+                episodeId = playerRequest?.episodeId,
                 onBack = {
                     val route = playerRequest?.returnRoute
                     if (!route.isNullOrBlank() && navController.popBackStack(route, false)) {

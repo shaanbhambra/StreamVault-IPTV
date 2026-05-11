@@ -9,6 +9,8 @@ data class Provider(
     val password: String = "",
     val m3uUrl: String = "",
     val epgUrl: String = "",
+    val httpUserAgent: String = "",
+    val httpHeaders: String = "",
     val stalkerMacAddress: String = "",
     val stalkerDeviceProfile: String = "",
     val stalkerDeviceTimezone: String = "",
@@ -20,6 +22,7 @@ data class Provider(
     val allowedOutputFormats: List<String> = emptyList(),
     val epgSyncMode: ProviderEpgSyncMode = ProviderEpgSyncMode.UPFRONT,
     val xtreamFastSyncEnabled: Boolean = true,
+    val xtreamLiveSyncMode: ProviderXtreamLiveSyncMode = ProviderXtreamLiveSyncMode.AUTO,
     val m3uVodClassificationEnabled: Boolean = false,
     val status: ProviderStatus = ProviderStatus.UNKNOWN,
     val lastSyncedAt: Long = 0L,
@@ -47,6 +50,12 @@ enum class ProviderEpgSyncMode {
     SKIP
 }
 
+enum class ProviderXtreamLiveSyncMode {
+    AUTO,
+    CATEGORY_BY_CATEGORY,
+    STREAM_ALL
+}
+
 enum class ProviderStatus {
     ACTIVE,
     PARTIAL,
@@ -55,3 +64,9 @@ enum class ProviderStatus {
     ERROR,
     UNKNOWN
 }
+
+class ProviderSavedWithSyncErrorException(
+    val provider: Provider,
+    message: String,
+    cause: Throwable? = null
+) : Exception(message, cause)

@@ -44,9 +44,12 @@ import com.streamvault.data.local.entity.*
         RecordingRunEntity::class,
         ProgramReminderEntity::class,
         RecordingStorageEntity::class,
-        PlaybackCompatibilityRecordEntity::class
+        PlaybackCompatibilityRecordEntity::class,
+        XtreamContentIndexEntity::class,
+        XtreamIndexJobEntity::class,
+        XtreamLiveOnboardingStateEntity::class
     ],
-    version = 44,
+    version = 52,
     exportSchema = true   // ← was false; schema JSON now tracked in version control
 )
 @TypeConverters(RoomEnumConverters::class)
@@ -65,6 +68,7 @@ abstract class StreamVaultDatabase : RoomDatabase() {
     abstract fun playbackHistoryDao(): PlaybackHistoryDao
     abstract fun tmdbIdentityDao(): TmdbIdentityDao
     abstract fun searchHistoryDao(): SearchHistoryDao
+    abstract fun searchDao(): SearchDao
     abstract fun syncMetadataDao(): SyncMetadataDao
     abstract fun movieCategoryHydrationDao(): MovieCategoryHydrationDao
     abstract fun seriesCategoryHydrationDao(): SeriesCategoryHydrationDao
@@ -80,6 +84,9 @@ abstract class StreamVaultDatabase : RoomDatabase() {
     abstract fun programReminderDao(): ProgramReminderDao
     abstract fun recordingStorageDao(): RecordingStorageDao
     abstract fun playbackCompatibilityDao(): PlaybackCompatibilityDao
+    abstract fun xtreamContentIndexDao(): XtreamContentIndexDao
+    abstract fun xtreamIndexJobDao(): XtreamIndexJobDao
+    abstract fun xtreamLiveOnboardingDao(): XtreamLiveOnboardingDao
 
     companion object {
         /**
@@ -1978,6 +1985,545 @@ abstract class StreamVaultDatabase : RoomDatabase() {
                         END
                     """.trimIndent()
                 )
+            }
+        }
+
+        /**
+         * Migration 44 -> 45: make favorite uniqueness null-safe by materializing a non-null
+         * group scope key and deduping any pre-existing global favorite collisions.
+         */
+        val MIGRATION_44_45 = object : Migration(44, 45) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE favorites ADD COLUMN group_key INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("UPDATE favorites SET group_key = COALESCE(group_id, 0)")
+                database.execSQL(
+                    """
+                    UPDATE favorites
+                    SET position = (
+                            SELECT MIN(dupe.position)
+                            FROM favorites AS dupe
+                            WHERE dupe.group_id IS NULL
+                              AND dupe.provider_id = favorites.provider_id
+                              AND dupe.content_id = favorites.content_id
+                              AND dupe.content_type = favorites.content_type
+                        ),
+                        added_at = (
+                            SELECT MIN(dupe.added_at)
+                            FROM favorites AS dupe
+                            WHERE dupe.group_id IS NULL
+                              AND dupe.provider_id = favorites.provider_id
+                              AND dupe.content_id = favorites.content_id
+                              AND dupe.content_type = favorites.content_type
+                        )
+                    WHERE favorites.group_id IS NULL
+                      AND favorites.id IN (
+                          SELECT MIN(id)
+                          FROM favorites
+                          WHERE group_id IS NULL
+                          GROUP BY provider_id, content_id, content_type
+                          HAVING COUNT(*) > 1
+                      )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    DELETE FROM favorites
+                    WHERE group_id IS NULL
+                      AND id NOT IN (
+                          SELECT MIN(id)
+                          FROM favorites
+                          WHERE group_id IS NULL
+                          GROUP BY provider_id, content_id, content_type
+                      )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_favorites_provider_id_content_id_content_type_group_key ON favorites(provider_id, content_id, content_type, group_key)"
+                )
+                validateForeignKeys(database, "favorites")
+            }
+        }
+
+        /**
+         * Migration 45 -> 46: preserve provider-native series IDs through staging by storing both
+         * the raw provider ID and a non-null remote key used for staged apply matching.
+         */
+        val MIGRATION_45_46 = object : Migration(45, 46) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS series_import_stage_new (
+                        session_id INTEGER NOT NULL,
+                        provider_id INTEGER NOT NULL,
+                        series_id INTEGER NOT NULL,
+                        provider_series_id TEXT,
+                        provider_series_key TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        poster_url TEXT,
+                        backdrop_url TEXT,
+                        category_id INTEGER,
+                        category_name TEXT,
+                        plot TEXT,
+                        cast TEXT,
+                        director TEXT,
+                        genre TEXT,
+                        release_date TEXT,
+                        rating REAL NOT NULL,
+                        tmdb_id INTEGER,
+                        youtube_trailer TEXT,
+                        episode_run_time TEXT,
+                        last_modified INTEGER NOT NULL,
+                        is_adult INTEGER NOT NULL,
+                        sync_fingerprint TEXT NOT NULL,
+                        PRIMARY KEY(session_id, provider_id, provider_series_key),
+                        FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    INSERT INTO series_import_stage_new (
+                        session_id,
+                        provider_id,
+                        series_id,
+                        provider_series_id,
+                        provider_series_key,
+                        name,
+                        poster_url,
+                        backdrop_url,
+                        category_id,
+                        category_name,
+                        plot,
+                        cast,
+                        director,
+                        genre,
+                        release_date,
+                        rating,
+                        tmdb_id,
+                        youtube_trailer,
+                        episode_run_time,
+                        last_modified,
+                        is_adult,
+                        sync_fingerprint
+                    )
+                    SELECT
+                        session_id,
+                        provider_id,
+                        series_id,
+                        NULL,
+                        CAST(series_id AS TEXT),
+                        name,
+                        poster_url,
+                        backdrop_url,
+                        category_id,
+                        category_name,
+                        plot,
+                        cast,
+                        director,
+                        genre,
+                        release_date,
+                        rating,
+                        tmdb_id,
+                        youtube_trailer,
+                        episode_run_time,
+                        last_modified,
+                        is_adult,
+                        sync_fingerprint
+                    FROM series_import_stage
+                    """.trimIndent()
+                )
+                database.execSQL("DROP TABLE series_import_stage")
+                database.execSQL("ALTER TABLE series_import_stage_new RENAME TO series_import_stage")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_series_import_stage_provider_id ON series_import_stage(provider_id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_series_import_stage_session_id_provider_id ON series_import_stage(session_id, provider_id)")
+                validateForeignKeys(database, "series_import_stage")
+            }
+        }
+
+        /**
+         * Migration 46 -> 47: add provider-leading browse indexes so large-provider cursor pages,
+         * category/rating sorts, and correlated playback-history filters avoid wide scans.
+         */
+        val MIGRATION_46_47 = object : Migration(46, 47) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_movies_provider_id_name_id ON movies(provider_id, name, id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_movies_provider_id_category_id_name_id ON movies(provider_id, category_id, name, id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_movies_provider_id_rating_name_id ON movies(provider_id, rating, name, id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_movies_provider_id_added_at_release_date_name_id ON movies(provider_id, added_at, release_date, name, id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_series_provider_id_name_id ON series(provider_id, name, id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_series_provider_id_category_id_name_id ON series(provider_id, category_id, name, id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_series_provider_id_rating_name_id ON series(provider_id, rating, name, id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_series_provider_id_last_modified_name_id ON series(provider_id, last_modified, name, id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_playback_history_provider_id_content_type_content_id ON playback_history(provider_id, content_type, content_id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_playback_history_provider_id_content_type_last_watched_at ON playback_history(provider_id, content_type, last_watched_at)")
+            }
+        }
+
+        /**
+         * Migration 47 -> 48: create the Xtream summary index and section job state tables.
+         * Existing Xtream live/movie/series rows are backfilled without deleting or remapping
+         * the playable/detail tables that favorites and history already reference.
+         */
+        val MIGRATION_47_48 = object : Migration(47, 48) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE movies ADD COLUMN cache_state TEXT NOT NULL DEFAULT 'DETAIL_HYDRATED'")
+                database.execSQL("ALTER TABLE movies ADD COLUMN detail_hydrated_at INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE movies ADD COLUMN remote_stale_at INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE series ADD COLUMN cache_state TEXT NOT NULL DEFAULT 'DETAIL_HYDRATED'")
+                database.execSQL("ALTER TABLE series ADD COLUMN detail_hydrated_at INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE series ADD COLUMN remote_stale_at INTEGER NOT NULL DEFAULT 0")
+
+                database.execSQL(
+                    """
+                    UPDATE movies
+                    SET cache_state = 'SUMMARY_ONLY'
+                    WHERE COALESCE(plot, '') = ''
+                      AND COALESCE(cast, '') = ''
+                      AND COALESCE(director, '') = ''
+                      AND COALESCE(genre, '') = ''
+                      AND COALESCE(duration, '') = ''
+                      AND duration_seconds = 0
+                      AND tmdb_id IS NULL
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    UPDATE series
+                    SET cache_state = 'SUMMARY_ONLY'
+                    WHERE COALESCE(plot, '') = ''
+                      AND COALESCE(cast, '') = ''
+                      AND COALESCE(director, '') = ''
+                      AND COALESCE(genre, '') = ''
+                      AND COALESCE(episode_run_time, '') = ''
+                      AND tmdb_id IS NULL
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    UPDATE movies
+                    SET detail_hydrated_at = COALESCE(
+                        (SELECT providers.last_synced_at FROM providers WHERE providers.id = movies.provider_id),
+                        0
+                    )
+                    WHERE cache_state = 'DETAIL_HYDRATED'
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    UPDATE series
+                    SET detail_hydrated_at = COALESCE(
+                        (SELECT providers.last_synced_at FROM providers WHERE providers.id = series.provider_id),
+                        0
+                    )
+                    WHERE cache_state = 'DETAIL_HYDRATED'
+                    """.trimIndent()
+                )
+
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS xtream_content_index (
+                        provider_id INTEGER NOT NULL,
+                        content_type TEXT NOT NULL,
+                        remote_id TEXT NOT NULL,
+                        local_content_id INTEGER,
+                        name TEXT NOT NULL,
+                        category_id INTEGER,
+                        category_name TEXT,
+                        image_url TEXT,
+                        container_extension TEXT,
+                        rating REAL NOT NULL,
+                        added_at INTEGER NOT NULL,
+                        remote_updated_at INTEGER NOT NULL,
+                        is_adult INTEGER NOT NULL,
+                        indexed_at INTEGER NOT NULL,
+                        detail_hydrated_at INTEGER NOT NULL,
+                        stale_state TEXT NOT NULL,
+                        error_state TEXT,
+                        sync_fingerprint TEXT NOT NULL,
+                        PRIMARY KEY(provider_id, content_type, remote_id),
+                        FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_content_index_provider_id_content_type ON xtream_content_index(provider_id, content_type)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_content_index_provider_id_content_type_category_id ON xtream_content_index(provider_id, content_type, category_id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_content_index_provider_id_content_type_name ON xtream_content_index(provider_id, content_type, name)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_content_index_provider_id_content_type_local_content_id ON xtream_content_index(provider_id, content_type, local_content_id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_content_index_provider_id_indexed_at ON xtream_content_index(provider_id, indexed_at)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_content_index_stale_state ON xtream_content_index(stale_state)")
+
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS xtream_index_jobs (
+                        provider_id INTEGER NOT NULL,
+                        section TEXT NOT NULL,
+                        state TEXT NOT NULL,
+                        total_categories INTEGER NOT NULL,
+                        completed_categories INTEGER NOT NULL,
+                        next_category_index INTEGER NOT NULL,
+                        failed_categories INTEGER NOT NULL,
+                        indexed_rows INTEGER NOT NULL,
+                        skipped_malformed_rows INTEGER NOT NULL,
+                        deleted_pruned_rows INTEGER NOT NULL,
+                        priority_category_id INTEGER,
+                        priority_requested_at INTEGER NOT NULL,
+                        last_error TEXT,
+                        last_attempt_at INTEGER NOT NULL,
+                        last_success_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        PRIMARY KEY(provider_id, section),
+                        FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_index_jobs_provider_id ON xtream_index_jobs(provider_id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_index_jobs_section ON xtream_index_jobs(section)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_index_jobs_state ON xtream_index_jobs(state)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_index_jobs_updated_at ON xtream_index_jobs(updated_at)")
+
+                database.execSQL(
+                    """
+                    INSERT OR REPLACE INTO xtream_content_index (
+                        provider_id, content_type, remote_id, local_content_id, name, category_id,
+                        category_name, image_url, container_extension, rating, added_at, remote_updated_at,
+                        is_adult, indexed_at, detail_hydrated_at, stale_state, error_state, sync_fingerprint
+                    )
+                    SELECT
+                        c.provider_id,
+                        'LIVE',
+                        CAST(c.stream_id AS TEXT),
+                        c.id,
+                        c.name,
+                        c.category_id,
+                        c.category_name,
+                        c.logo_url,
+                        NULL,
+                        0,
+                        0,
+                        0,
+                        c.is_adult,
+                        COALESCE(p.last_synced_at, 0),
+                        COALESCE(p.last_synced_at, 0),
+                        'ACTIVE',
+                        NULL,
+                        c.sync_fingerprint
+                    FROM channels c
+                    JOIN providers p ON p.id = c.provider_id
+                    WHERE p.type = 'XTREAM_CODES'
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    INSERT OR REPLACE INTO xtream_content_index (
+                        provider_id, content_type, remote_id, local_content_id, name, category_id,
+                        category_name, image_url, container_extension, rating, added_at, remote_updated_at,
+                        is_adult, indexed_at, detail_hydrated_at, stale_state, error_state, sync_fingerprint
+                    )
+                    SELECT
+                        m.provider_id,
+                        'MOVIE',
+                        CAST(m.stream_id AS TEXT),
+                        m.id,
+                        m.name,
+                        m.category_id,
+                        m.category_name,
+                        m.poster_url,
+                        m.container_extension,
+                        m.rating,
+                        m.added_at,
+                        0,
+                        m.is_adult,
+                        COALESCE(p.last_synced_at, 0),
+                        CASE WHEN m.cache_state = 'DETAIL_HYDRATED' THEN COALESCE(p.last_synced_at, 0) ELSE 0 END,
+                        'ACTIVE',
+                        NULL,
+                        m.sync_fingerprint
+                    FROM movies m
+                    JOIN providers p ON p.id = m.provider_id
+                    WHERE p.type = 'XTREAM_CODES'
+                    """.trimIndent()
+                )
+                database.execSQL(
+                    """
+                    INSERT OR REPLACE INTO xtream_content_index (
+                        provider_id, content_type, remote_id, local_content_id, name, category_id,
+                        category_name, image_url, container_extension, rating, added_at, remote_updated_at,
+                        is_adult, indexed_at, detail_hydrated_at, stale_state, error_state, sync_fingerprint
+                    )
+                    SELECT
+                        s.provider_id,
+                        'SERIES',
+                        COALESCE(s.provider_series_id, CAST(s.series_id AS TEXT)),
+                        s.id,
+                        s.name,
+                        s.category_id,
+                        s.category_name,
+                        s.poster_url,
+                        NULL,
+                        s.rating,
+                        0,
+                        s.last_modified,
+                        s.is_adult,
+                        COALESCE(p.last_synced_at, 0),
+                        CASE WHEN s.cache_state = 'DETAIL_HYDRATED' THEN COALESCE(p.last_synced_at, 0) ELSE 0 END,
+                        'ACTIVE',
+                        NULL,
+                        s.sync_fingerprint
+                    FROM series s
+                    JOIN providers p ON p.id = s.provider_id
+                    WHERE p.type = 'XTREAM_CODES'
+                    """.trimIndent()
+                )
+
+                database.execSQL(
+                    """
+                    INSERT OR REPLACE INTO xtream_index_jobs (
+                        provider_id, section, state, total_categories, completed_categories, next_category_index, failed_categories,
+                        indexed_rows, skipped_malformed_rows, deleted_pruned_rows, priority_category_id, priority_requested_at, last_error,
+                        last_attempt_at, last_success_at, updated_at
+                    )
+                    SELECT
+                        p.id,
+                        section.name,
+                        CASE
+                            WHEN section.name = 'LIVE' AND (
+                                COALESCE(NULLIF(sm.last_live_success, 0), NULLIF(sm.last_live_sync, 0), 0) > 0
+                                OR (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) > 0
+                            ) THEN 'SUCCESS'
+                            WHEN section.name = 'MOVIE' AND (
+                                COALESCE(NULLIF(sm.last_movie_success, 0), NULLIF(sm.last_movie_sync, 0), 0) > 0
+                                OR (SELECT COUNT(*) FROM movies m WHERE m.provider_id = p.id) > 0
+                            ) THEN 'SUCCESS'
+                            WHEN section.name = 'SERIES' AND (
+                                COALESCE(NULLIF(sm.last_series_success, 0), NULLIF(sm.last_series_sync, 0), 0) > 0
+                                OR (SELECT COUNT(*) FROM series s WHERE s.provider_id = p.id) > 0
+                            ) THEN 'SUCCESS'
+                            WHEN section.name = 'EPG' AND COALESCE(NULLIF(sm.last_epg_success, 0), NULLIF(sm.last_epg_sync, 0), 0) > 0 THEN 'SUCCESS'
+                            ELSE 'IDLE'
+                        END,
+                        CASE section.name
+                            WHEN 'LIVE' THEN (SELECT COUNT(*) FROM categories cat WHERE cat.provider_id = p.id AND cat.type = 'LIVE')
+                            WHEN 'MOVIE' THEN (SELECT COUNT(*) FROM categories cat WHERE cat.provider_id = p.id AND cat.type = 'MOVIE')
+                            WHEN 'SERIES' THEN (SELECT COUNT(*) FROM categories cat WHERE cat.provider_id = p.id AND cat.type = 'SERIES')
+                            ELSE 0
+                        END,
+                        CASE
+                            WHEN section.name = 'LIVE' AND (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) > 0
+                                THEN (SELECT COUNT(*) FROM categories cat WHERE cat.provider_id = p.id AND cat.type = 'LIVE')
+                            WHEN section.name = 'MOVIE' AND (SELECT COUNT(*) FROM movies m WHERE m.provider_id = p.id) > 0
+                                THEN (SELECT COUNT(*) FROM categories cat WHERE cat.provider_id = p.id AND cat.type = 'MOVIE')
+                            WHEN section.name = 'SERIES' AND (SELECT COUNT(*) FROM series s WHERE s.provider_id = p.id) > 0
+                                THEN (SELECT COUNT(*) FROM categories cat WHERE cat.provider_id = p.id AND cat.type = 'SERIES')
+                            ELSE 0
+                        END,
+                        CASE
+                            WHEN section.name = 'LIVE' AND (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) > 0
+                                THEN (SELECT COUNT(*) FROM categories cat WHERE cat.provider_id = p.id AND cat.type = 'LIVE')
+                            WHEN section.name = 'MOVIE' AND (SELECT COUNT(*) FROM movies m WHERE m.provider_id = p.id) > 0
+                                THEN (SELECT COUNT(*) FROM categories cat WHERE cat.provider_id = p.id AND cat.type = 'MOVIE')
+                            WHEN section.name = 'SERIES' AND (SELECT COUNT(*) FROM series s WHERE s.provider_id = p.id) > 0
+                                THEN (SELECT COUNT(*) FROM categories cat WHERE cat.provider_id = p.id AND cat.type = 'SERIES')
+                            ELSE 0
+                        END,
+                        0,
+                        CASE section.name
+                            WHEN 'LIVE' THEN (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id)
+                            WHEN 'MOVIE' THEN (SELECT COUNT(*) FROM movies m WHERE m.provider_id = p.id)
+                            WHEN 'SERIES' THEN (SELECT COUNT(*) FROM series s WHERE s.provider_id = p.id)
+                            WHEN 'EPG' THEN COALESCE(sm.epg_count, 0)
+                            ELSE 0
+                        END,
+                        0,
+                        0,
+                        NULL,
+                        0,
+                        NULL,
+                        CASE section.name
+                            WHEN 'LIVE' THEN COALESCE(sm.last_live_sync, 0)
+                            WHEN 'MOVIE' THEN COALESCE(NULLIF(sm.last_movie_attempt, 0), sm.last_movie_sync, 0)
+                            WHEN 'SERIES' THEN COALESCE(sm.last_series_sync, 0)
+                            WHEN 'EPG' THEN COALESCE(sm.last_epg_sync, 0)
+                            ELSE 0
+                        END,
+                        CASE section.name
+                            WHEN 'LIVE' THEN COALESCE(NULLIF(sm.last_live_success, 0), sm.last_live_sync, 0)
+                            WHEN 'MOVIE' THEN COALESCE(NULLIF(sm.last_movie_success, 0), sm.last_movie_sync, 0)
+                            WHEN 'SERIES' THEN COALESCE(NULLIF(sm.last_series_success, 0), sm.last_series_sync, 0)
+                            WHEN 'EPG' THEN COALESCE(NULLIF(sm.last_epg_success, 0), sm.last_epg_sync, 0)
+                            ELSE 0
+                        END,
+                        COALESCE(p.last_synced_at, 0)
+                    FROM providers p
+                    CROSS JOIN (
+                        SELECT 'LIVE' AS name
+                        UNION ALL SELECT 'MOVIE'
+                        UNION ALL SELECT 'SERIES'
+                        UNION ALL SELECT 'EPG'
+                    ) section
+                    LEFT JOIN sync_metadata sm ON sm.provider_id = p.id
+                    WHERE p.type = 'XTREAM_CODES'
+                    """.trimIndent()
+                )
+
+                validateForeignKeys(database, "xtream_content_index", "xtream_index_jobs")
+            }
+        }
+
+        val MIGRATION_48_49 = object : Migration(48, 49) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE providers ADD COLUMN http_user_agent TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE providers ADD COLUMN http_headers TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        val MIGRATION_49_50 = object : Migration(49, 50) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS xtream_live_onboarding_state (
+                        provider_id INTEGER NOT NULL,
+                        provider_type TEXT NOT NULL DEFAULT 'XTREAM_CODES',
+                        content_type TEXT NOT NULL DEFAULT 'LIVE',
+                        phase TEXT NOT NULL DEFAULT 'STARTING',
+                        staged_session_id INTEGER,
+                        import_strategy TEXT,
+                        next_category_index INTEGER NOT NULL DEFAULT 0,
+                        accepted_row_count INTEGER NOT NULL DEFAULT 0,
+                        staged_flush_count INTEGER NOT NULL DEFAULT 0,
+                        last_error TEXT,
+                        created_at INTEGER NOT NULL DEFAULT 0,
+                        updated_at INTEGER NOT NULL DEFAULT 0,
+                        completed_at INTEGER,
+                        PRIMARY KEY(provider_id),
+                        FOREIGN KEY(provider_id) REFERENCES providers(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_live_onboarding_state_provider_id ON xtream_live_onboarding_state(provider_id)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_live_onboarding_state_phase ON xtream_live_onboarding_state(phase)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_live_onboarding_state_updated_at ON xtream_live_onboarding_state(updated_at)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_xtream_live_onboarding_state_staged_session_id ON xtream_live_onboarding_state(staged_session_id)")
+
+                validateForeignKeys(database, "xtream_live_onboarding_state")
+            }
+        }
+
+        val MIGRATION_50_51 = object : Migration(50, 51) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE xtream_live_onboarding_state ADD COLUMN sync_profile_tier TEXT")
+                database.execSQL("ALTER TABLE xtream_live_onboarding_state ADD COLUMN sync_profile_batch_size INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE xtream_live_onboarding_state ADD COLUMN sync_profile_strategy TEXT")
+                database.execSQL("ALTER TABLE xtream_live_onboarding_state ADD COLUMN sync_profile_low_memory INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE xtream_live_onboarding_state ADD COLUMN sync_profile_memory_class_mb INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE xtream_live_onboarding_state ADD COLUMN sync_profile_available_mem_mb INTEGER NOT NULL DEFAULT 0")
+                validateForeignKeys(database, "xtream_live_onboarding_state")
+            }
+        }
+
+        val MIGRATION_51_52 = object : Migration(51, 52) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE providers ADD COLUMN xtream_live_sync_mode TEXT NOT NULL DEFAULT 'AUTO'")
+                validateForeignKeys(database, "providers")
             }
         }
     }

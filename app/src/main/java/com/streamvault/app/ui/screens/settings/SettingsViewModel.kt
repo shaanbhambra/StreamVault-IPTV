@@ -5,8 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.streamvault.app.R
 import com.streamvault.app.BuildConfig
+import com.streamvault.app.diagnostics.CrashReportStore
+import com.streamvault.app.tv.LauncherRecommendationsManager
+import com.streamvault.app.tv.WatchNextManager
 import com.streamvault.app.tvinput.TvInputChannelSyncManager
-import com.streamvault.app.ui.model.applyProviderCategoryDisplayPreferences
 import com.streamvault.app.ui.model.LiveTvChannelMode
 import com.streamvault.app.ui.model.LiveTvQuickFilterVisibilityMode
 import com.streamvault.app.ui.model.VodViewMode
@@ -15,6 +17,9 @@ import com.streamvault.app.update.AppUpdateDownloadStatus
 import com.streamvault.app.update.AppUpdateInstaller
 import com.streamvault.app.update.GitHubReleaseChecker
 import com.streamvault.app.update.GitHubReleaseInfo
+import com.streamvault.data.local.dao.XtreamIndexJobDao
+import com.streamvault.data.local.dao.XtreamLiveOnboardingDao
+import com.streamvault.data.local.entity.XtreamIndexJobEntity
 import com.streamvault.data.preferences.PreferencesRepository
 import com.streamvault.data.sync.SyncManager
 import com.streamvault.data.sync.SyncRepairSection
@@ -54,6 +59,8 @@ import com.streamvault.domain.repository.ProviderRepository
 import com.streamvault.domain.repository.CombinedM3uRepository
 import com.streamvault.domain.repository.CategoryRepository
 import com.streamvault.domain.repository.ChannelRepository
+import com.streamvault.domain.repository.MovieRepository
+import com.streamvault.domain.repository.SeriesRepository
 import com.streamvault.domain.repository.SyncMetadataRepository
 import com.streamvault.domain.usecase.GetCustomCategories
 import com.streamvault.domain.usecase.SyncProvider
@@ -66,6 +73,8 @@ import kotlinx.coroutines.launch
 import kotlin.math.max
 import javax.inject.Inject
 
+private const val XTREAM_INDEX_STATUS_PREFIX = "Xtream index:"
+
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsViewModel @Inject constructor(
@@ -74,14 +83,20 @@ class SettingsViewModel @Inject constructor(
     private val combinedM3uRepository: CombinedM3uRepository,
     private val categoryRepository: CategoryRepository,
     private val channelRepository: ChannelRepository,
+    private val movieRepository: MovieRepository,
+    private val seriesRepository: SeriesRepository,
     private val preferencesRepository: PreferencesRepository,
     private val internetSpeedTestRunner: InternetSpeedTestRunner,
     private val backupManager: BackupManager,
     private val recordingManager: RecordingManager,
     private val parentalControlManager: ParentalControlManager,
     private val syncManager: SyncManager,
+    private val xtreamIndexJobDao: XtreamIndexJobDao,
+    private val xtreamLiveOnboardingDao: XtreamLiveOnboardingDao,
     private val syncMetadataRepository: SyncMetadataRepository,
     private val playbackHistoryRepository: com.streamvault.domain.repository.PlaybackHistoryRepository,
+    private val watchNextManager: WatchNextManager,
+    private val launcherRecommendationsManager: LauncherRecommendationsManager,
     private val tvInputChannelSyncManager: TvInputChannelSyncManager,
     private val syncProvider: SyncProvider,
     private val epgSourceRepository: com.streamvault.domain.repository.EpgSourceRepository,
@@ -120,6 +135,8 @@ class SettingsViewModel @Inject constructor(
         syncProvider = syncProvider,
         syncManager = syncManager,
         syncMetadataRepository = syncMetadataRepository,
+        watchNextManager = watchNextManager,
+        launcherRecommendationsManager = launcherRecommendationsManager,
         tvInputChannelSyncManager = tvInputChannelSyncManager,
         uiState = _uiState
     )
@@ -136,136 +153,194 @@ class SettingsViewModel @Inject constructor(
     )
 
     init {
+        refreshCrashReport()
+        registerPreferenceObservers()
+        registerXtreamIndexJobObserver()
+        registerXtreamLiveOnboardingObserver()
+        registerSettingsAppUpdateObservers(
+            scope = viewModelScope,
+            preferencesRepository = preferencesRepository,
+            appUpdateActions = appUpdateActions,
+            appUpdateInstaller = appUpdateInstaller,
+            uiState = _uiState
+        )
+        registerCombinedProfileObservers(
+            scope = viewModelScope,
+            combinedM3uRepository = combinedM3uRepository,
+            uiState = _uiState
+        )
+        registerDerivedStateObservers(
+            scope = viewModelScope,
+            providerRepository = providerRepository,
+            syncMetadataRepository = syncMetadataRepository,
+            movieRepository = movieRepository,
+            seriesRepository = seriesRepository,
+            application = appContext,
+            preferencesRepository = preferencesRepository,
+            activeProviderIdFlow = activeProviderIdFlow,
+            categoryRepository = categoryRepository,
+            combinedM3uRepository = combinedM3uRepository,
+            channelRepository = channelRepository,
+            getCustomCategories = getCustomCategories,
+            uiState = _uiState
+        )
+        registerRecordingObservers(
+            scope = viewModelScope,
+            recordingManager = recordingManager,
+            preferencesRepository = preferencesRepository,
+            uiState = _uiState
+        )
+        registerEpgObservers(
+            scope = viewModelScope,
+            epgSourceRepository = epgSourceRepository,
+            uiState = _uiState
+        )
+    }
+
+    fun refreshCrashReport() {
+        val report = CrashReportStore.latestReport(appContext)
+        _uiState.update { state ->
+            state.copy(
+                crashReport = report?.toUiModel() ?: CrashReportUiModel(),
+                viewedCrashReport = state.viewedCrashReport?.let { report?.toUiModel() }
+            )
+        }
+    }
+
+    fun viewCrashReport() {
+        refreshCrashReport()
+        _uiState.update { state ->
+            state.copy(viewedCrashReport = state.crashReport.takeIf { it.hasReport })
+        }
+    }
+
+    fun dismissCrashReport() {
+        _uiState.update { it.copy(viewedCrashReport = null) }
+    }
+
+    fun deleteCrashReport() {
+        val deleted = CrashReportStore.deleteLatestReport(appContext)
+        _uiState.update {
+            it.copy(
+                crashReport = CrashReportUiModel(),
+                viewedCrashReport = null,
+                userMessage = if (deleted) {
+                    appContext.getString(R.string.settings_crash_report_deleted)
+                } else {
+                    appContext.getString(R.string.settings_crash_report_delete_failed)
+                }
+            )
+        }
+    }
+
+    private fun com.streamvault.app.diagnostics.CrashReportSummary.toUiModel(): CrashReportUiModel =
+        CrashReportUiModel(
+            timestamp = timestamp,
+            exception = exception,
+            fileName = fileName,
+            content = content
+        )
+
+    private fun registerPreferenceObservers() {
         viewModelScope.launch {
             observeSettingsPreferenceSnapshot(
                 providerRepository = providerRepository,
                 activeProviderIdFlow = activeProviderIdFlow,
                 preferencesRepository = preferencesRepository
             ).collect { snapshot ->
+                val previousProviderIds = _uiState.value.providers.map { it.id }.toSet()
                 _uiState.update { it.applyPreferenceSnapshot(snapshot) }
+                val currentProviderIds = snapshot.providers.map { it.id }.toSet()
+                val removedIds = previousProviderIds - currentProviderIds
+                if (removedIds.isNotEmpty()) {
+                    epgActions.cleanupEpgAssignmentsFor(removedIds)
+                }
             }
         }
+    }
 
+    private fun registerXtreamIndexJobObserver() {
         viewModelScope.launch {
-            combine(
-                preferencesRepository.autoCheckAppUpdates,
-                preferencesRepository.lastAppUpdateCheckTimestamp,
-                preferencesRepository.autoDownloadAppUpdates
-            ) { autoCheckEnabled, lastCheckedAt, autoDownload ->
-                Triple(autoCheckEnabled, lastCheckedAt, autoDownload)
-            }.distinctUntilChanged().collect { (autoCheckEnabled, lastCheckedAt, autoDownload) ->
-                if (autoCheckEnabled && appUpdateActions.shouldAutoCheckForUpdates(lastCheckedAt)) {
-                    appUpdateActions.checkForAppUpdates(
-                        scope = viewModelScope,
-                        manual = false,
-                        isRemoteVersionNewer = ::isRemoteVersionNewer,
-                        autoDownload = autoDownload
+            xtreamIndexJobDao.observeAll().collect { jobs ->
+                val jobWarningsByProvider = jobs
+                    .groupBy { it.providerId }
+                    .mapValues { (_, providerJobs) ->
+                        providerJobs.mapNotNull { job -> job.toSettingsWarningMessage() }
+                    }
+                    .filterValues { it.isNotEmpty() }
+
+                _uiState.update { state ->
+                    val providerIds = state.providers.map { it.id }.toSet()
+                    val preservedWarnings = state.syncWarningsByProvider
+                        .filterKeys { it in providerIds }
+                        .mapValues { (_, warnings) ->
+                            warnings.filterNot { warning -> warning.startsWith(XTREAM_INDEX_STATUS_PREFIX) }
+                        }
+                        .filterValues { it.isNotEmpty() }
+                    state.copy(
+                        syncWarningsByProvider = preservedWarnings + jobWarningsByProvider,
+                        xtreamIndexSectionStatusByProvider = jobs
+                            .filter { job -> job.providerId in providerIds }
+                            .mapNotNull { job ->
+                                val section = job.section.toCatalogSectionKey() ?: return@mapNotNull null
+                                job.providerId to (section to job.state.toCatalogCountStatus())
+                            }
+                            .groupBy({ it.first }, { it.second })
+                            .mapValues { (_, pairs) -> pairs.toMap() }
                     )
                 }
             }
         }
+    }
 
-        viewModelScope.launch {
-            appUpdateInstaller.downloadState.collect { downloadState ->
-                _uiState.update {
-                    it.copy(appUpdate = it.appUpdate.withDownloadState(downloadState))
-                }
-            }
-        }
+    private fun String.toCatalogSectionKey(): String? = when (uppercase()) {
+        "LIVE" -> "LIVE"
+        "MOVIE" -> "MOVIE"
+        "SERIES" -> "SERIES"
+        "EPG" -> "EPG"
+        else -> null
+    }
 
-        viewModelScope.launch {
-            appUpdateInstaller.refreshState()
-        }
+    private fun String.toCatalogCountStatus(): ProviderCatalogCountStatus = when (uppercase()) {
+        "QUEUED", "STALE" -> ProviderCatalogCountStatus.QUEUED
+        "RUNNING" -> ProviderCatalogCountStatus.SYNCING
+        "PARTIAL" -> ProviderCatalogCountStatus.PARTIAL
+        "FAILED_RETRYABLE", "FAILED_PERMANENT" -> ProviderCatalogCountStatus.FAILED
+        "SUCCESS" -> ProviderCatalogCountStatus.READY
+        else -> ProviderCatalogCountStatus.PENDING
+    }
 
+    private fun registerXtreamLiveOnboardingObserver() {
         viewModelScope.launch {
-            combinedM3uRepository.getProfiles().collect { profiles ->
-                _uiState.update { it.copy(combinedProfiles = profiles) }
-            }
-        }
-
-        viewModelScope.launch {
-            combinedM3uRepository.getAvailableM3uProviders().collect { providers ->
-                _uiState.update { it.copy(availableM3uProviders = providers) }
-            }
-        }
-
-        viewModelScope.launch {
-            combinedM3uRepository.getActiveLiveSource().collect { activeSource ->
-                _uiState.update { it.copy(activeLiveSource = activeSource) }
-            }
-        }
-
-        viewModelScope.launch {
-            observeProviderDiagnostics(
-                providerRepository = providerRepository,
-                syncMetadataRepository = syncMetadataRepository,
-                application = appContext
-            ).collect { diagnosticsByProvider ->
-                _uiState.update { it.copy(diagnosticsByProvider = diagnosticsByProvider) }
-            }
-        }
-
-        viewModelScope.launch {
-            preferencesRepository.lastMaintenanceSnapshot.collect { snapshot ->
-                _uiState.update { it.copy(databaseMaintenance = snapshot?.toUiModel()) }
-            }
-        }
-
-        viewModelScope.launch {
-            observeCategoryManagement(
-                activeProviderIdFlow = activeProviderIdFlow,
-                preferencesRepository = preferencesRepository,
-                categoryRepository = categoryRepository
-            ).collect { snapshot ->
-                _uiState.update {
-                    it.copy(
-                        categorySortModes = snapshot.categorySortModes,
-                        hiddenCategories = snapshot.hiddenCategories
+            xtreamLiveOnboardingDao.observeIncomplete().collect { states ->
+                _uiState.update { state ->
+                    val providerIds = state.providers.map { it.id }.toSet()
+                    state.copy(
+                        xtreamLiveOnboardingPhaseByProvider = states
+                            .filter { onboarding -> onboarding.providerId in providerIds }
+                            .associate { onboarding -> onboarding.providerId to onboarding.phase },
+                        xtreamLiveOnboardingByProvider = states
+                            .filter { onboarding -> onboarding.providerId in providerIds }
+                            .associate { onboarding -> onboarding.providerId to onboarding.toUiModel() }
                     )
                 }
             }
         }
+    }
 
-        viewModelScope.launch {
-            observeGuideDefaultCategoryOptions().collect { categories ->
-                _uiState.update { it.copy(guideDefaultCategoryOptions = categories) }
-            }
+    private fun XtreamIndexJobEntity.toSettingsWarningMessage(): String? {
+        val label = when (section) {
+            "LIVE" -> "Live TV"
+            "MOVIE" -> "Movies"
+            "SERIES" -> "Series"
+            "EPG" -> "EPG"
+            else -> section.lowercase().replaceFirstChar { it.titlecase() }
         }
-
-        viewModelScope.launch {
-            recordingManager.observeRecordingItems().collect { items ->
-                _uiState.update { it.copy(recordingItems = items.sortedByDescending(RecordingItem::scheduledStartMs)) }
-            }
-        }
-
-        viewModelScope.launch {
-            recordingManager.observeStorageState().collect { storage ->
-                _uiState.update { it.copy(recordingStorageState = storage) }
-            }
-        }
-
-        viewModelScope.launch {
-            preferencesRepository.recordingWifiOnly.collect { wifiOnly ->
-                _uiState.update { it.copy(wifiOnlyRecording = wifiOnly) }
-            }
-        }
-
-        viewModelScope.launch {
-            preferencesRepository.recordingPaddingBeforeMinutes.collect { minutes ->
-                _uiState.update { it.copy(recordingPaddingBeforeMinutes = minutes) }
-            }
-        }
-
-        viewModelScope.launch {
-            preferencesRepository.recordingPaddingAfterMinutes.collect { minutes ->
-                _uiState.update { it.copy(recordingPaddingAfterMinutes = minutes) }
-            }
-        }
-
-        viewModelScope.launch {
-            epgSourceRepository.getAllSources().collect { sources ->
-                _uiState.update { it.copy(epgSources = sources) }
-            }
+        return when (state) {
+            "PARTIAL" -> "$XTREAM_INDEX_STATUS_PREFIX $label partial: ${indexedRows} indexed"
+            "FAILED_RETRYABLE" -> "$XTREAM_INDEX_STATUS_PREFIX $label retryable failed${lastError?.let { ": $it" }.orEmpty()}"
+            "FAILED_PERMANENT" -> "$XTREAM_INDEX_STATUS_PREFIX $label permanently failed${lastError?.let { ": $it" }.orEmpty()}"
+            else -> null
         }
     }
 
@@ -277,20 +352,20 @@ class SettingsViewModel @Inject constructor(
         providerActions.setActiveCombinedProfile(viewModelScope, profileId)
     }
 
-    fun createCombinedProfile(name: String, providerIds: List<Long>) {
-        providerActions.createCombinedProfile(viewModelScope, name, providerIds)
+    fun createCombinedProfile(name: String, providerIds: List<Long>, onSuccess: () -> Unit = {}, onError: () -> Unit = {}) {
+        providerActions.createCombinedProfile(viewModelScope, name, providerIds, onSuccess, onError)
     }
 
     fun deleteCombinedProfile(profileId: Long) {
         providerActions.deleteCombinedProfile(viewModelScope, profileId)
     }
 
-    fun addProviderToCombinedProfile(profileId: Long, providerId: Long) {
-        providerActions.addProviderToCombinedProfile(viewModelScope, profileId, providerId)
+    fun addProviderToCombinedProfile(profileId: Long, providerId: Long, onSuccess: () -> Unit = {}, onError: () -> Unit = {}) {
+        providerActions.addProviderToCombinedProfile(viewModelScope, profileId, providerId, onSuccess, onError)
     }
 
-    fun renameCombinedProfile(profileId: Long, name: String) {
-        providerActions.renameCombinedProfile(viewModelScope, profileId, name)
+    fun renameCombinedProfile(profileId: Long, name: String, onSuccess: () -> Unit = {}, onError: () -> Unit = {}) {
+        providerActions.renameCombinedProfile(viewModelScope, profileId, name, onSuccess, onError)
     }
 
     fun removeProviderFromCombinedProfile(profileId: Long, providerId: Long) {
@@ -516,6 +591,18 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setPlayerAudioVideoSyncEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setPlayerAudioVideoSyncEnabled(enabled)
+        }
+    }
+
+    fun setCenterTwoSlotMultiviewLayout(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setMultiViewCenterTwoSlotLayout(enabled)
+        }
+    }
+
     fun setPlayerMediaSessionEnabled(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setPlayerMediaSessionEnabled(enabled)
@@ -643,6 +730,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun runInternetSpeedTest() {
+        if (_uiState.value.isRunningInternetSpeedTest) return
         viewModelScope.launch {
             _uiState.update { it.copy(isRunningInternetSpeedTest = true) }
             when (val result = internetSpeedTestRunner.run()) {
@@ -751,9 +839,13 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(userMessage = null) }
     }
 
+    fun showUserMessage(message: String) {
+        _uiState.update { it.copy(userMessage = message) }
+    }
+
     fun refreshProvider(
         providerId: Long,
-        syncMode: SettingsProviderSyncMode = SettingsProviderSyncMode.QUICK
+        syncMode: SettingsProviderSyncMode = SettingsProviderSyncMode.SYNC_NOW
     ) {
         providerActions.refreshProvider(viewModelScope, providerId, syncMode)
     }
@@ -770,37 +862,16 @@ class SettingsViewModel @Inject constructor(
         syncActions.retryWarningAction(viewModelScope, providerId, action)
     }
 
-    fun deleteProvider(providerId: Long) {
-        providerActions.deleteProvider(viewModelScope, providerId)
+    fun deleteProvider(providerId: Long, onSuccess: () -> Unit = {}) {
+        providerActions.deleteProvider(viewModelScope, providerId, onSuccess)
     }
 
     fun userMessageShown() {
         _uiState.update { it.copy(userMessage = null) }
     }
 
-    private fun isRemoteVersionNewer(remoteVersionCode: Int?, remoteVersionName: String): Boolean {
-        if (remoteVersionCode != null && remoteVersionCode > BuildConfig.VERSION_CODE) {
-            return true
-        }
-        return compareVersionNames(remoteVersionName, BuildConfig.VERSION_NAME) > 0
-    }
-
-    private fun compareVersionNames(left: String, right: String): Int {
-        val leftParts = left.removePrefix("v").split('.')
-        val rightParts = right.removePrefix("v").split('.')
-        val length = max(leftParts.size, rightParts.size)
-        for (index in 0 until length) {
-            val leftValue = leftParts.getOrNull(index)?.toIntOrNull() ?: 0
-            val rightValue = rightParts.getOrNull(index)?.toIntOrNull() ?: 0
-            if (leftValue != rightValue) {
-                return leftValue.compareTo(rightValue)
-            }
-        }
-        return 0
-    }
-
-    fun exportConfig(uriString: String) {
-        backupActions.exportConfig(viewModelScope, uriString)
+    fun exportConfig(uriString: String, onSuccess: (() -> Unit)? = null) {
+        backupActions.exportConfig(viewModelScope, uriString, onSuccess)
     }
 
     fun inspectBackup(uriString: String) {
@@ -893,8 +964,8 @@ class SettingsViewModel @Inject constructor(
         epgActions.loadEpgAssignments(viewModelScope, providerId)
     }
 
-    fun addEpgSource(name: String, url: String) {
-        epgActions.addEpgSource(viewModelScope, name, url)
+    fun addEpgSource(name: String, url: String, onSuccess: () -> Unit = {}, onError: () -> Unit = {}) {
+        epgActions.addEpgSource(viewModelScope, name, url, onSuccess, onError)
     }
 
     fun setPendingDeleteEpgSource(id: Long?) {
@@ -929,83 +1000,4 @@ class SettingsViewModel @Inject constructor(
         epgActions.moveEpgSourceAssignmentDown(viewModelScope, providerId, epgSourceId)
     }
 
-    private fun observeGuideDefaultCategoryOptions(): Flow<List<Category>> {
-        return combinedM3uRepository.getActiveLiveSource().flatMapLatest { activeSource ->
-            when (activeSource) {
-                is ActiveLiveSource.CombinedM3uSource -> {
-                    combine(
-                        combinedM3uRepository.getCombinedCategories(activeSource.profileId),
-                        flow {
-                            emit(combinedM3uRepository.getProfile(activeSource.profileId)?.members.orEmpty())
-                        }.flatMapLatest { members ->
-                            getCustomCategories(
-                                members.filter { it.enabled }.map { it.providerId },
-                                ContentType.LIVE
-                            )
-                        }
-                    ) { combinedCategories, customCategories ->
-                        buildGuideDefaultCategoryOptions(
-                            physicalCategories = combinedCategories.map { it.category },
-                            customCategories = customCategories
-                        )
-                    }
-                }
-                is ActiveLiveSource.ProviderSource -> {
-                    combine(
-                        channelRepository.getCategories(activeSource.providerId),
-                        getCustomCategories(activeSource.providerId, ContentType.LIVE),
-                        preferencesRepository.getHiddenCategoryIds(activeSource.providerId, ContentType.LIVE),
-                        preferencesRepository.getCategorySortMode(activeSource.providerId, ContentType.LIVE)
-                    ) { categories, customCategories, hiddenCategoryIds, sortMode ->
-                        val visibleProviderCategories = applyProviderCategoryDisplayPreferences(
-                            categories = categories.filter { it.id != ChannelRepository.ALL_CHANNELS_ID },
-                            hiddenCategoryIds = hiddenCategoryIds,
-                            sortMode = sortMode
-                        )
-                        buildGuideDefaultCategoryOptions(
-                            physicalCategories = visibleProviderCategories,
-                            customCategories = customCategories
-                        )
-                    }
-                }
-                null -> flowOf(
-                    listOf(
-                        Category(
-                            id = VirtualCategoryIds.FAVORITES,
-                            name = "Favorites",
-                            type = ContentType.LIVE,
-                            isVirtual = true
-                        ),
-                        Category(
-                            id = ChannelRepository.ALL_CHANNELS_ID,
-                            name = "All Channels",
-                            type = ContentType.LIVE
-                        )
-                    )
-                )
-            }
-        }
-    }
-
-    private fun buildGuideDefaultCategoryOptions(
-        physicalCategories: List<Category>,
-        customCategories: List<Category>
-    ): List<Category> {
-        val favorites = customCategories.find { it.id == VirtualCategoryIds.FAVORITES }
-        return buildList {
-            if (favorites != null) {
-                add(favorites)
-            }
-            addAll(customCategories.filter { it.id != VirtualCategoryIds.FAVORITES })
-            add(
-                Category(
-                    id = ChannelRepository.ALL_CHANNELS_ID,
-                    name = "All Channels",
-                    type = ContentType.LIVE,
-                    count = physicalCategories.sumOf(Category::count)
-                )
-            )
-            addAll(physicalCategories)
-        }
-    }
 }

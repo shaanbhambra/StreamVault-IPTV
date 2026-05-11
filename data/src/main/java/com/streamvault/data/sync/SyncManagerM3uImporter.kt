@@ -1,8 +1,13 @@
 package com.streamvault.data.sync
 
+import android.util.Log
 import com.streamvault.data.local.entity.ChannelEntity
 import com.streamvault.data.local.entity.MovieEntity
 import com.streamvault.data.parser.M3uParser
+import com.streamvault.data.remote.http.HttpRequestProfile
+import com.streamvault.data.remote.http.safeRequestIdentitySummary
+import com.streamvault.data.remote.http.toGenericRequestProfile
+import com.streamvault.data.remote.http.withRequestProfile
 import com.streamvault.data.util.AdultContentClassifier
 import com.streamvault.data.util.UrlSecurityPolicy
 import com.streamvault.domain.model.ContentType
@@ -17,6 +22,7 @@ import java.net.URI
 import java.util.zip.GZIPInputStream
 
 private const val M3U_PROGRESS_INTERVAL = 5_000
+private const val M3U_IMPORTER_TAG = "SyncManagerM3u"
 
 internal class SyncManagerM3uImporter(
     private val m3uParser: M3uParser,
@@ -160,13 +166,19 @@ internal class SyncManagerM3uImporter(
 
             flushChannelBatch(provider.id, sessionId, channelBatch)
             flushMovieBatch(provider.id, sessionId, movieBatch)
+            // Only commit a section if it produced at least one entry. Committing an
+            // empty stage with includeLive=true runs stale deletion and wipes the entire
+            // live-TV catalog — even though the absence of entries may reflect a server
+            // error or a filtered playlist rather than a legitimate empty provider.
+            val effectiveLive = includeLive && liveCount > 0
+            val effectiveMovies = includeMovies && movieCount > 0
             syncCatalogStore.finalizeStagedImport(
                 providerId = provider.id,
                 sessionId = sessionId,
-                liveCategories = if (includeLive) liveCategories.entities() else null,
-                movieCategories = if (includeMovies) movieCategories.entities() else null,
-                includeLive = includeLive,
-                includeMovies = includeMovies
+                liveCategories = if (effectiveLive) liveCategories.entities() else null,
+                movieCategories = if (effectiveMovies) movieCategories.entities() else null,
+                includeLive = effectiveLive,
+                includeMovies = effectiveMovies
             )
         } finally {
             syncCatalogStore.discardStagedImport(provider.id, sessionId)
@@ -196,9 +208,14 @@ internal class SyncManagerM3uImporter(
             return
         }
 
+        val requestProfile = provider.toGenericRequestProfile(ownerTag = "provider:${provider.id}/m3u")
         retryTransient {
-            okHttpClient.newCall(Request.Builder().url(urlStr).build()).execute().use { response ->
-                ensureSuccessfulPlaylistResponse(response)
+            val request = Request.Builder()
+                .url(urlStr)
+                .build()
+                .withRequestProfile(requestProfile)
+            okHttpClient.newCall(request).execute().use { response ->
+                ensureSuccessfulPlaylistResponse(response, requestProfile)
                 val body = response.body ?: throw IllegalStateException("Empty M3U response")
                 body.byteStream().use { input ->
                     block(
@@ -213,8 +230,12 @@ internal class SyncManagerM3uImporter(
         }
     }
 
-    private fun ensureSuccessfulPlaylistResponse(response: Response) {
+    private fun ensureSuccessfulPlaylistResponse(response: Response, requestProfile: HttpRequestProfile) {
         if (response.isSuccessful) return
+        Log.w(
+            M3U_IMPORTER_TAG,
+            "Playlist request failed (${response.request.safeRequestIdentitySummary(requestProfile)}): HTTP ${response.code}"
+        )
         if (response.code in 500..599 || response.code == 429) {
             // Transient — the retry wrapper will attempt again automatically.
             throw IOException("Transient HTTP ${response.code}")

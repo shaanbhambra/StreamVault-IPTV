@@ -3,6 +3,8 @@ package com.streamvault.domain.usecase
 import com.streamvault.domain.manager.ProviderSetupInputValidator
 import com.streamvault.domain.model.Provider
 import com.streamvault.domain.model.ProviderEpgSyncMode
+import com.streamvault.domain.model.ProviderXtreamLiveSyncMode
+import com.streamvault.domain.model.ProviderSavedWithSyncErrorException
 import com.streamvault.domain.model.Result
 import com.streamvault.domain.repository.ProviderRepository
 import java.net.URI
@@ -15,14 +17,19 @@ data class XtreamProviderSetupCommand(
     val username: String,
     val password: String,
     val name: String,
-    val xtreamFastSyncEnabled: Boolean = true,
+    val httpUserAgent: String = "",
+    val httpHeaders: String = "",
+    val xtreamFastSyncEnabled: Boolean = false,
     val epgSyncMode: ProviderEpgSyncMode = ProviderEpgSyncMode.BACKGROUND,
+    val xtreamLiveSyncMode: ProviderXtreamLiveSyncMode = ProviderXtreamLiveSyncMode.AUTO,
     val existingProviderId: Long? = null
 )
 
 data class M3uProviderSetupCommand(
     val url: String,
     val name: String,
+    val httpUserAgent: String = "",
+    val httpHeaders: String = "",
     val epgSyncMode: ProviderEpgSyncMode = ProviderEpgSyncMode.BACKGROUND,
     val m3uVodClassificationEnabled: Boolean = false,
     val existingProviderId: Long? = null
@@ -41,6 +48,7 @@ data class StalkerProviderSetupCommand(
 
 sealed class ValidateAndAddProviderResult {
     data class Success(val provider: Provider) : ValidateAndAddProviderResult()
+    data class SavedWithWarning(val provider: Provider, val warning: String) : ValidateAndAddProviderResult()
     data class ValidationError(val message: String) : ValidateAndAddProviderResult()
     data class Error(val message: String, val exception: Throwable? = null) : ValidateAndAddProviderResult()
 }
@@ -54,6 +62,68 @@ class ValidateAndAddProvider @Inject constructor(
         private const val MAX_XTREAM_PLAYLIST_PASSWORD_LENGTH = 256
     }
 
+    /**
+     * Performs local input validation only — no network calls, no persistence, no side effects.
+     * Returns the [ValidateAndAddProviderResult.ValidationError] if the input is invalid, or
+     * `null` if the input passed all local checks and is ready for [loginXtream].
+     */
+    fun validateXtreamInput(command: XtreamProviderSetupCommand): ValidateAndAddProviderResult.ValidationError? {
+        return when (
+            val result = providerSetupInputValidator.validateXtream(
+                serverUrl = command.serverUrl,
+                username = command.username,
+                password = command.password,
+                allowBlankPassword = command.existingProviderId != null,
+                name = command.name,
+                httpUserAgent = command.httpUserAgent,
+                httpHeaders = command.httpHeaders
+            )
+        ) {
+            is Result.Error -> ValidateAndAddProviderResult.ValidationError(result.message)
+            else -> null
+        }
+    }
+
+    /**
+     * Performs local input validation only — no network calls, no persistence, no side effects.
+     * Returns the [ValidateAndAddProviderResult.ValidationError] if the input is invalid, or
+     * `null` if the input passed all local checks and is ready for [addM3u].
+     */
+    fun validateM3uInput(command: M3uProviderSetupCommand): ValidateAndAddProviderResult.ValidationError? {
+        return when (
+            val result = providerSetupInputValidator.validateM3u(
+                url = command.url,
+                name = command.name,
+                httpUserAgent = command.httpUserAgent,
+                httpHeaders = command.httpHeaders
+            )
+        ) {
+            is Result.Error -> ValidateAndAddProviderResult.ValidationError(result.message)
+            else -> null
+        }
+    }
+
+    /**
+     * Performs local input validation only — no network calls, no persistence, no side effects.
+     * Returns the [ValidateAndAddProviderResult.ValidationError] if the input is invalid, or
+     * `null` if the input passed all local checks and is ready for [loginStalker].
+     */
+    fun validateStalkerInput(command: StalkerProviderSetupCommand): ValidateAndAddProviderResult.ValidationError? {
+        return when (
+            val result = providerSetupInputValidator.validateStalker(
+                portalUrl = command.portalUrl,
+                macAddress = command.macAddress,
+                name = command.name,
+                deviceProfile = command.deviceProfile,
+                timezone = command.timezone,
+                locale = command.locale
+            )
+        ) {
+            is Result.Error -> ValidateAndAddProviderResult.ValidationError(result.message)
+            else -> null
+        }
+    }
+
     suspend fun loginXtream(
         command: XtreamProviderSetupCommand,
         onProgress: ((String) -> Unit)? = null
@@ -62,16 +132,23 @@ class ValidateAndAddProvider @Inject constructor(
             val validated = providerSetupInputValidator.validateXtream(
                 serverUrl = command.serverUrl,
                 username = command.username,
-                name = command.name
+                password = command.password,
+                allowBlankPassword = command.existingProviderId != null,
+                name = command.name,
+                httpUserAgent = command.httpUserAgent,
+                httpHeaders = command.httpHeaders
             )
         ) {
             is Result.Success -> providerRepository.loginXtream(
                 serverUrl = validated.data.serverUrl,
                 username = validated.data.username,
-                password = command.password,
+                password = validated.data.password,
                 name = validated.data.name,
+                httpUserAgent = validated.data.httpUserAgent,
+                httpHeaders = validated.data.httpHeaders,
                 xtreamFastSyncEnabled = command.xtreamFastSyncEnabled,
                 epgSyncMode = command.epgSyncMode,
+                xtreamLiveSyncMode = command.xtreamLiveSyncMode,
                 onProgress = onProgress,
                 id = command.existingProviderId
             ).toUseCaseResult()
@@ -88,7 +165,9 @@ class ValidateAndAddProvider @Inject constructor(
         return when (
             val validated = providerSetupInputValidator.validateM3u(
                 url = command.url,
-                name = command.name
+                name = command.name,
+                httpUserAgent = command.httpUserAgent,
+                httpHeaders = command.httpHeaders
             )
         ) {
             is Result.Success -> {
@@ -103,8 +182,11 @@ class ValidateAndAddProvider @Inject constructor(
                             username = parsedXtream.username,
                             password = parsedXtream.password,
                             name = validatedInput.name,
-                            xtreamFastSyncEnabled = true,
+                            httpUserAgent = validatedInput.httpUserAgent,
+                            httpHeaders = validatedInput.httpHeaders,
+                            xtreamFastSyncEnabled = false,
                             epgSyncMode = command.epgSyncMode,
+                            xtreamLiveSyncMode = ProviderXtreamLiveSyncMode.AUTO,
                             onProgress = onProgress,
                             id = command.existingProviderId
                         ).toUseCaseResult()
@@ -114,6 +196,8 @@ class ValidateAndAddProvider @Inject constructor(
                         providerRepository.validateM3u(
                             url = validatedInput.url,
                             name = validatedInput.name,
+                            httpUserAgent = validatedInput.httpUserAgent,
+                            httpHeaders = validatedInput.httpHeaders,
                             epgSyncMode = command.epgSyncMode,
                             m3uVodClassificationEnabled = command.m3uVodClassificationEnabled,
                             onProgress = onProgress,
@@ -161,7 +245,17 @@ class ValidateAndAddProvider @Inject constructor(
 
     private fun Result<Provider>.toUseCaseResult(): ValidateAndAddProviderResult = when (this) {
         is Result.Success -> ValidateAndAddProviderResult.Success(data)
-        is Result.Error -> ValidateAndAddProviderResult.Error(message, exception)
+        is Result.Error -> {
+            val savedWithWarning = exception as? ProviderSavedWithSyncErrorException
+            if (savedWithWarning != null) {
+                ValidateAndAddProviderResult.SavedWithWarning(
+                    provider = savedWithWarning.provider,
+                    warning = savedWithWarning.message ?: message
+                )
+            } else {
+                ValidateAndAddProviderResult.Error(message, exception)
+            }
+        }
         is Result.Loading -> ValidateAndAddProviderResult.Error("Unexpected loading state")
     }
 
@@ -199,8 +293,21 @@ class ValidateAndAddProvider @Inject constructor(
             return ParsedXtreamPlaylistUrlResult.ValidationError("Playlist password is too long.")
         }
 
-        val authority = uri.rawAuthority?.takeIf { it.isNotBlank() }
-            ?: return ParsedXtreamPlaylistUrlResult.NotXtreamPlaylist
+        if (!uri.userInfo.isNullOrBlank()) {
+            return ParsedXtreamPlaylistUrlResult.ValidationError(
+                "Playlist sources must not include embedded credentials in the URL authority."
+            )
+        }
+
+        val host = uri.host?.takeIf { it.isNotBlank() }
+            ?: return ParsedXtreamPlaylistUrlResult.ValidationError("Playlist sources must include a host.")
+        val authority = buildString {
+            append(host.asXtreamServerHost())
+            if (uri.port != -1) {
+                append(":")
+                append(uri.port)
+            }
+        }
         return ParsedXtreamPlaylistUrlResult.Success(
             serverUrl = "$scheme://$authority",
             username = username,
@@ -223,4 +330,7 @@ class ValidateAndAddProvider @Inject constructor(
 
     private fun decodeQueryComponent(value: String): String =
         URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+
+    private fun String.asXtreamServerHost(): String =
+        if (contains(':') && !startsWith("[")) "[$this]" else this
 }

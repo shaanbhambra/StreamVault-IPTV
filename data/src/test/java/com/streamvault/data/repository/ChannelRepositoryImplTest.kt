@@ -83,7 +83,7 @@ class ChannelRepositoryImplTest {
     }
 
     @Test
-    fun `getCategories keeps unlocked protected category visible at hidden level`() = runTest {
+    fun `getCategories keeps unlocked protected category visible at private level`() = runTest {
         whenever(categoryDao.getByProviderAndType(7L, ContentType.LIVE.name)).thenReturn(
             flowOf(
                 listOf(
@@ -113,6 +113,37 @@ class ChannelRepositoryImplTest {
             "Adults" to 5
         ).inOrder()
         assertThat(result.first { it.id == 20L }.isUserProtected).isFalse()
+    }
+
+    @Test
+    fun `getCategories hides unlocked protected category at hidden level`() = runTest {
+        whenever(categoryDao.getByProviderAndType(7L, ContentType.LIVE.name)).thenReturn(
+            flowOf(
+                listOf(
+                    categoryEntity(id = 10L, name = "Kids"),
+                    categoryEntity(id = 20L, name = "Adults", isUserProtected = true)
+                )
+            )
+        )
+        whenever(channelDao.getGroupedCategoryCounts(7L)).thenReturn(
+            flowOf(
+                listOf(
+                    CategoryCount(categoryId = 10L, item_count = 3),
+                    CategoryCount(categoryId = 20L, item_count = 5)
+                )
+            )
+        )
+        whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(3))
+        whenever(parentalControlManager.unlockedCategoriesForProvider(eq(7L))).thenReturn(flowOf(setOf(20L)))
+
+        val repository = createRepository()
+
+        val result = repository.getCategories(7L).first()
+
+        assertThat(result.map { it.name to it.count }).containsExactly(
+            "All Channels" to 3,
+            "Kids" to 3
+        ).inOrder()
     }
 
     @Test
@@ -186,6 +217,20 @@ class ChannelRepositoryImplTest {
         whenever(channelDao.search(eq(7L), any(), any())).thenReturn(
             flow { throw SQLiteException("malformed MATCH expression") }
         )
+        whenever(channelDao.searchFallback(eq(7L), any(), any())).thenReturn(
+            flowOf(
+                listOf(
+                    ChannelBrowseEntity(
+                        id = 99L,
+                        streamId = 199L,
+                        name = "News One",
+                        streamUrl = "https://stream/news",
+                        number = 9,
+                        providerId = 7L
+                    )
+                )
+            )
+        )
         whenever(preferencesRepository.liveChannelNumberingMode).thenReturn(flowOf(ChannelNumberingMode.PROVIDER))
         whenever(parentalControlManager.unlockedCategoriesForProvider(7L)).thenReturn(flowOf(emptySet()))
         whenever(favoriteDao.getAllByType(7L, ContentType.LIVE.name)).thenReturn(flowOf(emptyList()))
@@ -194,7 +239,34 @@ class ChannelRepositoryImplTest {
 
         val result = repository.searchChannels(7L, "news").first()
 
-        assertThat(result).isEmpty()
+        assertThat(result.map { it.name }).containsExactly("News One")
+    }
+
+    @Test
+    fun `searchChannels does not run like fallback when fts returns rows`() = runTest {
+        whenever(channelDao.search(eq(7L), any(), any())).thenReturn(
+            flowOf(
+                listOf(
+                    ChannelBrowseEntity(
+                        id = 100L,
+                        streamId = 200L,
+                        name = "News Fast",
+                        streamUrl = "https://stream/news-fast",
+                        number = 10,
+                        providerId = 7L
+                    )
+                )
+            )
+        )
+        whenever(parentalControlManager.unlockedCategoriesForProvider(7L)).thenReturn(flowOf(emptySet()))
+        whenever(favoriteDao.getAllByType(7L, ContentType.LIVE.name)).thenReturn(flowOf(emptyList()))
+
+        val repository = createRepository()
+
+        val result = repository.searchChannels(7L, "news").first()
+
+        assertThat(result.map { it.name }).containsExactly("News Fast")
+        verify(channelDao, never()).searchFallback(eq(7L), any(), any())
     }
 
     private fun createRepository() = ChannelRepositoryImpl(

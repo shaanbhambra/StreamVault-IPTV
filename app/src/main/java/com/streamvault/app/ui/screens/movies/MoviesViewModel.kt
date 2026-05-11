@@ -21,6 +21,7 @@ import com.streamvault.domain.repository.FavoriteRepository
 import com.streamvault.domain.repository.MovieRepository
 import com.streamvault.domain.repository.PlaybackHistoryRepository
 import com.streamvault.domain.repository.ProviderRepository
+import com.streamvault.domain.usecase.ContinueWatchingResult
 import com.streamvault.domain.usecase.ContinueWatchingScope
 import com.streamvault.domain.usecase.GetContinueWatching
 import com.streamvault.domain.usecase.GetCustomCategories
@@ -46,11 +47,13 @@ import com.streamvault.app.util.isPlaybackComplete
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.filterNotNull
@@ -69,7 +72,7 @@ enum class MovieLibraryLens {
 }
 
 @HiltViewModel
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class MoviesViewModel @Inject constructor(
     private val providerRepository: ProviderRepository,
     private val movieRepository: MovieRepository,
@@ -91,6 +94,12 @@ class MoviesViewModel @Inject constructor(
     val uiState: StateFlow<MoviesUiState> = _uiState.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
+    private val searchQueryForBrowse = _searchQuery
+        .map { it.trim() }
+        .distinctUntilChanged()
+        .debounce { query ->
+            if (query.isBlank() || query.length < MIN_SEARCH_QUERY_LENGTH) 0L else 300L
+        }
     private val _selectedCategoryLoadLimit = MutableStateFlow(VodBrowseDefaults.SELECTED_CATEGORY_PAGE_SIZE)
     private val _selectedLibraryFilterType = MutableStateFlow(LibraryFilterType.ALL)
     private val _selectedLibrarySortBy = MutableStateFlow(LibrarySortBy.LIBRARY)
@@ -171,7 +180,7 @@ class MoviesViewModel @Inject constructor(
                             hiddenCategoryIds = hiddenCategoryIds,
                             categorySortMode = sortMode
                         )
-                    }.combine(_searchQuery) { dependencies, query ->
+                    }.combine(searchQueryForBrowse) { dependencies, query ->
                         MovieCatalogParams(
                             providerId = provider.id,
                             allFavorites = dependencies.allFavorites,
@@ -181,7 +190,7 @@ class MoviesViewModel @Inject constructor(
                             libraryCount = dependencies.libraryCount,
                             hiddenCategoryIds = dependencies.hiddenCategoryIds,
                             categorySortMode = dependencies.categorySortMode,
-                            query = query.trim()
+                            query = query
                         )
                     }
                     .distinctUntilChangedBy { params ->
@@ -321,14 +330,14 @@ class MoviesViewModel @Inject constructor(
                         combine(
                             _uiState.map { it.selectedCategory }.distinctUntilChanged(),
                             _selectedCategoryLoadLimit,
-                            _searchQuery,
+                            searchQueryForBrowse,
                             _selectedLibraryFilterType,
                             _selectedLibrarySortBy
                         ) { selectedCategory, loadLimit, query, filterType, sortBy ->
                             SelectedMovieBrowseSelection(
                                 selectedCategory = selectedCategory,
                                 loadLimit = loadLimit,
-                                query = query.trim(),
+                                query = query,
                                 filterType = filterType,
                                 sortBy = sortBy
                             )
@@ -376,9 +385,14 @@ class MoviesViewModel @Inject constructor(
                             limit = 20,
                             scope = ContinueWatchingScope.MOVIES
                         )
-                            .collect { history ->
+                            .collect { result ->
                                 _uiState.update {
-                                    it.copy(continueWatching = history)
+                                    it.copy(
+                                        continueWatching = when (result) {
+                                            is ContinueWatchingResult.Items -> result.items
+                                            ContinueWatchingResult.Degraded -> emptyList()
+                                        }
+                                    )
                                 }
                             }
                     }
@@ -991,9 +1005,7 @@ class MoviesViewModel @Inject constructor(
         if (request.selectedCategory.isNullOrBlank()) {
             return SelectedMovieCategorySnapshot()
         }
-        if (request.query.isNotBlank() && request.query.length < MIN_SEARCH_QUERY_LENGTH) {
-            return SelectedMovieCategorySnapshot()
-        }
+        val effectiveQuery = request.query.takeIf { it.trim().length >= MIN_SEARCH_QUERY_LENGTH }.orEmpty()
 
         val globalFavoriteIds = request.allFavorites
             .asSequence()
@@ -1009,7 +1021,7 @@ class MoviesViewModel @Inject constructor(
                             providerId = request.providerId,
                             sortBy = request.sortBy,
                             filterBy = LibraryFilterBy(type = request.filterType),
-                            searchQuery = request.query,
+                            searchQuery = effectiveQuery,
                             limit = request.loadLimit,
                             offset = 0
                         )
@@ -1028,7 +1040,7 @@ class MoviesViewModel @Inject constructor(
                     .sortedBy { it.position }
                     .map { it.contentId }
                     .toList()
-                val fetchIds = if (request.query.isBlank() && request.filterType == LibraryFilterType.ALL && request.sortBy == LibrarySortBy.LIBRARY) {
+                val fetchIds = if (effectiveQuery.isBlank() && request.filterType == LibraryFilterType.ALL && request.sortBy == LibrarySortBy.LIBRARY) {
                     ids.take(request.loadLimit + FAVORITE_ID_FETCH_BUFFER)
                 } else {
                     ids
@@ -1044,11 +1056,11 @@ class MoviesViewModel @Inject constructor(
                     items,
                     request.filterType,
                     request.sortBy,
-                    request.query
+                    effectiveQuery
                 )
                 Triple(
                     filteredItems.take(request.loadLimit),
-                    if (fetchIds === ids) filteredItems.size else ids.size,
+                    if (fetchIds.size == ids.size) filteredItems.size else ids.size,
                     false
                 )
             }
@@ -1061,7 +1073,7 @@ class MoviesViewModel @Inject constructor(
                         .sortedBy { it.position }
                         .map { it.contentId }
                         .toList()
-                    val fetchIds = if (request.query.isBlank() && request.filterType == LibraryFilterType.ALL && request.sortBy == LibrarySortBy.LIBRARY) {
+                    val fetchIds = if (effectiveQuery.isBlank() && request.filterType == LibraryFilterType.ALL && request.sortBy == LibrarySortBy.LIBRARY) {
                         ids.take(request.loadLimit + FAVORITE_ID_FETCH_BUFFER)
                     } else {
                         ids
@@ -1077,11 +1089,11 @@ class MoviesViewModel @Inject constructor(
                         items,
                         request.filterType,
                         request.sortBy,
-                        request.query
+                        effectiveQuery
                     )
                     Triple(
                         filteredItems.take(request.loadLimit),
-                        if (fetchIds === ids) filteredItems.size else ids.size,
+                        if (fetchIds.size == ids.size) filteredItems.size else ids.size,
                         false
                     )
                 } else {
@@ -1094,7 +1106,7 @@ class MoviesViewModel @Inject constructor(
                                     categoryId = providerCategory.id,
                                     sortBy = request.sortBy,
                                     filterBy = LibraryFilterBy(type = request.filterType),
-                                    searchQuery = request.query,
+                                    searchQuery = effectiveQuery,
                                     limit = request.loadLimit,
                                     offset = 0
                                 )
@@ -1160,7 +1172,7 @@ class MoviesViewModel @Inject constructor(
                 )
             }
             LibraryFilterType.UNWATCHED -> searched.filter { it.watchProgress <= 0L }
-            LibraryFilterType.RECENTLY_UPDATED -> searched.sortedByDescending(::movieReleaseScore)
+            LibraryFilterType.RECENTLY_UPDATED -> searched.filter { movieReleaseScore(it) > 0L }
             LibraryFilterType.TOP_RATED -> searched.filter { it.rating > 0f }
         }
         return when (sortBy) {
@@ -1274,7 +1286,7 @@ data class MoviesUiState(
     val selectedLibraryFilterType: LibraryFilterType = LibraryFilterType.ALL,
     val selectedLibrarySortBy: LibrarySortBy = LibrarySortBy.LIBRARY,
     val vodViewMode: VodViewMode = VodViewMode.MODERN,
-    val vodInfiniteScroll: Boolean = false,
+    val vodInfiniteScroll: Boolean = true,
     val continueWatching: List<PlaybackHistory> = emptyList(),
     val hasProviders: Boolean = false,
     val hasActiveProvider: Boolean = false,

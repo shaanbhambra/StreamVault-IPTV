@@ -1,6 +1,5 @@
 package com.streamvault.data.sync
 
-import android.app.ActivityManager
 import android.content.Context
 import android.database.sqlite.SQLiteException
 import android.util.Log
@@ -41,7 +40,7 @@ class BackgroundEpgSyncWorker(
         // Stalker EPG path is heap-frugal but the surrounding sync work (channel inserts,
         // EPG resolution) can still allocate; retrying later avoids piling onto a stressed
         // system. WorkManager will re-enqueue with backoff.
-        if (isDeviceLowOnMemory()) {
+        if (applicationContext.isCurrentlyLowOnMemoryForSync()) {
             Log.w(TAG, "Deferring background EPG sync for provider $providerId: device low on memory")
             return Result.retry()
         }
@@ -54,7 +53,20 @@ class BackgroundEpgSyncWorker(
                 BackgroundEpgSyncWorkerEntryPoint::class.java
             )
             when (val result = entryPoint.syncManager().syncEpg(providerId, force = force)) {
-                is com.streamvault.domain.model.Result.Success -> Result.success()
+                is com.streamvault.domain.model.Result.Success -> {
+                    // A successful EPG sync may still have transient partial failures
+                    // (e.g. network hiccup on one provider section). Check the published
+                    // sync state and retry if it signals a retryable EPG failure so
+                    // WorkManager backoff can heal it without manual intervention.
+                    val syncState = entryPoint.syncManager().currentSyncState(providerId)
+                    if (syncState is com.streamvault.domain.model.SyncState.Partial &&
+                            syncState.hasRetryableEpgFailure) {
+                        Log.i(TAG, "Scheduling retry for provider $providerId: EPG completed with retryable failure")
+                        Result.retry()
+                    } else {
+                        Result.success()
+                    }
+                }
                 is com.streamvault.domain.model.Result.Error -> {
                     if (result.message.contains("not found", ignoreCase = true)) {
                         Result.success()
@@ -70,16 +82,6 @@ class BackgroundEpgSyncWorker(
             Log.e(TAG, "Background EPG work failed for provider $providerId", e)
             if (shouldRetry(e)) Result.retry() else Result.failure()
         }
-    }
-
-    private fun isDeviceLowOnMemory(): Boolean {
-        val activityManager = applicationContext.getSystemService(Context.ACTIVITY_SERVICE)
-            as? ActivityManager ?: return false
-        val info = ActivityManager.MemoryInfo()
-        return runCatching {
-            activityManager.getMemoryInfo(info)
-            info.lowMemory
-        }.getOrDefault(false)
     }
 
     private fun shouldRetry(error: Throwable?): Boolean {
@@ -134,7 +136,9 @@ class BackgroundEpgSyncWorker(
 
             WorkManager.getInstance(context).enqueueUniqueWork(
                 uniqueWorkName(providerId),
-                ExistingWorkPolicy.KEEP,
+                // Force-refresh requests must displace any queued stale work so the new
+                // parameters (force=true) actually run; KEEP would silently drop them.
+                if (force) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 request
             )
         }

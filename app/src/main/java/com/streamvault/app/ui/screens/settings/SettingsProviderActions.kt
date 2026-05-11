@@ -1,5 +1,7 @@
 package com.streamvault.app.ui.screens.settings
 
+import com.streamvault.app.tv.LauncherRecommendationsManager
+import com.streamvault.app.tv.WatchNextManager
 import com.streamvault.app.tvinput.TvInputChannelSyncManager
 import com.streamvault.domain.model.ActiveLiveSource
 import com.streamvault.domain.model.ProviderEpgSyncMode
@@ -27,6 +29,8 @@ internal class SettingsProviderActions(
     private val syncProvider: SyncProvider,
     private val syncManager: SyncManager,
     private val syncMetadataRepository: SyncMetadataRepository,
+    private val watchNextManager: WatchNextManager,
+    private val launcherRecommendationsManager: LauncherRecommendationsManager,
     private val tvInputChannelSyncManager: TvInputChannelSyncManager,
     private val uiState: MutableStateFlow<SettingsUiState>
 ) {
@@ -36,43 +40,77 @@ internal class SettingsProviderActions(
 
     fun setActiveProvider(scope: CoroutineScope, providerId: Long) {
         scope.launch {
+            // Validate the provider exists before writing any preferences.
+            val provider = providerRepository.getProvider(providerId)
+            if (provider == null) {
+                uiState.update { it.copy(userMessage = "Could not activate provider: provider not found") }
+                return@launch
+            }
+            // Write to the repository first; only persist UI-layer preferences on success.
+            when (val result = providerRepository.setActiveProvider(providerId)) {
+                is Result.Error -> {
+                    uiState.update { it.copy(userMessage = "Could not activate provider: ${result.message}") }
+                    return@launch
+                }
+                else -> Unit
+            }
+            // Repository write succeeded – now persist the UI-layer preferences and refresh.
             preferencesRepository.setLastActiveProviderId(providerId)
             combinedM3uRepository.setActiveLiveSource(ActiveLiveSource.ProviderSource(providerId))
-            providerRepository.setActiveProvider(providerId)
-            val provider = providerRepository.getProvider(providerId)
-            val shouldAutoSync = provider?.let { currentProvider ->
-                val lastSyncedAt = currentProvider.lastSyncedAt
-                lastSyncedAt <= 0L || System.currentTimeMillis() - lastSyncedAt >= AUTO_SWITCH_SYNC_STALE_AFTER_MS
-            } ?: false
+            watchNextManager.refreshWatchNext()
+            launcherRecommendationsManager.refreshRecommendations(force = true)
+            tvInputChannelSyncManager.refreshTvInputCatalog()
+            val lastSyncedAt = provider.lastSyncedAt
+            val shouldAutoSync = lastSyncedAt <= 0L ||
+                System.currentTimeMillis() - lastSyncedAt >= AUTO_SWITCH_SYNC_STALE_AFTER_MS
             if (shouldAutoSync) {
                 refreshProvider(
                     scope = scope,
                     providerId = providerId,
-                    syncMode = SettingsProviderSyncMode.QUICK,
-                    progressPrefix = "Refreshing ${provider?.name ?: "provider"}..."
+                    syncMode = SettingsProviderSyncMode.SYNC_NOW,
+                    progressPrefix = "Refreshing ${provider.name}..."
                 )
+            } else {
+                uiState.update { it.copy(userMessage = "Connected to ${provider.name}") }
             }
         }
     }
 
     fun setActiveCombinedProfile(scope: CoroutineScope, profileId: Long) {
         scope.launch {
-            when (combinedM3uRepository.setActiveLiveSource(ActiveLiveSource.CombinedM3uSource(profileId))) {
-                is Result.Success -> uiState.update { it.copy(userMessage = "Combined M3U source activated") }
-                is Result.Error -> uiState.update { it.copy(userMessage = "Could not activate combined source") }
-                Result.Loading -> Unit
+            // Validate the profile exists and has at least one enabled member before activating.
+            val profile = combinedM3uRepository.getProfile(profileId)
+            when {
+                profile == null ->
+                    uiState.update { it.copy(userMessage = "Could not activate combined source: profile not found") }
+                profile.members.isEmpty() ->
+                    uiState.update { it.copy(userMessage = "Add at least one playlist to this combined source before activating it") }
+                profile.members.none { it.enabled } ->
+                    uiState.update { it.copy(userMessage = "Enable at least one playlist in this combined source before activating it") }
+                else -> when (combinedM3uRepository.setActiveLiveSource(ActiveLiveSource.CombinedM3uSource(profileId))) {
+                    is Result.Success -> {
+                        launcherRecommendationsManager.refreshRecommendations(force = true)
+                        uiState.update { it.copy(userMessage = "Combined M3U source activated") }
+                    }
+                    is Result.Error -> uiState.update { it.copy(userMessage = "Could not activate combined source") }
+                    Result.Loading -> Unit
+                }
             }
         }
     }
 
-    fun createCombinedProfile(scope: CoroutineScope, name: String, providerIds: List<Long>) {
+    fun createCombinedProfile(scope: CoroutineScope, name: String, providerIds: List<Long>, onSuccess: () -> Unit = {}, onError: () -> Unit = {}) {
         scope.launch {
             when (val result = combinedM3uRepository.createProfile(name, providerIds)) {
                 is Result.Success -> {
                     combinedM3uRepository.setActiveLiveSource(ActiveLiveSource.CombinedM3uSource(result.data.id))
                     uiState.update { it.copy(userMessage = "Combined M3U source created") }
+                    onSuccess()
                 }
-                is Result.Error -> uiState.update { it.copy(userMessage = result.message) }
+                is Result.Error -> {
+                    uiState.update { it.copy(userMessage = result.message) }
+                    onError()
+                }
                 Result.Loading -> Unit
             }
         }
@@ -88,21 +126,33 @@ internal class SettingsProviderActions(
         }
     }
 
-    fun addProviderToCombinedProfile(scope: CoroutineScope, profileId: Long, providerId: Long) {
+    fun addProviderToCombinedProfile(scope: CoroutineScope, profileId: Long, providerId: Long, onSuccess: () -> Unit = {}, onError: () -> Unit = {}) {
         scope.launch {
             when (val result = combinedM3uRepository.addProvider(profileId, providerId)) {
-                is Result.Success -> uiState.update { it.copy(userMessage = "Playlist added to combined source") }
-                is Result.Error -> uiState.update { it.copy(userMessage = result.message) }
+                is Result.Success -> {
+                    uiState.update { it.copy(userMessage = "Playlist added to combined source") }
+                    onSuccess()
+                }
+                is Result.Error -> {
+                    uiState.update { it.copy(userMessage = result.message) }
+                    onError()
+                }
                 Result.Loading -> Unit
             }
         }
     }
 
-    fun renameCombinedProfile(scope: CoroutineScope, profileId: Long, name: String) {
+    fun renameCombinedProfile(scope: CoroutineScope, profileId: Long, name: String, onSuccess: () -> Unit = {}, onError: () -> Unit = {}) {
         scope.launch {
             when (val result = combinedM3uRepository.updateProfileName(profileId, name)) {
-                is Result.Success -> uiState.update { it.copy(userMessage = "Combined M3U source renamed") }
-                is Result.Error -> uiState.update { it.copy(userMessage = result.message) }
+                is Result.Success -> {
+                    uiState.update { it.copy(userMessage = "Combined M3U source renamed") }
+                    onSuccess()
+                }
+                is Result.Error -> {
+                    uiState.update { it.copy(userMessage = result.message) }
+                    onError()
+                }
                 Result.Loading -> Unit
             }
         }
@@ -110,6 +160,17 @@ internal class SettingsProviderActions(
 
     fun removeProviderFromCombinedProfile(scope: CoroutineScope, profileId: Long, providerId: Long) {
         scope.launch {
+            val profile = uiState.value.combinedProfiles.firstOrNull { it.id == profileId } ?: return@launch
+            val activeSource = uiState.value.activeLiveSource
+            if (activeSource is ActiveLiveSource.CombinedM3uSource && activeSource.profileId == profileId) {
+                val memberToRemove = profile.members.firstOrNull { it.providerId == providerId }
+                val removingEnabledMember = memberToRemove?.enabled == true
+                val remainingEnabled = profile.members.count { it.providerId != providerId && it.enabled }
+                if (removingEnabledMember && remainingEnabled == 0) {
+                    uiState.update { it.copy(userMessage = "Cannot remove the last active playlist from the current live source") }
+                    return@launch
+                }
+            }
             when (val result = combinedM3uRepository.removeProvider(profileId, providerId)) {
                 is Result.Success -> uiState.update { it.copy(userMessage = "Playlist removed from combined source") }
                 is Result.Error -> uiState.update { it.copy(userMessage = result.message) }
@@ -137,6 +198,20 @@ internal class SettingsProviderActions(
 
     fun setCombinedProviderEnabled(scope: CoroutineScope, profileId: Long, providerId: Long, enabled: Boolean) {
         scope.launch {
+            if (!enabled) {
+                val profile = uiState.value.combinedProfiles.firstOrNull { it.id == profileId }
+                val activeSource = uiState.value.activeLiveSource
+                if (profile != null &&
+                    activeSource is ActiveLiveSource.CombinedM3uSource &&
+                    activeSource.profileId == profileId
+                ) {
+                    val remainingEnabled = profile.members.count { it.providerId != providerId && it.enabled }
+                    if (remainingEnabled == 0) {
+                        uiState.update { it.copy(userMessage = "Cannot disable the last active playlist in the current live source") }
+                        return@launch
+                    }
+                }
+            }
             when (val result = combinedM3uRepository.setMemberEnabled(profileId, providerId, enabled)) {
                 is Result.Success -> uiState.update {
                     it.copy(userMessage = if (enabled) "Playlist enabled in combined source" else "Playlist disabled in combined source")
@@ -169,7 +244,7 @@ internal class SettingsProviderActions(
     fun refreshProvider(
         scope: CoroutineScope,
         providerId: Long,
-        syncMode: SettingsProviderSyncMode = SettingsProviderSyncMode.QUICK,
+        syncMode: SettingsProviderSyncMode = SettingsProviderSyncMode.SYNC_NOW,
         progressPrefix: String? = null
     ) {
         scope.launch {
@@ -183,8 +258,8 @@ internal class SettingsProviderActions(
             }
             try {
                 when (syncMode) {
-                    SettingsProviderSyncMode.QUICK -> runQuickSync(providerId, providerName)
-                    SettingsProviderSyncMode.FULL -> runFullSync(providerId, providerName)
+                    SettingsProviderSyncMode.SYNC_NOW -> runSyncNow(providerId, providerName)
+                    SettingsProviderSyncMode.REBUILD_INDEX -> runRebuildIndex(providerId, providerName)
                 }
             } catch (e: Exception) {
                 uiState.update {
@@ -199,7 +274,7 @@ internal class SettingsProviderActions(
         }
     }
 
-    private suspend fun runQuickSync(providerId: Long, providerName: String?) {
+    private suspend fun runSyncNow(providerId: Long, providerName: String?) {
         val provider = providerRepository.getProvider(providerId)
         val pendingXtreamTextRefreshGeneration = provider
             ?.takeIf { it.type == ProviderType.XTREAM_CODES }
@@ -213,13 +288,13 @@ internal class SettingsProviderActions(
             SyncProviderCommand(
                 providerId = providerId,
                 force = pendingXtreamTextRefreshGeneration != null,
-                movieFastSyncOverride = true,
+                movieFastSyncOverride = null,
                 epgSyncModeOverride = ProviderEpgSyncMode.BACKGROUND
             ),
             onProgress = { message ->
                 uiState.update { state ->
                     state.copy(
-                        syncProgress = mapQuickSyncProgress(message),
+                        syncProgress = mapSyncNowProgress(message),
                         syncingProviderName = providerName
                     )
                 }
@@ -276,11 +351,11 @@ internal class SettingsProviderActions(
                 syncProgress = null,
                 syncingProviderName = null,
                 userMessage = when {
-                    result is SyncProviderResult.Error -> "Quick sync failed: ${result.message}"
-                    (result as? SyncProviderResult.Success)?.isPartial == true -> "Quick sync completed with warnings: $warningsMessage"
-                    pendingXtreamTextRefreshGeneration != null -> "Quick sync completed and reapplied Xtream text decoding"
+                    result is SyncProviderResult.Error -> "Sync failed: ${result.message}"
+                    (result as? SyncProviderResult.Success)?.isPartial == true -> "Sync completed with warnings: $warningsMessage"
+                    pendingXtreamTextRefreshGeneration != null -> "Sync completed and reapplied Xtream text decoding"
                     !catalogRefreshed -> "Library already up to date"
-                    else -> "Quick sync completed"
+                    else -> "Sync completed"
                 },
                 syncWarningsByProvider = when {
                     result is SyncProviderResult.Error -> state.syncWarningsByProvider - providerId
@@ -291,7 +366,7 @@ internal class SettingsProviderActions(
         }
     }
 
-    private suspend fun runFullSync(providerId: Long, providerName: String?) {
+    private suspend fun runRebuildIndex(providerId: Long, providerName: String?) {
         val provider = providerRepository.getProvider(providerId)
         val pendingXtreamTextRefreshGeneration = provider
             ?.takeIf { it.type == ProviderType.XTREAM_CODES }
@@ -300,60 +375,78 @@ internal class SettingsProviderActions(
                 val appliedGeneration = preferencesRepository.getXtreamTextImportAppliedGeneration(currentProvider.id)
                 currentGeneration.takeIf { it > appliedGeneration }
             }
-        val result = syncProvider(
-            SyncProviderCommand(
-                providerId = providerId,
-                force = true,
-                movieFastSyncOverride = null,
-                epgSyncModeOverride = null
-            ),
-            onProgress = { message ->
+        val result = if (provider?.type == ProviderType.XTREAM_CODES) {
+            syncManager.rebuildXtreamIndex(providerId) { message ->
                 uiState.update { state ->
                     state.copy(syncProgress = message, syncingProviderName = providerName)
                 }
             }
-        )
-        if (result !is SyncProviderResult.Error) {
+        } else {
+            val syncResult = syncProvider(
+                SyncProviderCommand(
+                    providerId = providerId,
+                    force = true,
+                    movieFastSyncOverride = null,
+                    epgSyncModeOverride = null
+                ),
+                onProgress = { message ->
+                    uiState.update { state ->
+                        state.copy(syncProgress = message, syncingProviderName = providerName)
+                    }
+                }
+            )
+            when (syncResult) {
+                is SyncProviderResult.Success -> Result.success(Unit)
+                is SyncProviderResult.Error -> Result.error(syncResult.message, syncResult.exception)
+            }
+        }
+        if (result !is Result.Error) {
             pendingXtreamTextRefreshGeneration?.let { generation ->
                 preferencesRepository.markXtreamTextImportApplied(providerId, generation)
             }
-            tvInputChannelSyncManager.refreshTvInputCatalog()
         }
         uiState.update { state ->
-            val partialWarnings = (result as? SyncProviderResult.Success)?.warnings.orEmpty()
-            val warningsMessage = partialWarnings.take(3).joinToString(separator = ", ").ifBlank { "Some sections are incomplete." }
             state.copy(
                 isSyncing = false,
                 syncProgress = null,
                 syncingProviderName = null,
                 userMessage = when {
-                    result is SyncProviderResult.Error -> "Refresh failed: ${result.message}"
-                    (result as? SyncProviderResult.Success)?.isPartial == true -> "Refresh completed with warnings: $warningsMessage"
-                    else -> "Provider refreshed successfully"
+                    result is Result.Error -> "Rebuild index failed: ${result.message}"
+                    else -> "Index rebuild queued"
                 },
                 syncWarningsByProvider = when {
-                    result is SyncProviderResult.Error -> state.syncWarningsByProvider - providerId
-                    (result as? SyncProviderResult.Success)?.isPartial == true -> state.syncWarningsByProvider + (providerId to partialWarnings)
+                    result is Result.Error -> state.syncWarningsByProvider - providerId
                     else -> state.syncWarningsByProvider - providerId
                 }
             )
         }
     }
 
-    private fun mapQuickSyncProgress(message: String): String = when (message) {
+    private fun mapSyncNowProgress(message: String): String = when (message) {
         "Downloading Movies..." -> "Checking Movies..."
         "Downloading Series..." -> "Checking Series..."
         else -> message
     }
 
-    fun deleteProvider(scope: CoroutineScope, providerId: Long) {
+    fun deleteProvider(scope: CoroutineScope, providerId: Long, onSuccess: () -> Unit = {}) {
         scope.launch {
-            providerRepository.deleteProvider(providerId)
+            uiState.update { it.copy(isDeletingProvider = true) }
+            when (val result = providerRepository.deleteProvider(providerId)) {
+                is Result.Success -> {
+                    watchNextManager.refreshWatchNext()
+                    launcherRecommendationsManager.refreshRecommendations(force = true)
+                    tvInputChannelSyncManager.refreshTvInputCatalog()
+                    uiState.update { it.copy(isDeletingProvider = false, userMessage = "Provider deleted") }
+                    onSuccess()
+                }
+                is Result.Error -> uiState.update { it.copy(isDeletingProvider = false, userMessage = "Could not delete provider: ${result.message}") }
+                Result.Loading -> Unit
+            }
         }
     }
 }
 
 enum class SettingsProviderSyncMode {
-    QUICK,
-    FULL
+    SYNC_NOW,
+    REBUILD_INDEX
 }

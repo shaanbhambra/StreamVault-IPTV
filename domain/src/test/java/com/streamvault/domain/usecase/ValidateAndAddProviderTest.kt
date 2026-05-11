@@ -8,6 +8,7 @@ import com.streamvault.domain.manager.ValidatedStalkerProviderInput
 import com.streamvault.domain.manager.ValidatedXtreamProviderInput
 import com.streamvault.domain.model.ProviderEpgSyncMode
 import com.streamvault.domain.model.Provider
+import com.streamvault.domain.model.ProviderSavedWithSyncErrorException
 import com.streamvault.domain.model.ProviderStatus
 import com.streamvault.domain.model.ProviderType
 import com.streamvault.domain.model.Result
@@ -18,6 +19,113 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class ValidateAndAddProviderTest {
+
+    @Test
+    fun `validateXtreamInput returns null when input is valid without calling repository`() {
+        val repository = FakeProviderRepository()
+        val useCase = ValidateAndAddProvider(
+            providerSetupInputValidator = FakeProviderSetupInputValidator(),
+            providerRepository = repository
+        )
+
+        val error = useCase.validateXtreamInput(
+            XtreamProviderSetupCommand(serverUrl = "https://example.com", username = "alice", password = "secret", name = "Provider")
+        )
+
+        assertThat(error).isNull()
+        assertThat(repository.lastXtreamCall).isNull()
+    }
+
+    @Test
+    fun `validateXtreamInput returns ValidationError without calling repository`() {
+        val repository = FakeProviderRepository()
+        val useCase = ValidateAndAddProvider(
+            providerSetupInputValidator = FakeProviderSetupInputValidator(
+                xtreamResult = Result.error("Please enter server URL")
+            ),
+            providerRepository = repository
+        )
+
+        val error = useCase.validateXtreamInput(
+            XtreamProviderSetupCommand(serverUrl = "", username = "alice", password = "secret", name = "Provider")
+        )
+
+        assertThat(error).isInstanceOf(ValidateAndAddProviderResult.ValidationError::class.java)
+        assertThat((error as ValidateAndAddProviderResult.ValidationError).message).isEqualTo("Please enter server URL")
+        assertThat(repository.lastXtreamCall).isNull()
+    }
+
+    @Test
+    fun `validateM3uInput returns null when input is valid without calling repository`() {
+        val repository = FakeProviderRepository()
+        val useCase = ValidateAndAddProvider(
+            providerSetupInputValidator = FakeProviderSetupInputValidator(),
+            providerRepository = repository
+        )
+
+        val error = useCase.validateM3uInput(
+            M3uProviderSetupCommand(url = "https://example.com/list.m3u", name = "Playlist")
+        )
+
+        assertThat(error).isNull()
+        assertThat(repository.lastM3uCall).isNull()
+    }
+
+    @Test
+    fun `validateM3uInput returns ValidationError without calling repository`() {
+        val repository = FakeProviderRepository()
+        val useCase = ValidateAndAddProvider(
+            providerSetupInputValidator = FakeProviderSetupInputValidator(
+                m3uResult = Result.error("Please enter M3U URL")
+            ),
+            providerRepository = repository
+        )
+
+        val error = useCase.validateM3uInput(
+            M3uProviderSetupCommand(url = "", name = "Playlist")
+        )
+
+        assertThat(error).isInstanceOf(ValidateAndAddProviderResult.ValidationError::class.java)
+        assertThat(repository.lastM3uCall).isNull()
+    }
+
+    @Test
+    fun `validateStalkerInput returns null when input is valid without calling repository`() {
+        val repository = FakeProviderRepository()
+        val useCase = ValidateAndAddProvider(
+            providerSetupInputValidator = FakeProviderSetupInputValidator(),
+            providerRepository = repository
+        )
+
+        val error = useCase.validateStalkerInput(
+            StalkerProviderSetupCommand(
+                portalUrl = "https://portal.example.com",
+                macAddress = "00:1A:79:12:34:56",
+                name = "MAG"
+            )
+        )
+
+        assertThat(error).isNull()
+        assertThat(repository.lastStalkerCall).isNull()
+    }
+
+    @Test
+    fun `validateStalkerInput returns ValidationError without calling repository`() {
+        val repository = FakeProviderRepository()
+        val useCase = ValidateAndAddProvider(
+            providerSetupInputValidator = FakeProviderSetupInputValidator(
+                stalkerResult = Result.error("Please enter portal URL")
+            ),
+            providerRepository = repository
+        )
+
+        val error = useCase.validateStalkerInput(
+            StalkerProviderSetupCommand(portalUrl = "", macAddress = "00:1A:79:12:34:56", name = "MAG")
+        )
+
+        assertThat(error).isInstanceOf(ValidateAndAddProviderResult.ValidationError::class.java)
+        assertThat(repository.lastStalkerCall).isNull()
+    }
 
     @Test
     fun returns_validation_error_without_calling_repository_for_xtream() = runTest {
@@ -52,7 +160,10 @@ class ValidateAndAddProviderTest {
                     ValidatedXtreamProviderInput(
                         serverUrl = "https://example.com",
                         username = "alice",
-                        name = "Premium"
+                        password = "normalized-secret",
+                        name = "Premium",
+                        httpUserAgent = "StreamVaultTest/1.0",
+                        httpHeaders = "Referer: https://example.com"
                     )
                 )
             ),
@@ -63,8 +174,10 @@ class ValidateAndAddProviderTest {
             XtreamProviderSetupCommand(
                 serverUrl = " https://example.com ",
                 username = " alice ",
-                password = "secret",
+                password = "secret\u0000",
                 name = " Premium ",
+                httpUserAgent = " StreamVaultTest/1.0 ",
+                httpHeaders = " Referer: https://example.com ",
                 xtreamFastSyncEnabled = true,
                 epgSyncMode = ProviderEpgSyncMode.BACKGROUND,
                 existingProviderId = 7L
@@ -76,13 +189,80 @@ class ValidateAndAddProviderTest {
             XtreamCall(
                 serverUrl = "https://example.com",
                 username = "alice",
-                password = "secret",
+                password = "normalized-secret",
                 name = "Premium",
+                httpUserAgent = "StreamVaultTest/1.0",
+                httpHeaders = "Referer: https://example.com",
                 xtreamFastSyncEnabled = true,
                 epgSyncMode = ProviderEpgSyncMode.BACKGROUND,
                 id = 7L
             )
         )
+    }
+
+    @Test
+    fun allows_blank_xtream_password_when_editing_existing_provider() = runTest {
+        val repository = FakeProviderRepository()
+        val useCase = ValidateAndAddProvider(
+            providerSetupInputValidator = FakeProviderSetupInputValidator(
+                xtreamResult = Result.success(
+                    ValidatedXtreamProviderInput(
+                        serverUrl = "https://example.com",
+                        username = "alice",
+                        password = "",
+                        name = "Premium",
+                        httpUserAgent = "",
+                        httpHeaders = ""
+                    )
+                )
+            ),
+            providerRepository = repository
+        )
+
+        val result = useCase.loginXtream(
+            XtreamProviderSetupCommand(
+                serverUrl = "https://example.com",
+                username = "alice",
+                password = "",
+                name = "Premium",
+                existingProviderId = 7L
+            )
+        )
+
+        assertThat(result).isInstanceOf(ValidateAndAddProviderResult.Success::class.java)
+        assertThat(repository.lastXtreamCall?.password).isEmpty()
+    }
+
+    @Test
+    fun maps_saved_provider_sync_failure_to_saved_with_warning() = runTest {
+        val repository = FakeProviderRepository().apply {
+            xtreamResult = Result.error(
+                "Provider login succeeded, but initial sync failed. The provider was saved and can be retried from Settings: timeout",
+                ProviderSavedWithSyncErrorException(
+                    provider = provider(id = 7L, name = "Premium", type = ProviderType.XTREAM_CODES).copy(status = ProviderStatus.ERROR),
+                    message = "Provider login succeeded, but initial sync failed. The provider was saved and can be retried from Settings: timeout"
+                )
+            )
+        }
+        val useCase = ValidateAndAddProvider(
+            providerSetupInputValidator = FakeProviderSetupInputValidator(),
+            providerRepository = repository
+        )
+
+        val result = useCase.loginXtream(
+            XtreamProviderSetupCommand(
+                serverUrl = "https://example.com",
+                username = "alice",
+                password = "secret",
+                name = "Premium"
+            )
+        )
+
+        assertThat(result).isInstanceOf(ValidateAndAddProviderResult.SavedWithWarning::class.java)
+        result as ValidateAndAddProviderResult.SavedWithWarning
+        assertThat(result.provider.id).isEqualTo(7L)
+        assertThat(result.provider.status).isEqualTo(ProviderStatus.ERROR)
+        assertThat(result.warning).contains("initial sync failed")
     }
 
     @Test
@@ -93,7 +273,9 @@ class ValidateAndAddProviderTest {
                 m3uResult = Result.success(
                     ValidatedM3uProviderInput(
                         url = "file://playlist.m3u",
-                        name = "Local Playlist"
+                        name = "Local Playlist",
+                        httpUserAgent = "PlaylistAgent/2.0",
+                        httpHeaders = "Referer: https://example.com"
                     )
                 )
             ),
@@ -104,6 +286,8 @@ class ValidateAndAddProviderTest {
             M3uProviderSetupCommand(
                 url = "file://playlist.m3u",
                 name = "Local Playlist",
+                httpUserAgent = "PlaylistAgent/2.0",
+                httpHeaders = "Referer: https://example.com",
                 epgSyncMode = ProviderEpgSyncMode.SKIP,
                 existingProviderId = 11L
             )
@@ -114,6 +298,8 @@ class ValidateAndAddProviderTest {
             M3uCall(
                 url = "file://playlist.m3u",
                 name = "Local Playlist",
+                httpUserAgent = "PlaylistAgent/2.0",
+                httpHeaders = "Referer: https://example.com",
                 epgSyncMode = ProviderEpgSyncMode.SKIP,
                 m3uVodClassificationEnabled = false,
                 id = 11L
@@ -128,8 +314,10 @@ class ValidateAndAddProviderTest {
             providerSetupInputValidator = FakeProviderSetupInputValidator(
                 m3uResult = Result.success(
                     ValidatedM3uProviderInput(
-                        url = "http://tvappapk@extapk2302.shop:8080/get.php?username=Hakan1605&password=wg9daUwzfV&type=m3u_plus",
-                        name = "Imported Playlist"
+                        url = "http://extapk2302.shop:8080/get.php?username=Hakan1605&password=wg9daUwzfV&type=m3u_plus",
+                        name = "Imported Playlist",
+                        httpUserAgent = "PlaylistAgent/2.0",
+                        httpHeaders = "Referer: https://example.com"
                     )
                 )
             ),
@@ -138,7 +326,7 @@ class ValidateAndAddProviderTest {
 
         val result = useCase.addM3u(
             M3uProviderSetupCommand(
-                url = "http://tvappapk@extapk2302.shop:8080/get.php?username=Hakan1605&password=wg9daUwzfV&type=m3u_plus",
+                url = "http://extapk2302.shop:8080/get.php?username=Hakan1605&password=wg9daUwzfV&type=m3u_plus",
                 name = "Imported Playlist",
                 epgSyncMode = ProviderEpgSyncMode.BACKGROUND,
                 existingProviderId = 19L
@@ -149,15 +337,47 @@ class ValidateAndAddProviderTest {
         assertThat(repository.lastM3uCall).isNull()
         assertThat(repository.lastXtreamCall).isEqualTo(
             XtreamCall(
-                serverUrl = "http://tvappapk@extapk2302.shop:8080",
+                serverUrl = "http://extapk2302.shop:8080",
                 username = "Hakan1605",
                 password = "wg9daUwzfV",
                 name = "Imported Playlist",
-                xtreamFastSyncEnabled = true,
+                httpUserAgent = "PlaylistAgent/2.0",
+                httpHeaders = "Referer: https://example.com",
+                xtreamFastSyncEnabled = false,
                 epgSyncMode = ProviderEpgSyncMode.BACKGROUND,
                 id = 19L
             )
         )
+    }
+
+    @Test
+    fun rejects_xtream_playlist_url_with_embedded_credentials_in_authority() = runTest {
+        val repository = FakeProviderRepository()
+        val useCase = ValidateAndAddProvider(
+            providerSetupInputValidator = FakeProviderSetupInputValidator(
+                m3uResult = Result.success(
+                    ValidatedM3uProviderInput(
+                        url = "http://tvappapk@extapk2302.shop:8080/get.php?username=Hakan1605&password=wg9daUwzfV&type=m3u_plus",
+                        name = "Imported Playlist",
+                        httpUserAgent = "",
+                        httpHeaders = ""
+                    )
+                )
+            ),
+            providerRepository = repository
+        )
+
+        val result = useCase.addM3u(
+            M3uProviderSetupCommand(
+                url = "http://tvappapk@extapk2302.shop:8080/get.php?username=Hakan1605&password=wg9daUwzfV&type=m3u_plus",
+                name = "Imported Playlist"
+            )
+        )
+
+        assertThat(result).isInstanceOf(ValidateAndAddProviderResult.ValidationError::class.java)
+        assertThat((result as ValidateAndAddProviderResult.ValidationError).message)
+            .isEqualTo("Playlist sources must not include embedded credentials in the URL authority.")
+        assertThat(repository.lastXtreamCall).isNull()
     }
 
     @Test
@@ -170,7 +390,9 @@ class ValidateAndAddProviderTest {
                 m3uResult = Result.success(
                     ValidatedM3uProviderInput(
                         url = "https://example.com/get.php?username=user&password=$encodedPassword&type=m3u_plus",
-                        name = "Imported Playlist"
+                        name = "Imported Playlist",
+                        httpUserAgent = "",
+                        httpHeaders = ""
                     )
                 )
             ),
@@ -244,13 +466,18 @@ private class FakeProviderSetupInputValidator(
         ValidatedXtreamProviderInput(
             serverUrl = "https://example.com",
             username = "user",
-            name = "Provider"
+            password = "secret",
+            name = "Provider",
+            httpUserAgent = "",
+            httpHeaders = ""
         )
     ),
     private val m3uResult: Result<ValidatedM3uProviderInput> = Result.success(
         ValidatedM3uProviderInput(
             url = "https://example.com/playlist.m3u",
-            name = "Playlist"
+            name = "Playlist",
+            httpUserAgent = "",
+            httpHeaders = ""
         )
     ),
     private val stalkerResult: Result<ValidatedStalkerProviderInput> = Result.success(
@@ -267,12 +494,18 @@ private class FakeProviderSetupInputValidator(
     override fun validateXtream(
         serverUrl: String,
         username: String,
-        name: String
+        password: String,
+        allowBlankPassword: Boolean,
+        name: String,
+        httpUserAgent: String,
+        httpHeaders: String
     ): Result<ValidatedXtreamProviderInput> = xtreamResult
 
     override fun validateM3u(
         url: String,
-        name: String
+        name: String,
+        httpUserAgent: String,
+        httpHeaders: String
     ): Result<ValidatedM3uProviderInput> = m3uResult
 
     override fun validateStalker(
@@ -290,6 +523,8 @@ private data class XtreamCall(
     val username: String,
     val password: String,
     val name: String,
+    val httpUserAgent: String,
+    val httpHeaders: String,
     val xtreamFastSyncEnabled: Boolean,
     val epgSyncMode: ProviderEpgSyncMode,
     val id: Long?
@@ -298,6 +533,8 @@ private data class XtreamCall(
 private data class M3uCall(
     val url: String,
     val name: String,
+    val httpUserAgent: String,
+    val httpHeaders: String,
     val epgSyncMode: ProviderEpgSyncMode,
     val m3uVodClassificationEnabled: Boolean,
     val id: Long?
@@ -318,6 +555,9 @@ private class FakeProviderRepository : ProviderRepository {
     var lastXtreamCall: XtreamCall? = null
     var lastM3uCall: M3uCall? = null
     var lastStalkerCall: StalkerCall? = null
+    var xtreamResult: Result<Provider>? = null
+    var m3uResult: Result<Provider>? = null
+    var stalkerResult: Result<Provider>? = null
 
     override fun getProviders(): Flow<List<Provider>> = flowOf(emptyList())
 
@@ -338,25 +578,29 @@ private class FakeProviderRepository : ProviderRepository {
         username: String,
         password: String,
         name: String,
+        httpUserAgent: String,
+        httpHeaders: String,
         xtreamFastSyncEnabled: Boolean,
         epgSyncMode: ProviderEpgSyncMode,
         onProgress: ((String) -> Unit)?,
         id: Long?
     ): Result<Provider> {
-        lastXtreamCall = XtreamCall(serverUrl, username, password, name, xtreamFastSyncEnabled, epgSyncMode, id)
-        return Result.success(provider(id = id ?: 1L, name = name, type = ProviderType.XTREAM_CODES))
+        lastXtreamCall = XtreamCall(serverUrl, username, password, name, httpUserAgent, httpHeaders, xtreamFastSyncEnabled, epgSyncMode, id)
+        return xtreamResult ?: Result.success(provider(id = id ?: 1L, name = name, type = ProviderType.XTREAM_CODES))
     }
 
     override suspend fun validateM3u(
         url: String,
         name: String,
+        httpUserAgent: String,
+        httpHeaders: String,
         epgSyncMode: ProviderEpgSyncMode,
         m3uVodClassificationEnabled: Boolean,
         onProgress: ((String) -> Unit)?,
         id: Long?
     ): Result<Provider> {
-        lastM3uCall = M3uCall(url, name, epgSyncMode, m3uVodClassificationEnabled, id)
-        return Result.success(provider(id = id ?: 2L, name = name, type = ProviderType.M3U, m3uUrl = url))
+        lastM3uCall = M3uCall(url, name, httpUserAgent, httpHeaders, epgSyncMode, m3uVodClassificationEnabled, id)
+        return m3uResult ?: Result.success(provider(id = id ?: 2L, name = name, type = ProviderType.M3U, m3uUrl = url))
     }
 
     override suspend fun loginStalker(
@@ -380,7 +624,7 @@ private class FakeProviderRepository : ProviderRepository {
             epgSyncMode = epgSyncMode,
             id = id
         )
-        return Result.success(
+        return stalkerResult ?: Result.success(
             provider(id = id ?: 3L, name = name, type = ProviderType.STALKER_PORTAL).copy(
                 serverUrl = portalUrl,
                 stalkerMacAddress = macAddress,
@@ -408,7 +652,7 @@ private class FakeProviderRepository : ProviderRepository {
 
     override suspend fun buildCatchUpUrl(providerId: Long, streamId: Long, start: Long, end: Long): String? = null
 
-    private fun provider(
+    fun provider(
         id: Long,
         name: String,
         type: ProviderType,

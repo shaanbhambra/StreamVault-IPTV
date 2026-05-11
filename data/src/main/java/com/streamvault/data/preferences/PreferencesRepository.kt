@@ -112,12 +112,14 @@ class PreferencesRepository @Inject constructor(
         val MULTIVIEW_PRESET_2 = stringPreferencesKey("multiview_preset_2")
         val MULTIVIEW_PRESET_3 = stringPreferencesKey("multiview_preset_3")
         val MULTIVIEW_PERFORMANCE_MODE = stringPreferencesKey("multiview_performance_mode")
+        val MULTIVIEW_CENTER_TWO_SLOT_LAYOUT = booleanPreferencesKey("multiview_center_two_slot_layout")
         val IS_INCOGNITO_MODE = booleanPreferencesKey("is_incognito_mode")
         val PLAYER_MUTED = booleanPreferencesKey("player_muted")
         val PLAYER_MEDIA_SESSION_ENABLED = booleanPreferencesKey("player_media_session_enabled")
         val PLAYER_DECODER_MODE = stringPreferencesKey("player_decoder_mode")
         val PLAYER_SURFACE_MODE = stringPreferencesKey("player_surface_mode")
         val PLAYER_PLAYBACK_SPEED = stringPreferencesKey("player_playback_speed")
+        val PLAYER_AUDIO_VIDEO_SYNC_ENABLED = booleanPreferencesKey("player_av_sync_enabled")
         val PLAYER_AUDIO_VIDEO_OFFSET_MS = intPreferencesKey("player_av_offset_ms")
         val PREFERRED_AUDIO_LANGUAGE = stringPreferencesKey("preferred_audio_language")
         val PLAYER_SUBTITLE_TEXT_SCALE = stringPreferencesKey("player_subtitle_text_scale")
@@ -153,6 +155,7 @@ class PreferencesRepository @Inject constructor(
         val RECORDING_PADDING_AFTER_MINUTES = intPreferencesKey("recording_padding_after_minutes")
         val LAST_APP_UPDATE_CHECK_TIMESTAMP = longPreferencesKey("last_app_update_check_timestamp")
         val APP_UPDATE_DOWNLOAD_ID = longPreferencesKey("app_update_download_id")
+        val APP_UPDATE_DOWNLOAD_VERSION_NAME = stringPreferencesKey("app_update_download_version_name")
         val APP_UPDATE_DOWNLOADED_VERSION_NAME = stringPreferencesKey("app_update_downloaded_version_name")
         val APP_UPDATE_LATEST_VERSION_NAME = stringPreferencesKey("app_update_latest_version_name")
         val APP_UPDATE_LATEST_VERSION_CODE = intPreferencesKey("app_update_latest_version_code")
@@ -281,6 +284,10 @@ class PreferencesRepository @Inject constructor(
     val playerAudioVideoOffsetMs: Flow<Int> = context.dataStore.data.map { preferences ->
         (preferences[PreferencesKeys.PLAYER_AUDIO_VIDEO_OFFSET_MS] ?: 0)
             .coerceIn(AUDIO_VIDEO_OFFSET_MIN_MS, AUDIO_VIDEO_OFFSET_MAX_MS)
+    }
+
+    val playerAudioVideoSyncEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.PLAYER_AUDIO_VIDEO_SYNC_ENABLED] ?: false
     }
 
     val preferredAudioLanguage: Flow<String?> = context.dataStore.data.map { preferences ->
@@ -494,6 +501,10 @@ class PreferencesRepository @Inject constructor(
         preferences[PreferencesKeys.APP_UPDATE_DOWNLOAD_ID]?.takeIf { it > 0L }
     }
 
+    val appUpdateDownloadVersionName: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.APP_UPDATE_DOWNLOAD_VERSION_NAME]?.takeIf { it.isNotBlank() }
+    }
+
     val downloadedAppUpdateVersionName: Flow<String?> = context.dataStore.data.map { preferences ->
         preferences[PreferencesKeys.APP_UPDATE_DOWNLOADED_VERSION_NAME]?.takeIf { it.isNotBlank() }
     }
@@ -629,6 +640,16 @@ class PreferencesRepository @Inject constructor(
         }
     }
 
+    suspend fun setAppUpdateDownloadVersionName(versionName: String?) {
+        context.dataStore.edit { preferences ->
+            if (versionName.isNullOrBlank()) {
+                preferences.remove(PreferencesKeys.APP_UPDATE_DOWNLOAD_VERSION_NAME)
+            } else {
+                preferences[PreferencesKeys.APP_UPDATE_DOWNLOAD_VERSION_NAME] = versionName
+            }
+        }
+    }
+
     suspend fun setDownloadedAppUpdateVersionName(versionName: String?) {
         context.dataStore.edit { preferences ->
             if (versionName.isNullOrBlank()) {
@@ -758,6 +779,12 @@ class PreferencesRepository @Inject constructor(
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.PLAYER_AUDIO_VIDEO_OFFSET_MS] =
                 offsetMs.coerceIn(AUDIO_VIDEO_OFFSET_MIN_MS, AUDIO_VIDEO_OFFSET_MAX_MS)
+        }
+    }
+
+    suspend fun setPlayerAudioVideoSyncEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.PLAYER_AUDIO_VIDEO_SYNC_ENABLED] = enabled
         }
     }
 
@@ -1262,7 +1289,7 @@ class PreferencesRepository @Inject constructor(
     }
 
     val vodInfiniteScroll: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[PreferencesKeys.VOD_INFINITE_SCROLL] ?: false
+        preferences[PreferencesKeys.VOD_INFINITE_SCROLL] ?: true
     }
 
     suspend fun setVodInfiniteScroll(enabled: Boolean) {
@@ -1490,6 +1517,16 @@ class PreferencesRepository @Inject constructor(
     suspend fun setMultiViewPerformanceMode(mode: String) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.MULTIVIEW_PERFORMANCE_MODE] = mode
+        }
+    }
+
+    val multiViewCenterTwoSlotLayout: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[PreferencesKeys.MULTIVIEW_CENTER_TWO_SLOT_LAYOUT] ?: false
+    }
+
+    suspend fun setMultiViewCenterTwoSlotLayout(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.MULTIVIEW_CENTER_TWO_SLOT_LAYOUT] = enabled
         }
     }
 

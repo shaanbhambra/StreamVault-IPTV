@@ -54,20 +54,6 @@ internal class SyncManagerCatalogStrategySupport(
         return downgradeRecommended || stressFailures > 0 || failures <= minOf(2, totalCategories)
     }
 
-    fun <T> shouldRetryFailedPages(
-        totalPages: Int,
-        failures: Int,
-        outcomes: List<PageFetchOutcome<T>>
-    ): Boolean {
-        if (totalPages <= 1 || failures == 0) {
-            return false
-        }
-        val stressFailures = outcomes.count { outcome ->
-            outcome is PageFetchOutcome.Failure && shouldRememberSequentialPreference(outcome.error)
-        }
-        return stressFailures > 0 || failures <= minOf(2, totalPages)
-    }
-
     fun updateAvoidFullUntil(
         previousAvoidFullUntil: Long,
         now: Long,
@@ -94,6 +80,7 @@ internal class SyncManagerCatalogStrategySupport(
     fun shouldAvoidFullCatalogStrategy(error: Throwable): Boolean {
         return when (error) {
             is XtreamResponseTooLargeException,
+            is LowMemoryCatalogAbortException,
             is XtreamParsingException -> true
             is java.net.SocketTimeoutException,
             is java.io.InterruptedIOException -> true

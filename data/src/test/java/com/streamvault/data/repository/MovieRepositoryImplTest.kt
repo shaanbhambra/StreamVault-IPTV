@@ -8,6 +8,7 @@ import com.streamvault.data.local.dao.MovieCategoryHydrationDao
 import com.streamvault.data.local.dao.MovieDao
 import com.streamvault.data.local.dao.PlaybackHistoryDao
 import com.streamvault.data.local.dao.ProviderDao
+import com.streamvault.data.local.dao.XtreamContentIndexDao
 import com.streamvault.data.local.DatabaseTransactionRunner
 import com.streamvault.data.local.entity.FavoriteEntity
 import com.streamvault.data.local.entity.MovieBrowseEntity
@@ -27,12 +28,19 @@ import com.streamvault.data.remote.stalker.StalkerApiService
 import com.streamvault.data.remote.xtream.XtreamApiService
 import com.streamvault.data.remote.xtream.XtreamStreamUrlResolver
 import com.streamvault.data.security.CredentialCrypto
+import com.streamvault.data.sync.SyncManager
 import com.streamvault.domain.model.ContentType
+import com.streamvault.domain.model.LibraryBrowseQuery
+import com.streamvault.domain.model.LibraryFilterBy
+import com.streamvault.domain.model.LibraryFilterType
+import com.streamvault.domain.model.LibrarySortBy
+import com.streamvault.domain.model.PlaybackHistory
 import com.streamvault.domain.model.ProviderStatus
 import com.streamvault.domain.model.ProviderType
 import com.streamvault.domain.model.Result
 import com.streamvault.domain.model.SyncMetadata
 import com.streamvault.domain.model.VodSyncMode
+import com.streamvault.domain.repository.PlaybackHistoryRepository
 import com.streamvault.domain.repository.SyncMetadataRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -46,6 +54,7 @@ import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
@@ -59,9 +68,12 @@ class MovieRepositoryImplTest {
     private val preferencesRepository: PreferencesRepository = mock()
     private val favoriteDao: FavoriteDao = mock()
     private val playbackHistoryDao: PlaybackHistoryDao = mock()
+    private val playbackHistoryRepository: PlaybackHistoryRepository = mock()
     private val xtreamStreamUrlResolver: XtreamStreamUrlResolver = mock()
     private val movieCategoryHydrationDao: MovieCategoryHydrationDao = mock()
     private val syncMetadataRepository: SyncMetadataRepository = mock()
+    private val xtreamContentIndexDao: XtreamContentIndexDao = mock()
+    private val syncManager: SyncManager = mock()
     private val credentialCrypto = object : CredentialCrypto {
         override fun encryptIfNeeded(value: String): String = value
         override fun decryptIfNeeded(value: String): String = value
@@ -169,7 +181,7 @@ class MovieRepositoryImplTest {
     }
 
     @Test
-    fun `getMoviesByCategory lazily hydrates xtream category when local cache is empty`() = runTest {
+    fun `getMoviesByCategory does not hydrate xtream category when local cache is empty`() = runTest {
         whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
         whenever(preferencesRepository.xtreamBase64TextCompatibility).thenReturn(flowOf(false))
         whenever(movieDao.getCountByCategory(7L, 42L)).thenReturn(flowOf(0))
@@ -186,30 +198,18 @@ class MovieRepositoryImplTest {
                 status = ProviderStatus.ACTIVE
             )
         )
-        whenever(xtreamApiService.getVodCategories(any())).thenReturn(
-            listOf(XtreamCategory(categoryId = "42", categoryName = "Action"))
-        )
-        whenever(xtreamApiService.getVodStreams(any())).thenReturn(
-            listOf(
-                XtreamStream(
-                    streamId = 101L,
-                    name = "Movie",
-                    categoryId = "42",
-                    streamIcon = null,
-                    containerExtension = "mp4"
-                )
-            )
-        )
-
         val repository = createRepository()
 
-        repository.getMoviesByCategory(7L, 42L).first()
+        val result = repository.getMoviesByCategory(7L, 42L).first()
 
-        verify(movieDao).replaceCategory(eq(7L), eq(42L), any())
+        assertThat(result).isEmpty()
+        verify(syncManager).prioritizeXtreamIndexCategory(7L, ContentType.MOVIE, 42L)
+        verify(movieDao, never()).replaceCategory(eq(7L), eq(42L), any())
+        verify(xtreamApiService, never()).getVodStreams(any(), any())
     }
 
     @Test
-    fun `getMoviesByCategory marks empty xtream fast sync hydration for retry`() = runTest {
+    fun `getMoviesByCategory skips legacy xtream empty retry hydration`() = runTest {
         whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
         whenever(preferencesRepository.xtreamBase64TextCompatibility).thenReturn(flowOf(false))
         whenever(movieDao.getCountByCategory(7L, 42L)).thenReturn(flowOf(0))
@@ -229,20 +229,48 @@ class MovieRepositoryImplTest {
                 status = ProviderStatus.ACTIVE
             )
         )
-        whenever(xtreamApiService.getVodCategories(any())).thenReturn(
-            listOf(XtreamCategory(categoryId = "42", categoryName = "Action"))
-        )
-        whenever(xtreamApiService.getVodStreams(any())).thenReturn(emptyList())
-
         val repository = createRepository()
 
         repository.getMoviesByCategory(7L, 42L).first()
 
+        verify(syncManager).prioritizeXtreamIndexCategory(7L, ContentType.MOVIE, 42L)
         verify(movieDao, never()).replaceCategory(eq(7L), eq(42L), any())
-        val hydrationCaptor = argumentCaptor<com.streamvault.data.local.entity.MovieCategoryHydrationEntity>()
-        verify(movieCategoryHydrationDao).upsert(hydrationCaptor.capture())
-        assertThat(hydrationCaptor.firstValue.lastStatus).isEqualTo("EMPTY_RETRY")
-        assertThat(hydrationCaptor.firstValue.itemCount).isEqualTo(0)
+        verify(movieCategoryHydrationDao, never()).upsert(any())
+        verify(xtreamApiService, never()).getVodStreams(any(), any())
+    }
+
+    @Test
+    fun `getMovieDetails uses fresh xtream hydrated cache without refetching`() = runTest {
+        val hydratedAt = System.currentTimeMillis()
+        whenever(movieDao.getById(99L)).thenReturn(
+            movieRecord(
+                id = 99L,
+                name = "Cached Movie",
+                genre = "Drama",
+                categoryId = 42L,
+                rating = 7.1f
+            ).copy(
+                cacheState = "DETAIL_HYDRATED",
+                detailHydratedAt = hydratedAt
+            )
+        )
+        whenever(providerDao.getById(7L)).thenReturn(
+            ProviderEntity(
+                id = 7L,
+                name = "Xtream",
+                type = ProviderType.XTREAM_CODES,
+                serverUrl = "http://example.com",
+                username = "user",
+                password = "pass",
+                status = ProviderStatus.ACTIVE
+            )
+        )
+
+        val result = createRepository().getMovieDetails(7L, 99L)
+
+        assertThat(result.getOrNull()?.name).isEqualTo("Cached Movie")
+        verify(xtreamApiService, never()).getVodInfo(any(), any())
+        verify(xtreamContentIndexDao, never()).markDetailHydrated(any(), any(), any(), any(), anyOrNull(), any())
     }
 
     @Test
@@ -389,6 +417,32 @@ class MovieRepositoryImplTest {
         whenever(movieDao.search(eq(7L), any(), any())).thenReturn(
             flow { throw SQLiteException("malformed MATCH expression") }
         )
+        whenever(movieDao.searchFallback(eq(7L), any(), any())).thenReturn(
+            flowOf(
+                listOf(
+                    movieEntity(
+                        id = 101L,
+                        name = "Matrix Reloaded",
+                        genre = "Action",
+                        categoryId = 42L,
+                        rating = 8.0f
+                    )
+                )
+            )
+        )
+        whenever(favoriteDao.getAllByType(7L, ContentType.MOVIE.name)).thenReturn(flowOf(emptyList()))
+
+        val repository = createRepository()
+
+        val result = repository.searchMovies(7L, "matrix").first()
+
+        assertThat(result.map { it.name }).containsExactly("Matrix Reloaded")
+    }
+
+    @Test
+    fun `searchMovies returns empty without like fallback when fts has no rows`() = runTest {
+        whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
+        whenever(movieDao.search(eq(7L), any(), any())).thenReturn(flowOf(emptyList()))
         whenever(favoriteDao.getAllByType(7L, ContentType.MOVIE.name)).thenReturn(flowOf(emptyList()))
 
         val repository = createRepository()
@@ -396,6 +450,92 @@ class MovieRepositoryImplTest {
         val result = repository.searchMovies(7L, "matrix").first()
 
         assertThat(result).isEmpty()
+        verify(movieDao, never()).searchFallback(eq(7L), any(), any())
+    }
+
+    @Test
+    fun `searchMovies does not run like fallback when fts returns rows`() = runTest {
+        whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
+        whenever(movieDao.search(eq(7L), any(), any())).thenReturn(
+            flowOf(
+                listOf(
+                    movieEntity(
+                        id = 103L,
+                        name = "Matrix",
+                        genre = "Action",
+                        categoryId = 42L,
+                        rating = 9.0f
+                    )
+                )
+            )
+        )
+        whenever(favoriteDao.getAllByType(7L, ContentType.MOVIE.name)).thenReturn(flowOf(emptyList()))
+
+        val repository = createRepository()
+
+        val result = repository.searchMovies(7L, "matrix").first()
+
+        assertThat(result.map { it.name }).containsExactly("Matrix")
+        verify(movieDao, never()).searchFallback(eq(7L), any(), any())
+    }
+
+    @Test
+    fun `browseMovies search uses bounded page query`() = runTest {
+        whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
+        whenever(movieDao.searchPage(eq(7L), any(), any(), any(), any(), any(), any())).thenReturn(
+            listOf(
+                movieEntity(id = 101L, name = "Matrix", genre = "Action", categoryId = 42L, rating = 9.0f),
+                movieEntity(id = 102L, name = "Matrix Reloaded", genre = "Action", categoryId = 42L, rating = 7.5f)
+            )
+        )
+        whenever(favoriteDao.getAllByType(7L, ContentType.MOVIE.name)).thenReturn(flowOf(emptyList()))
+
+        val result = createRepository().browseMovies(
+            LibraryBrowseQuery(
+                providerId = 7L,
+                searchQuery = "matrix",
+                offset = 0,
+                limit = 1
+            )
+        ).first()
+
+        assertThat(result.totalCount).isEqualTo(2)
+        assertThat(result.items.map { it.name }).containsExactly("Matrix")
+        verify(movieDao, times(1)).searchPage(eq(7L), any(), any(), any(), any(), eq(2), eq(0))
+        verify(movieDao, never()).search(eq(7L), any(), any())
+        verify(movieDao, never()).searchFallback(eq(7L), any(), any())
+    }
+
+    @Test
+    fun `browseMovies top rated excludes unrated entries and uses filtered total count`() = runTest {
+        whenever(preferencesRepository.parentalControlLevel).thenReturn(flowOf(0))
+        whenever(preferencesRepository.xtreamBase64TextCompatibility).thenReturn(flowOf(false))
+        whenever(movieDao.getTopRatedCountByProvider(7L)).thenReturn(flowOf(1))
+        whenever(movieDao.getTopRatedPreview(7L, 100)).thenReturn(
+            flowOf(
+                listOf(
+                    movieEntity(id = 1L, name = "Rated Movie", genre = "Drama", categoryId = 10L, rating = 8.5f),
+                    movieEntity(id = 2L, name = "Unrated Movie", genre = "Drama", categoryId = 10L, rating = 0f)
+                )
+            )
+        )
+        whenever(favoriteDao.getAllByType(7L, ContentType.MOVIE.name)).thenReturn(flowOf(emptyList()))
+        whenever(playbackHistoryDao.getByProvider(7L)).thenReturn(flowOf(emptyList()))
+
+        val repository = createRepository()
+
+        val result = repository.browseMovies(
+            LibraryBrowseQuery(
+                providerId = 7L,
+                sortBy = LibrarySortBy.RATING,
+                filterBy = LibraryFilterBy(LibraryFilterType.TOP_RATED),
+                offset = 0,
+                limit = 20
+            )
+        ).first()
+
+        assertThat(result.totalCount).isEqualTo(1)
+        assertThat(result.items.map { it.name }).containsExactly("Rated Movie")
     }
 
     private fun createRepository() = MovieRepositoryImpl(
@@ -408,9 +548,12 @@ class MovieRepositoryImplTest {
         preferencesRepository = preferencesRepository,
         favoriteDao = favoriteDao,
         playbackHistoryDao = playbackHistoryDao,
+        playbackHistoryRepository = playbackHistoryRepository,
         xtreamStreamUrlResolver = xtreamStreamUrlResolver,
         movieCategoryHydrationDao = movieCategoryHydrationDao,
         syncMetadataRepository = syncMetadataRepository,
+        xtreamContentIndexDao = xtreamContentIndexDao,
+        syncManager = syncManager,
         transactionRunner = transactionRunner
     )
 

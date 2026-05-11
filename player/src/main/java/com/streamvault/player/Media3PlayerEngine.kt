@@ -25,11 +25,11 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
-import androidx.media3.exoplayer.video.VideoFrameMetadataListener
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import androidx.media3.session.MediaSession
 import com.streamvault.domain.model.DecoderMode
 import com.streamvault.domain.model.PlaybackCompatibilityKey
+import com.streamvault.domain.model.PlaybackCompatibilityRecord
 import com.streamvault.domain.model.PlayerSurfaceMode
 import com.streamvault.domain.model.StreamInfo
 import com.streamvault.domain.model.VideoFormat
@@ -41,9 +41,12 @@ import com.streamvault.player.playback.DefaultPlaybackCompatibilityProfile
 import com.streamvault.player.playback.AudioVideoOffsetAudioSink
 import com.streamvault.player.playback.PlaybackCodecSelector
 import com.streamvault.player.playback.PlaybackCompatibilityProfile
+import com.streamvault.player.playback.PlaybackBufferPolicies
 import com.streamvault.player.playback.PlaybackErrorCategory
 import com.streamvault.player.playback.PlaybackLogSanitizer
 import com.streamvault.player.playback.PlaybackRetryContext
+import com.streamvault.player.playback.buildPlaybackPreparationPlan
+import com.streamvault.player.playback.buildPlaybackRendererPlan
 import com.streamvault.player.playback.PlayerDataSourceFactoryProvider
 import com.streamvault.player.playback.PlayerErrorClassifier
 import com.streamvault.player.playback.PlayerMediaSourceFactory
@@ -91,6 +94,9 @@ class Media3PlayerEngine @Inject constructor(
     companion object {
         private const val TAG = "Media3PlayerEngine"
         private const val AUDIO_RENDERER_RECOVERY_COOLDOWN_MS = 15_000L
+        private const val TEXTURE_VIEW_STARTUP_TIMEOUT_MS = 9_000L
+        private const val TEXTURE_VIEW_BUFFERED_STARTUP_THRESHOLD_MS = 4_000L
+        private const val KNOWN_BAD_FAILURE_THRESHOLD = 3
         private const val MEDIA_SESSION_ID_PREFIX = "streamvault"
         private val nextMediaSessionInstanceId = AtomicLong(1L)
     }
@@ -124,21 +130,27 @@ class Media3PlayerEngine @Inject constructor(
     // (the engine scope dispatcher). No @Volatile or synchronisation is needed as long
     // as the scope is not replaced with a different dispatcher in tests.
     //
-    // scope is a var because release() cancels it to tear down dangling coroutines,
-    // then creates a fresh one so the singleton engine remains usable on re-entry.
+    // scope is a var because resetForReuse() replaces it after cancelling the old
+    // collectors. Terminal release() never recreates the scope.
     private var scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
         private set
+    private var isDisposed = false
     private var exoPlayer: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
     private var requestedDecoderMode: DecoderMode = DecoderMode.AUTO
     private var activeDecoderMode: DecoderMode = DecoderMode.HARDWARE
     private var requestedSurfaceMode: PlayerSurfaceMode = PlayerSurfaceMode.AUTO
+    private var sessionSurfaceModeOverride: PlayerSurfaceMode? = null
     private var activeDecoderPolicy: ActiveDecoderPolicy = ActiveDecoderPolicy.AUTO
     private var recoveryDecoderPolicyOverride: ActiveDecoderPolicy? = null
     private var knownBadDecoderNames: Set<String> = emptySet()
+    private var knownBadSurfaceTypes: Set<String> = emptySet()
     private var selectedVideoDecoderName: String = "Unknown"
     private var videoStallCount = 0
     private var videoStallRecoveryAttempt = 0
+    private var videoStallSafeRecoveryPerformed = false
+    private var textureViewSessionFallbackAttempted = false
+    private var audioVideoSyncSinkActive = false
     private var lastStreamInfo: StreamInfo? = null
     private var lastMediaId: String? = null
     private var currentResolvedStreamType: ResolvedStreamType = ResolvedStreamType.UNKNOWN
@@ -180,6 +192,8 @@ class Media3PlayerEngine @Inject constructor(
     private val audioVideoOffsetUs = AtomicLong(0L)
     private val _audioVideoOffsetMs = MutableStateFlow(0)
     override val audioVideoOffsetMs: StateFlow<Int> = _audioVideoOffsetMs.asStateFlow()
+    private val _audioVideoSyncEnabled = MutableStateFlow(false)
+    override val audioVideoSyncEnabled: StateFlow<Boolean> = _audioVideoSyncEnabled.asStateFlow()
 
     private val _renderSurfaceType = MutableStateFlow(PlayerRenderSurfaceType.SURFACE_VIEW)
     override val renderSurfaceType: StateFlow<PlayerRenderSurfaceType> = _renderSurfaceType.asStateFlow()
@@ -244,6 +258,7 @@ class Media3PlayerEngine @Inject constructor(
     }
 
     private fun startEngineCollectors() {
+        if (isDisposed) return
         scope.launch {
             liveTimeshiftManager.state.collectLatest {
                 syncTimeshiftState()
@@ -256,6 +271,7 @@ class Media3PlayerEngine @Inject constructor(
                 val stalled = videoStallDetector.shouldReportStall(
                     playbackState = _playbackState.value,
                     isPlaying = _isPlaying.value,
+                    playbackStarted = playbackStarted,
                     currentPositionMs = _currentPosition.value,
                     bufferedDurationMs = stats.bufferedDurationMs
                 )
@@ -264,28 +280,47 @@ class Media3PlayerEngine @Inject constructor(
                     videoStallCount = videoStallCount,
                     videoDecoderName = selectedVideoDecoderName,
                     activeDecoderPolicy = activeDecoderPolicy.name,
-                    renderSurfaceType = _renderSurfaceType.value.name
+                    renderSurfaceType = _renderSurfaceType.value.name,
+                    audioVideoSyncEnabled = _audioVideoSyncEnabled.value,
+                    audioVideoSyncSinkActive = audioVideoSyncSinkActive
                 )
+                if (shouldFallbackTextureViewBeforeFirstFrame(stats)) {
+                    fallbackTextureViewSurface("NO_FIRST_FRAME")
+                    continue
+                }
                 if (stalled) handleVideoStall()
             }
         }
     }
 
     override fun prepare(streamInfo: StreamInfo) {
+        if (ensureNotDisposed("prepare")) return
         prepareInternal(streamInfo = streamInfo, preserveRetryState = false, seekPositionMs = null, autoPlay = true)
     }
 
     override fun renewStreamUrl(streamInfo: StreamInfo) {
+        if (ensureNotDisposed("renewStreamUrl")) return
         val player = exoPlayer ?: return
-        val retryPolicy = currentRetryPolicy ?: return
+        val playbackPlan = buildPlaybackPreparationPlan(
+            streamInfo = streamInfo,
+            preload = false,
+            playbackStarted = { playbackStarted }
+        )
 
         lastStreamInfo = streamInfo
         lastMediaId = mediaSourceFactory.mediaIdFor(streamInfo)
+        currentResolvedStreamType = playbackPlan.resolvedStreamType
+        currentTimeoutProfile = playbackPlan.timeoutProfile
+        currentRetryContext = playbackPlan.retryContext
+        currentRetryPolicy = playbackPlan.retryPolicy
+        retryAttempt = 0
+        _retryStatus.value = null
+        playbackStarted = false
 
         val mediaSource = mediaSourceFactory.create(
             streamInfo = streamInfo,
             resolvedStreamType = currentResolvedStreamType,
-            retryPolicy = retryPolicy,
+            retryPolicy = playbackPlan.retryPolicy,
             preload = false
         ).second
 
@@ -379,6 +414,8 @@ class Media3PlayerEngine @Inject constructor(
     override fun setSurfaceMode(mode: PlayerSurfaceMode) {
         if (requestedSurfaceMode == mode) return
         requestedSurfaceMode = mode
+        sessionSurfaceModeOverride = null
+        textureViewSessionFallbackAttempted = false
         updateRenderSurfaceForMode()
         lastStreamInfo?.let { streamInfo ->
             val wasPlaying = exoPlayer?.playWhenReady == true
@@ -405,14 +442,30 @@ class Media3PlayerEngine @Inject constructor(
         exoPlayer?.playbackParameters = PlaybackParameters(clamped)
     }
 
+    override fun setAudioVideoSyncEnabled(enabled: Boolean) {
+        if (_audioVideoSyncEnabled.value == enabled) return
+        _audioVideoSyncEnabled.value = enabled
+        if (!enabled) {
+            _audioVideoOffsetMs.value = 0
+            audioVideoOffsetUs.set(0L)
+        }
+        val streamInfo = lastStreamInfo ?: return
+        val player = exoPlayer ?: return
+        val wasPlaying = player.playWhenReady
+        val position = player.currentPosition.takeIf { it > 0L }
+        prepareInternal(streamInfo, preserveRetryState = true, seekPositionMs = position, autoPlay = wasPlaying)
+    }
+
     override fun setAudioVideoOffsetMs(offsetMs: Int) {
         val clamped = offsetMs.coerceIn(AUDIO_VIDEO_OFFSET_MIN_MS, AUDIO_VIDEO_OFFSET_MAX_MS)
-        _audioVideoOffsetMs.value = clamped
-        audioVideoOffsetUs.set(clamped * 1_000L)
+        val effectiveOffset = if (_audioVideoSyncEnabled.value) clamped else 0
+        _audioVideoOffsetMs.value = effectiveOffset
+        audioVideoOffsetUs.set(effectiveOffset * 1_000L)
     }
 
     @MainThread
     override fun startLiveTimeshift(streamInfo: StreamInfo, channelKey: String, config: TimeshiftConfig) {
+        if (ensureNotDisposed("startLiveTimeshift")) return
         activeLiveTimeshiftStreamInfo = streamInfo
         activeLiveTimeshiftChannelKey = channelKey
         scope.launch {
@@ -558,19 +611,18 @@ class Media3PlayerEngine @Inject constructor(
         if (streamInfo.url == lastStreamInfo?.url) return
 
         val mediaId = mediaSourceFactory.mediaIdFor(streamInfo)
-        val resolvedStreamType = StreamTypeResolver.resolve(streamInfo)
-        val retryContext = PlaybackRetryContext(
-            resolvedStreamType = resolvedStreamType,
-            timeoutProfile = PlayerTimeoutProfile.resolve(streamInfo, resolvedStreamType, preload = true)
+        val playbackPlan = buildPlaybackPreparationPlan(
+            streamInfo = streamInfo,
+            preload = true,
+            playbackStarted = { false }
         )
-        val retryPolicy = PlayerRetryPolicy(retryContext) { false }
         val (_, mediaSource) = mediaSourceFactory.create(
             streamInfo = streamInfo,
-            resolvedStreamType = resolvedStreamType,
-            retryPolicy = retryPolicy,
+            resolvedStreamType = playbackPlan.resolvedStreamType,
+            retryPolicy = playbackPlan.retryPolicy,
             preload = true
         )
-        preloadCoordinator.store(mediaId, streamInfo, resolvedStreamType, mediaSource)
+        preloadCoordinator.store(mediaId, streamInfo, playbackPlan.resolvedStreamType, mediaSource)
     }
 
     override fun createRenderView(
@@ -580,6 +632,7 @@ class Media3PlayerEngine @Inject constructor(
     ) = viewBinder.createRenderView(context, resizeMode, surfaceType)
 
     override fun bindRenderView(renderView: android.view.View, resizeMode: PlayerSurfaceResizeMode) {
+        if (ensureNotDisposed("bindRenderView")) return
         viewBinder.bind(renderView, getOrCreatePlayer(), resizeMode)
     }
 
@@ -592,6 +645,20 @@ class Media3PlayerEngine @Inject constructor(
     }
 
     override fun release() {
+        if (isDisposed) return
+        isDisposed = true
+        resetEngineState(restartCollectors = false)
+    }
+
+    override fun resetForReuse() {
+        if (isDisposed) {
+            Log.w(TAG, "resetForReuse ignored after terminal release")
+            return
+        }
+        resetEngineState(restartCollectors = true)
+    }
+
+    private fun resetEngineState(restartCollectors: Boolean) {
         retryJob?.cancel()
         retryJob = null
         preloadCoordinator.release()
@@ -620,16 +687,27 @@ class Media3PlayerEngine @Inject constructor(
         videoStallRecoveryAttempt = 0
         recoveryDecoderPolicyOverride = null
         knownBadDecoderNames = emptySet()
+        knownBadSurfaceTypes = emptySet()
+        sessionSurfaceModeOverride = null
+        textureViewSessionFallbackAttempted = false
+        audioVideoSyncSinkActive = false
         activeLiveTimeshiftStreamInfo = null
         activeLiveTimeshiftChannelKey = null
         isPlayingTimeshiftSnapshot = false
         _timeshiftState.value = LiveTimeshiftState()
         scope.cancel()
-        // Replace with a fresh scope so the singleton engine remains functional on re-entry.
-        scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
-        startEngineCollectors()
+        if (restartCollectors) {
+            scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+            startEngineCollectors()
+        }
         // File cleanup runs outside the engine scope — orphans are also cleaned on next app start
         CoroutineScope(Dispatchers.IO).launch { liveTimeshiftManager.stopSession() }
+    }
+
+    private fun ensureNotDisposed(action: String): Boolean {
+        if (!isDisposed) return false
+        Log.w(TAG, "$action ignored after terminal release")
+        return true
     }
 
     private fun prepareInternal(
@@ -649,6 +727,10 @@ class Media3PlayerEngine @Inject constructor(
         }
         if (lastMediaId != mediaId) {
             decoderPreferencePolicy.resetForMedia(mediaId)
+            sessionSurfaceModeOverride = null
+            textureViewSessionFallbackAttempted = false
+            knownBadDecoderNames = emptySet()
+            knownBadSurfaceTypes = emptySet()
         }
         lastMediaId = mediaId
         playbackStarted = false
@@ -661,29 +743,38 @@ class Media3PlayerEngine @Inject constructor(
         videoStallDetector.reset()
         if (!preserveRetryState) {
             videoStallRecoveryAttempt = 0
+            videoStallSafeRecoveryPerformed = false
         }
         selectedVideoDecoderName = "Unknown"
 
-        currentResolvedStreamType = StreamTypeResolver.resolve(streamInfo)
-        currentTimeoutProfile = PlayerTimeoutProfile.resolve(streamInfo, currentResolvedStreamType, preload = false)
-        currentRetryContext = PlaybackRetryContext(currentResolvedStreamType, currentTimeoutProfile)
-        currentRetryPolicy = PlayerRetryPolicy(currentRetryContext!!) { playbackStarted }
+        val playbackPlan = buildPlaybackPreparationPlan(
+            streamInfo = streamInfo,
+            preload = false,
+            playbackStarted = { playbackStarted }
+        )
+        currentResolvedStreamType = playbackPlan.resolvedStreamType
+        currentTimeoutProfile = playbackPlan.timeoutProfile
+        currentRetryContext = playbackPlan.retryContext
+        currentRetryPolicy = playbackPlan.retryPolicy
         if (!preserveRetryState) {
             recoveryDecoderPolicyOverride = null
         }
-        activeDecoderPolicy = recoveryDecoderPolicyOverride ?: resolveActiveDecoderPolicy(requestedDecoderMode)
-        updateRenderSurfaceForMode()
-        refreshKnownBadCompatibilityRecords()
-
         val preferredDecoderMode = decoderPreferencePolicy.preferredMode(requestedDecoderMode, mediaId)
+        val nextDecoderPolicy = recoveryDecoderPolicyOverride ?: resolveActiveDecoderPolicy(
+            policyModeFor(requestedDecoderMode, preferredDecoderMode)
+        )
         val isLiveBuffer = currentResolvedStreamType in setOf(
             ResolvedStreamType.HLS, ResolvedStreamType.MPEG_TS_LIVE, ResolvedStreamType.RTSP
         )
+        val previousDecoderPolicy = activeDecoderPolicy
         val needsRecreate = activeDecoderMode != preferredDecoderMode ||
+            previousDecoderPolicy != nextDecoderPolicy ||
             isLiveBuffer != currentBufferIsLive ||
             requestedDecoderMode == DecoderMode.COMPATIBILITY
         activeDecoderMode = preferredDecoderMode
+        activeDecoderPolicy = nextDecoderPolicy
         currentBufferIsLive = isLiveBuffer
+        updateRenderSurfaceForMode()
         if (needsRecreate) {
             recreatePlayer()
         }
@@ -693,50 +784,54 @@ class Media3PlayerEngine @Inject constructor(
             "prepare resolvedStreamType=$currentResolvedStreamType timeoutProfile=$currentTimeoutProfile decoderPreference=$activeDecoderMode activePolicy=$activeDecoderPolicy surface=${_renderSurfaceType.value} target=${PlaybackLogSanitizer.sanitizeUrl(streamInfo.url)}"
         )
 
-        val player = getOrCreatePlayer()
-        trackController.applyInitialParameters(player, constrainResolutionForMultiView)
-        if (activeDecoderPolicy == ActiveDecoderPolicy.COMPATIBILITY) {
-            player.trackSelectionParameters = player.trackSelectionParameters
-                .buildUpon()
-                .setMaxVideoSize(Int.MAX_VALUE, 720)
-                .build()
-        }
-        player.playbackParameters = PlaybackParameters(_playbackSpeed.value)
+        try {
+            val player = getOrCreatePlayer()
+            trackController.applyInitialParameters(player, constrainResolutionForMultiView)
+            if (activeDecoderPolicy == ActiveDecoderPolicy.COMPATIBILITY) {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .setMaxVideoSize(Int.MAX_VALUE, 720)
+                    .build()
+            }
+            player.playbackParameters = PlaybackParameters(_playbackSpeed.value)
 
-        val mediaSource = preloadCoordinator.tryReuse(mediaId, streamInfo, currentResolvedStreamType)
-            ?: mediaSourceFactory.create(
-                streamInfo = streamInfo,
-                resolvedStreamType = currentResolvedStreamType,
-                retryPolicy = currentRetryPolicy!!,
-                preload = false
-            ).second
-        preloadCoordinator.onPlaybackStarted(mediaId)
-        player.setMediaSource(mediaSource)
-        player.prepare()
-        seekPositionMs?.takeIf { it > 0L }?.let(player::seekTo)
+            val mediaSource = preloadCoordinator.tryReuse(mediaId, streamInfo, currentResolvedStreamType)
+                ?: mediaSourceFactory.create(
+                    streamInfo = streamInfo,
+                    resolvedStreamType = currentResolvedStreamType,
+                    retryPolicy = currentRetryPolicy!!,
+                    preload = false
+                ).second
+            preloadCoordinator.onPlaybackStarted(mediaId)
+            player.setMediaSource(mediaSource)
+            player.prepare()
+            seekPositionMs?.takeIf { it > 0L }?.let(player::seekTo)
 
-        val isLive = currentResolvedStreamType in setOf(
-            ResolvedStreamType.HLS, ResolvedStreamType.MPEG_TS_LIVE, ResolvedStreamType.RTSP
-        )
-        val osContentType = if (isLive) {
-            android.media.AudioAttributes.CONTENT_TYPE_MUSIC
-        } else {
-            android.media.AudioAttributes.CONTENT_TYPE_MOVIE
+            val isLive = currentResolvedStreamType in setOf(
+                ResolvedStreamType.HLS, ResolvedStreamType.MPEG_TS_LIVE, ResolvedStreamType.RTSP
+            )
+            val osContentType = if (isLive) {
+                android.media.AudioAttributes.CONTENT_TYPE_MUSIC
+            } else {
+                android.media.AudioAttributes.CONTENT_TYPE_MOVIE
+            }
+            val media3ContentType = if (isLive) C.AUDIO_CONTENT_TYPE_MUSIC else C.AUDIO_CONTENT_TYPE_MOVIE
+            player.setAudioAttributes(
+                Media3AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(media3ContentType)
+                    .build(),
+                false
+            )
+            val focusGranted = audioFocusController.requestAudioFocusIfNeeded(osContentType)
+            player.playWhenReady = autoPlay && focusGranted
+            if (autoPlay && !focusGranted) {
+                _audioFocusDenied.tryEmit(Unit)
+            }
+            viewBinder.attachPlayer(player)
+        } catch (error: Exception) {
+            handlePlaybackSetupFailure(error, streamInfo, mediaId, seekPositionMs, autoPlay)
         }
-        val media3ContentType = if (isLive) C.AUDIO_CONTENT_TYPE_MUSIC else C.AUDIO_CONTENT_TYPE_MOVIE
-        player.setAudioAttributes(
-            Media3AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
-                .setContentType(media3ContentType)
-                .build(),
-            false
-        )
-        val focusGranted = audioFocusController.requestAudioFocusIfNeeded(osContentType)
-        player.playWhenReady = autoPlay && focusGranted
-        if (autoPlay && !focusGranted) {
-            _audioFocusDenied.tryEmit(Unit)
-        }
-        viewBinder.attachPlayer(player)
     }
 
     private fun recreatePlayer() {
@@ -750,6 +845,7 @@ class Media3PlayerEngine @Inject constructor(
     }
 
     private fun getOrCreatePlayer(): ExoPlayer {
+        check(!isDisposed) { "Cannot create a player after terminal release" }
         return exoPlayer ?: createPlayer().also { player ->
             exoPlayer = player
             statsCollector.bind { exoPlayer }
@@ -764,23 +860,16 @@ class Media3PlayerEngine @Inject constructor(
 
     private fun createPlayer(): ExoPlayer {
         val renderersFactory = buildRenderersFactory()
-        val compatibilityMode = activeDecoderPolicy == ActiveDecoderPolicy.COMPATIBILITY
-        val minBufferMs = when {
-            compatibilityMode && currentBufferIsLive == true -> 15_000
-            currentBufferIsLive == true -> 8_000
-            else -> 50_000
-        }
-        val maxBufferMs = when {
-            compatibilityMode && currentBufferIsLive == true -> 45_000
-            currentBufferIsLive == true -> 30_000
-            else -> 120_000
-        }
+        val bufferPolicy = PlaybackBufferPolicies.forPlayback(
+            isLive = currentBufferIsLive == true,
+            compatibilityMode = activeDecoderPolicy == ActiveDecoderPolicy.COMPATIBILITY
+        )
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                minBufferMs,
-                maxBufferMs,
-                1_500,
-                5_000
+                bufferPolicy.minBufferMs,
+                bufferPolicy.maxBufferMs,
+                bufferPolicy.playbackBufferMs,
+                bufferPolicy.rebufferMs
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -805,88 +894,110 @@ class Media3PlayerEngine @Inject constructor(
             .apply {
                 videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
                 playbackParameters = PlaybackParameters(_playbackSpeed.value)
-                setVideoFrameMetadataListener(VideoFrameMetadataListener { _, _, _, _ ->
-                    videoStallDetector.onVideoFrameRendered()
-                })
                 addAnalyticsListener(createAnalyticsListener())
                 addListener(createPlayerListener())
             }
     }
 
-    private fun buildRenderersFactory(): DefaultRenderersFactory {
-        return object : DefaultRenderersFactory(context) {
-            override fun buildAudioSink(
-                context: Context,
-                enableFloatOutput: Boolean,
-                enableAudioTrackPlaybackParams: Boolean
-            ): AudioSink {
-                val audioSink = requireNotNull(
-                    super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
-                ) {
-                    "DefaultRenderersFactory did not provide an AudioSink."
-                }
-                return AudioVideoOffsetAudioSink(
-                    delegate = audioSink,
-                    offsetUsProvider = { audioVideoOffsetUs.get() }
-                )
-            }
 
-            override fun buildVideoRenderers(
-                context: Context,
-                extensionRendererMode: Int,
-                mediaCodecSelector: MediaCodecSelector,
-                enableDecoderFallback: Boolean,
-                eventHandler: Handler,
-                eventListener: VideoRendererEventListener,
-                allowedVideoJoiningTimeMs: Long,
-                out: ArrayList<Renderer>
-            ) {
-                if (!compatibilityProfile.shouldDisableDecoderReuseWorkaround()) {
-                    super.buildVideoRenderers(
+    private fun buildRenderersFactory(): DefaultRenderersFactory {
+        val decoderPolicy = activeDecoderPolicy
+        val badDecoderNames = knownBadDecoderNames
+        val requestedMode = requestedDecoderMode
+        val rendererPlan = buildPlaybackRendererPlan(
+            requestedMode = requestedMode,
+            decoderPolicy = decoderPolicy,
+            useAudioVideoSyncSink = _audioVideoSyncEnabled.value,
+            useVideoRendererWorkaround = compatibilityProfile.shouldDisableDecoderReuseWorkaround()
+        )
+        audioVideoSyncSinkActive = false
+
+        val factory = if (rendererPlan.useStockRenderersFactory) {
+            DefaultRenderersFactory(context)
+        } else {
+            object : DefaultRenderersFactory(context) {
+                override fun buildAudioSink(
+                    context: Context,
+                    enableFloatOutput: Boolean,
+                    enableAudioTrackPlaybackParams: Boolean
+                ): AudioSink {
+                    val audioSink = requireNotNull(
+                        super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+                    ) {
+                        "DefaultRenderersFactory did not provide an AudioSink."
+                    }
+                    if (!rendererPlan.useAudioVideoSyncSink) {
+                        audioVideoSyncSinkActive = false
+                        return audioSink
+                    }
+                    audioVideoSyncSinkActive = true
+                    return AudioVideoOffsetAudioSink(
+                        delegate = audioSink,
+                        offsetUsProvider = { audioVideoOffsetUs.get() }
+                    )
+                }
+
+                override fun buildVideoRenderers(
+                    context: Context,
+                    extensionRendererMode: Int,
+                    mediaCodecSelector: MediaCodecSelector,
+                    enableDecoderFallback: Boolean,
+                    eventHandler: Handler,
+                    eventListener: VideoRendererEventListener,
+                    allowedVideoJoiningTimeMs: Long,
+                    out: ArrayList<Renderer>
+                ) {
+                    if (!rendererPlan.useVideoRendererWorkaround) {
+                        super.buildVideoRenderers(
+                            context,
+                            extensionRendererMode,
+                            mediaCodecSelector,
+                            enableDecoderFallback,
+                            eventHandler,
+                            eventListener,
+                            allowedVideoJoiningTimeMs,
+                            out
+                        )
+                        return
+                    }
+
+                    out.add(object : MediaCodecVideoRenderer(
                         context,
-                        extensionRendererMode,
                         mediaCodecSelector,
+                        allowedVideoJoiningTimeMs,
                         enableDecoderFallback,
                         eventHandler,
                         eventListener,
-                        allowedVideoJoiningTimeMs,
-                        out
-                    )
-                    return
+                        50
+                    ) {
+                        override fun canReuseCodec(
+                            codecInfo: MediaCodecInfo,
+                            oldFormat: Format,
+                            newFormat: Format
+                        ): DecoderReuseEvaluation {
+                            return DecoderReuseEvaluation(
+                                codecInfo.name,
+                                oldFormat,
+                                newFormat,
+                                DecoderReuseEvaluation.REUSE_RESULT_NO,
+                                DecoderReuseEvaluation.DISCARD_REASON_MAX_INPUT_SIZE_EXCEEDED
+                            )
+                        }
+                    })
                 }
-
-                out.add(object : MediaCodecVideoRenderer(
-                    context,
-                    mediaCodecSelector,
-                    allowedVideoJoiningTimeMs,
-                    enableDecoderFallback,
-                    eventHandler,
-                    eventListener,
-                    50
-                ) {
-                    override fun canReuseCodec(
-                        codecInfo: MediaCodecInfo,
-                        oldFormat: Format,
-                        newFormat: Format
-                    ): DecoderReuseEvaluation {
-                        return DecoderReuseEvaluation(
-                            codecInfo.name,
-                            oldFormat,
-                            newFormat,
-                            DecoderReuseEvaluation.REUSE_RESULT_NO,
-                            DecoderReuseEvaluation.DISCARD_REASON_MAX_INPUT_SIZE_EXCEEDED
-                        )
-                    }
-                })
             }
-        }.apply {
+        }
+
+        return factory.apply {
             setEnableDecoderFallback(true)
-            setMediaCodecSelector(
-                PlaybackCodecSelector(
-                    policyProvider = { activeDecoderPolicy },
-                    knownBadProvider = { knownBadDecoderNames }
+            if (rendererPlan.useManagedCodecSelector) {
+                setMediaCodecSelector(
+                    PlaybackCodecSelector(
+                        policyProvider = { decoderPolicy },
+                        knownBadProvider = { badDecoderNames }
+                    )
                 )
-            )
+            }
             setExtensionRendererMode(
                 when (activeDecoderMode) {
                     DecoderMode.AUTO, DecoderMode.HARDWARE -> DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
@@ -916,6 +1027,7 @@ class Media3PlayerEngine @Inject constructor(
                 selectedVideoDecoderName = decoderName
                 _playerStats.value = _playerStats.value.copy(videoDecoderName = decoderName)
                 Log.i(TAG, "video-decoder name=$decoderName policy=$activeDecoderPolicy surface=${_renderSurfaceType.value}")
+                refreshKnownBadCompatibilityRecords()
             }
 
             override fun onAudioInputFormatChanged(
@@ -1147,6 +1259,7 @@ class Media3PlayerEngine @Inject constructor(
             "$reason streamType=$currentResolvedStreamType timeoutProfile=$currentTimeoutProfile target=${PlaybackLogSanitizer.sanitizeUrl(lastStreamInfo?.url)}"
         )
         recordCompatibilitySuccess()
+        refreshKnownBadCompatibilityRecords()
     }
 
     private fun resolveActiveDecoderPolicy(mode: DecoderMode): ActiveDecoderPolicy = when (mode) {
@@ -1156,38 +1269,77 @@ class Media3PlayerEngine @Inject constructor(
         DecoderMode.COMPATIBILITY -> ActiveDecoderPolicy.COMPATIBILITY
     }
 
+    private fun policyModeFor(requestedMode: DecoderMode, preferredMode: DecoderMode): DecoderMode = when {
+        requestedMode == DecoderMode.COMPATIBILITY -> DecoderMode.COMPATIBILITY
+        preferredMode == DecoderMode.SOFTWARE -> DecoderMode.SOFTWARE
+        else -> requestedMode
+    }
+
     private fun updateRenderSurfaceForMode() {
-        _renderSurfaceType.value = when (requestedSurfaceMode) {
+        val surfaceMode = sessionSurfaceModeOverride
+            ?: when {
+                requestedSurfaceMode == PlayerSurfaceMode.TEXTURE_VIEW &&
+                    knownBadSurfaceTypes.contains(PlayerRenderSurfaceType.TEXTURE_VIEW.name) -> {
+                    PlayerSurfaceMode.SURFACE_VIEW
+                }
+                else -> requestedSurfaceMode
+            }
+        _renderSurfaceType.value = when (surfaceMode) {
             PlayerSurfaceMode.SURFACE_VIEW -> PlayerRenderSurfaceType.SURFACE_VIEW
             PlayerSurfaceMode.TEXTURE_VIEW -> PlayerRenderSurfaceType.TEXTURE_VIEW
-            PlayerSurfaceMode.AUTO -> if (activeDecoderPolicy == ActiveDecoderPolicy.COMPATIBILITY) {
-                PlayerRenderSurfaceType.TEXTURE_VIEW
-            } else {
-                PlayerRenderSurfaceType.SURFACE_VIEW
-            }
+            PlayerSurfaceMode.AUTO -> PlayerRenderSurfaceType.SURFACE_VIEW
         }
     }
 
     private fun refreshKnownBadCompatibilityRecords() {
+        if (!shouldUseCompatibilityHistory()) {
+            knownBadDecoderNames = emptySet()
+            knownBadSurfaceTypes = emptySet()
+            return
+        }
         val video = _videoFormat.value
         val videoMime = video.codecV ?: _playerStats.value.videoCodec
         val bucket = resolutionBucket(video.width.takeIf { it > 0 } ?: _playerStats.value.width)
-        scope.launch(Dispatchers.IO) {
-            val records = playbackCompatibilityRepository.getKnownBadRecords(
-                deviceFingerprint = Build.FINGERPRINT.orEmpty(),
-                streamType = currentResolvedStreamType.name,
-                videoMimeType = videoMime.takeIf { it.isNotBlank() } ?: "unknown",
-                resolutionBucket = bucket
-            )
-            val names = PlaybackCodecSelector.knownBadDecoderNames(records)
-            scope.launch { knownBadDecoderNames = names }
+        if (selectedVideoDecoderName.isUnknownLike() || videoMime.isUnknownLike() || bucket.isUnknownLike()) {
+            knownBadDecoderNames = emptySet()
+            knownBadSurfaceTypes = emptySet()
+            return
         }
+        val lookupGeneration = retryGeneration
+        scope.launch(Dispatchers.IO) {
+            val records = runCatching {
+                playbackCompatibilityRepository.getKnownBadRecords(
+                    deviceFingerprint = Build.FINGERPRINT.orEmpty(),
+                    streamType = currentResolvedStreamType.name,
+                    videoMimeType = videoMime,
+                    resolutionBucket = bucket
+                )
+            }.getOrElse { throwable ->
+                Log.w(TAG, "compatibility-history lookup failed: ${throwable.sanitizedSummary()}")
+                emptyList()
+            }
+            scope.launch {
+                if (lookupGeneration != retryGeneration) return@launch
+                val actionableRecords = records.filter(::isHighConfidenceKnownBad)
+                val names = PlaybackCodecSelector.knownBadDecoderNames(actionableRecords)
+                val surfaces = actionableRecords.map { it.key.surfaceType }.toSet()
+                knownBadDecoderNames = names
+                knownBadSurfaceTypes = surfaces
+            }
+        }
+    }
+
+    private fun shouldUseCompatibilityHistory(): Boolean {
+        return playbackStarted ||
+            retryAttempt > 0 ||
+            videoStallRecoveryAttempt > 0 ||
+            recoveryDecoderPolicyOverride != null ||
+            textureViewSessionFallbackAttempted
     }
 
     private fun handleVideoStall() {
         val streamInfo = lastStreamInfo ?: return
         videoStallCount++
-        videoStallRecoveryAttempt++
         recordCompatibilityFailure("VIDEO_STALL")
         _playerStats.value = _playerStats.value.copy(videoStallCount = videoStallCount)
 
@@ -1195,68 +1347,101 @@ class Media3PlayerEngine @Inject constructor(
         val seekPosition = exoPlayer?.currentPosition?.takeIf { it > 0L }
         Log.w(
             TAG,
-            "video-stall attempt=$videoStallRecoveryAttempt decoder=$selectedVideoDecoderName policy=$activeDecoderPolicy surface=${_renderSurfaceType.value} target=${PlaybackLogSanitizer.sanitizeUrl(streamInfo.url)}"
+            "video-stall count=$videoStallCount recovered=$videoStallSafeRecoveryPerformed decoder=$selectedVideoDecoderName policy=$activeDecoderPolicy surface=${_renderSurfaceType.value} target=${PlaybackLogSanitizer.sanitizeUrl(streamInfo.url)}"
         )
 
-        when (videoStallRecoveryAttempt) {
-            1 -> {
-                viewBinder.attachPlayer(null)
-                viewBinder.attachPlayer(exoPlayer)
-                prepareInternal(streamInfo, preserveRetryState = true, seekPositionMs = seekPosition, autoPlay = wasPlaying)
-            }
-            2 -> {
-                activeDecoderPolicy = when (activeDecoderPolicy) {
-                    ActiveDecoderPolicy.SOFTWARE_PREFERRED -> ActiveDecoderPolicy.HARDWARE_PREFERRED
-                    else -> ActiveDecoderPolicy.SOFTWARE_PREFERRED
-                }
-                recoveryDecoderPolicyOverride = activeDecoderPolicy
-                recreatePlayer()
-                prepareInternal(streamInfo, preserveRetryState = true, seekPositionMs = seekPosition, autoPlay = wasPlaying)
-            }
-            3 -> {
-                requestedDecoderMode = DecoderMode.COMPATIBILITY
-                activeDecoderPolicy = ActiveDecoderPolicy.COMPATIBILITY
-                recoveryDecoderPolicyOverride = activeDecoderPolicy
-                updateRenderSurfaceForMode()
-                recreatePlayer()
-                prepareInternal(streamInfo, preserveRetryState = true, seekPositionMs = seekPosition, autoPlay = wasPlaying)
-            }
-            else -> {
-                _error.tryEmit(
-                    PlayerError.DecoderError(
-                        "Video decoder stalled on this device. Try Compatibility Mode, TextureView, or a lower-quality stream."
-                    )
-                )
-            }
+        if (!playbackStarted) {
+            Log.w(TAG, "video-stall ignored because playback has not started yet")
+            return
         }
+
+        videoStallRecoveryAttempt++
+        if (!videoStallSafeRecoveryPerformed) {
+            videoStallSafeRecoveryPerformed = true
+            Log.w(TAG, "video-stall safe reprepare attempt=$videoStallRecoveryAttempt")
+            prepareInternal(
+                streamInfo = streamInfo,
+                preserveRetryState = true,
+                seekPositionMs = seekPosition,
+                autoPlay = wasPlaying
+            )
+            return
+        }
+
+        if (tryVideoStallDecoderFallback(streamInfo, seekPosition, wasPlaying)) {
+            return
+        }
+
+        if (_renderSurfaceType.value == PlayerRenderSurfaceType.TEXTURE_VIEW && !textureViewSessionFallbackAttempted) {
+            fallbackTextureViewSurface("VIDEO_STALL")
+            return
+        }
+
+        _error.tryEmit(
+            PlayerError.DecoderError(
+                "Video playback stalled on this device. Try another stream or open diagnostics."
+            )
+        )
+    }
+
+    private fun tryVideoStallDecoderFallback(
+        streamInfo: StreamInfo,
+        seekPositionMs: Long?,
+        autoPlay: Boolean
+    ): Boolean {
+        val mediaId = lastMediaId ?: return false
+        val fallbackMode = decoderPreferencePolicy.onDecoderInitFailure(requestedDecoderMode, mediaId) ?: return false
+        val fallbackPolicy = resolveActiveDecoderPolicy(policyModeFor(requestedDecoderMode, fallbackMode))
+        recoveryDecoderPolicyOverride = fallbackPolicy
+        Log.w(
+            TAG,
+            "video-stall decoder fallback=$fallbackMode policy=$fallbackPolicy attempt=$videoStallRecoveryAttempt mediaId=$mediaId target=${PlaybackLogSanitizer.sanitizeUrl(streamInfo.url)}"
+        )
+        prepareInternal(
+            streamInfo = streamInfo,
+            preserveRetryState = true,
+            seekPositionMs = seekPositionMs,
+            autoPlay = autoPlay
+        )
+        return true
     }
 
     private fun recordCompatibilityFailure(failureType: String) {
         val key = currentCompatibilityKey() ?: return
         scope.launch(Dispatchers.IO) {
-            playbackCompatibilityRepository.recordFailure(key, failureType)
+            runCatching {
+                playbackCompatibilityRepository.recordFailure(key, failureType)
+            }.onFailure { throwable ->
+                Log.w(TAG, "compatibility-history failure record skipped: ${throwable.sanitizedSummary()}")
+            }
         }
     }
 
     private fun recordCompatibilitySuccess() {
         val key = currentCompatibilityKey() ?: return
         scope.launch(Dispatchers.IO) {
-            playbackCompatibilityRepository.recordSuccess(key)
+            runCatching {
+                playbackCompatibilityRepository.recordSuccess(key)
+            }.onFailure { throwable ->
+                Log.w(TAG, "compatibility-history success record skipped: ${throwable.sanitizedSummary()}")
+            }
         }
     }
 
     private fun currentCompatibilityKey(): PlaybackCompatibilityKey? {
-        val decoder = selectedVideoDecoderName.takeIf { it.isNotBlank() && it != "Unknown" } ?: return null
+        val decoder = selectedVideoDecoderName.takeUnless { it.isUnknownLike() } ?: return null
         val video = _videoFormat.value
         val width = video.width.takeIf { it > 0 } ?: _playerStats.value.width
         val mime = video.codecV ?: _playerStats.value.videoCodec
+        val videoMimeType = mime.takeUnless { it.isUnknownLike() } ?: return null
+        val resolutionBucket = resolutionBucket(width).takeUnless { it.isUnknownLike() } ?: return null
         return PlaybackCompatibilityKey(
             deviceFingerprint = Build.FINGERPRINT.orEmpty(),
             deviceModel = Build.MODEL.orEmpty(),
             androidSdk = Build.VERSION.SDK_INT,
             streamType = currentResolvedStreamType.name,
-            videoMimeType = mime.takeIf { it.isNotBlank() } ?: "unknown",
-            resolutionBucket = resolutionBucket(width),
+            videoMimeType = videoMimeType,
+            resolutionBucket = resolutionBucket,
             decoderName = decoder,
             surfaceType = _renderSurfaceType.value.name
         )
@@ -1269,6 +1454,78 @@ class Media3PlayerEngine @Inject constructor(
         width > 0 -> "SD"
         else -> "UNKNOWN"
     }
+
+    private fun isHighConfidenceKnownBad(record: PlaybackCompatibilityRecord): Boolean {
+        val key = record.key
+        if (record.failureCount < KNOWN_BAD_FAILURE_THRESHOLD) return false
+        if (record.lastSucceededAt > record.lastFailedAt) return false
+        if (key.videoMimeType.isUnknownLike()) return false
+        if (key.resolutionBucket.isUnknownLike()) return false
+        if (key.decoderName.isUnknownLike()) return false
+        if (key.surfaceType.isUnknownLike()) return false
+        return true
+    }
+
+    private fun String.isUnknownLike(): Boolean {
+        val normalized = trim().lowercase(java.util.Locale.ROOT)
+        return normalized.isEmpty() || normalized == "unknown"
+    }
+
+    private fun Throwable.sanitizedSummary(): String {
+        val type = this::class.java.simpleName.ifBlank { "Throwable" }
+        return "$type: ${PlaybackLogSanitizer.sanitizeMessage(message)}"
+    }
+
+    private fun shouldFallbackTextureViewBeforeFirstFrame(stats: PlayerStats): Boolean {
+        if (_renderSurfaceType.value != PlayerRenderSurfaceType.TEXTURE_VIEW) return false
+        if (sessionSurfaceModeOverride == PlayerSurfaceMode.SURFACE_VIEW) return false
+        if (textureViewSessionFallbackAttempted) return false
+        if (lastStreamInfo == null) return false
+        if (playbackStarted) return false
+        if (!isCurrentStreamLive()) return false
+        val state = _playbackState.value
+        if (state != PlaybackState.READY && state != PlaybackState.BUFFERING) return false
+        if (System.currentTimeMillis() - prepareStartMs < TEXTURE_VIEW_STARTUP_TIMEOUT_MS) return false
+        if (state == PlaybackState.BUFFERING && stats.bufferedDurationMs < TEXTURE_VIEW_BUFFERED_STARTUP_THRESHOLD_MS) {
+            return false
+        }
+        if (selectedVideoDecoderName == "Unknown" && state != PlaybackState.READY) return false
+        return true
+    }
+
+    private fun fallbackTextureViewSurface(reason: String) {
+        val streamInfo = lastStreamInfo ?: return
+        if (_renderSurfaceType.value != PlayerRenderSurfaceType.TEXTURE_VIEW) return
+        if (textureViewSessionFallbackAttempted) return
+
+        textureViewSessionFallbackAttempted = true
+        sessionSurfaceModeOverride = PlayerSurfaceMode.SURFACE_VIEW
+        updateRenderSurfaceForMode()
+        recordCompatibilityFailure("TEXTURE_VIEW_$reason")
+
+        val wasPlaying = exoPlayer?.playWhenReady ?: true
+        val seekPosition = exoPlayer?.currentPosition?.takeIf {
+            currentResolvedStreamType == ResolvedStreamType.PROGRESSIVE && it > 0L
+        }
+        Log.w(
+            TAG,
+            "texture-view fallback reason=$reason decoder=$selectedVideoDecoderName policy=$activeDecoderPolicy target=${PlaybackLogSanitizer.sanitizeUrl(streamInfo.url)}"
+        )
+
+        viewBinder.attachPlayer(null)
+        prepareInternal(
+            streamInfo = streamInfo,
+            preserveRetryState = true,
+            seekPositionMs = seekPosition,
+            autoPlay = wasPlaying
+        )
+    }
+
+    private fun isCurrentStreamLive(): Boolean = currentResolvedStreamType in setOf(
+        ResolvedStreamType.HLS,
+        ResolvedStreamType.MPEG_TS_LIVE,
+        ResolvedStreamType.RTSP
+    )
 
     private fun handleAudioRendererIssue(error: Exception, source: String) {
         val streamInfo = lastStreamInfo
@@ -1312,6 +1569,40 @@ class Media3PlayerEngine @Inject constructor(
         )
     }
 
+    private fun handlePlaybackSetupFailure(
+        error: Exception,
+        streamInfo: StreamInfo,
+        mediaId: String,
+        seekPositionMs: Long?,
+        autoPlay: Boolean
+    ) {
+        val category = PlayerErrorClassifier.classify(error)
+        Log.e(
+            TAG,
+            "prepare-failed category=$category decoderPreference=$activeDecoderMode activePolicy=$activeDecoderPolicy target=${PlaybackLogSanitizer.sanitizeUrl(streamInfo.url)} message=${PlaybackLogSanitizer.sanitizeMessage(error.message)}",
+            error
+        )
+
+        if (category == PlaybackErrorCategory.DECODER || category == PlaybackErrorCategory.FORMAT_UNSUPPORTED) {
+            recordCompatibilityFailure("DECODER_INIT")
+            val fallbackMode = decoderPreferencePolicy.onDecoderInitFailure(requestedDecoderMode, mediaId)
+            if (fallbackMode != null) {
+                Log.w(
+                    TAG,
+                    "decoder-setup fallback=$fallbackMode mediaId=$mediaId target=${PlaybackLogSanitizer.sanitizeUrl(streamInfo.url)}"
+                )
+                recreatePlayer()
+                prepareInternal(streamInfo, preserveRetryState = false, seekPositionMs = seekPositionMs, autoPlay = autoPlay)
+                return
+            }
+        }
+
+        recreatePlayer()
+        _retryStatus.value = null
+        _error.tryEmit(PlayerError.fromException(error))
+        _playbackState.value = PlaybackState.ERROR
+    }
+
     private fun handlePlaybackError(error: PlaybackException) {
         retryJob?.cancel()
         retryJob = null
@@ -1329,7 +1620,7 @@ class Media3PlayerEngine @Inject constructor(
         }
 
         if (category == PlaybackErrorCategory.DECODER || category == PlaybackErrorCategory.FORMAT_UNSUPPORTED) {
-            val fallbackMode = decoderPreferencePolicy.onDecoderInitFailure(activeDecoderMode, mediaId)
+            val fallbackMode = decoderPreferencePolicy.onDecoderInitFailure(requestedDecoderMode, mediaId)
             if (fallbackMode != null) {
                 Log.w(
                     TAG,

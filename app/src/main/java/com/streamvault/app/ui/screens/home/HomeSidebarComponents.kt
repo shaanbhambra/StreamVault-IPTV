@@ -41,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Border
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ClickableSurfaceDefaults
@@ -50,6 +51,7 @@ import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.streamvault.app.R
 import com.streamvault.app.device.rememberIsTelevisionDevice
+import com.streamvault.app.ui.components.FocusedMarqueeText
 import com.streamvault.app.ui.components.PlayerRenderView
 import com.streamvault.app.ui.interaction.TvButton
 import com.streamvault.app.ui.interaction.TvClickableSurface
@@ -73,9 +75,11 @@ import java.util.Date
 @Composable
 internal fun CompactSplitLauncherButton(
     slotCount: Int,
+    slotLimit: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val displaySlotCount = slotCount.coerceAtMost(slotLimit)
     TvClickableSurface(
         onClick = onClick,
         modifier = modifier
@@ -106,7 +110,7 @@ internal fun CompactSplitLauncherButton(
                 maxLines = 1
             )
             Text(
-                text = stringResource(R.string.label_slots_count, slotCount),
+                text = stringResource(R.string.label_slots_count_dynamic, displaySlotCount, slotLimit),
                 style = MaterialTheme.typography.labelSmall,
                 color = PrimaryLight,
                 maxLines = 1
@@ -123,6 +127,10 @@ internal fun LivePreviewPane(
     errorMessage: String?,
     modifier: Modifier = Modifier
 ) {
+    val renderSurfaceType by (playerEngine?.renderSurfaceType)?.collectAsStateWithLifecycle(
+        initialValue = PlayerRenderSurfaceType.SURFACE_VIEW
+    ) ?: remember { mutableStateOf(PlayerRenderSurfaceType.SURFACE_VIEW) }
+
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(18.dp),
@@ -151,7 +159,7 @@ internal fun LivePreviewPane(
                     PlayerRenderView(
                         playerEngine = playerEngine,
                         resizeMode = PlayerSurfaceResizeMode.FIT,
-                        surfaceType = PlayerRenderSurfaceType.SURFACE_VIEW,
+                        surfaceType = renderSurfaceType,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -315,11 +323,11 @@ internal fun CategoryItem(
                     modifier = Modifier.padding(end = 8.dp)
                 )
             }
-            Text(
+            FocusedMarqueeText(
                 text = category.name,
+                isFocused = isFocused,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
                 color = if (isFocused) OnBackground else if (isSelected) Primary else OnSurface,
                 modifier = Modifier.weight(1f)
             )

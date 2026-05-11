@@ -82,7 +82,15 @@ object DatabaseModule {
                 StreamVaultDatabase.MIGRATION_40_41,
                 StreamVaultDatabase.MIGRATION_41_42,
                 StreamVaultDatabase.MIGRATION_42_43,
-                StreamVaultDatabase.MIGRATION_43_44
+                StreamVaultDatabase.MIGRATION_43_44,
+                StreamVaultDatabase.MIGRATION_44_45,
+                StreamVaultDatabase.MIGRATION_45_46,
+                StreamVaultDatabase.MIGRATION_46_47,
+                StreamVaultDatabase.MIGRATION_47_48,
+                StreamVaultDatabase.MIGRATION_48_49,
+                StreamVaultDatabase.MIGRATION_49_50,
+                StreamVaultDatabase.MIGRATION_50_51,
+                StreamVaultDatabase.MIGRATION_51_52
             )
             // NOTE: fallbackToDestructiveMigration() intentionally removed.
             // All future schema changes MUST add a corresponding Migration in StreamVaultDatabase.
@@ -102,6 +110,7 @@ object DatabaseModule {
     @Provides fun providePlaybackHistoryDao(db: StreamVaultDatabase): PlaybackHistoryDao = db.playbackHistoryDao()
     @Provides fun provideTmdbIdentityDao(db: StreamVaultDatabase): TmdbIdentityDao = db.tmdbIdentityDao()
     @Provides fun provideSearchHistoryDao(db: StreamVaultDatabase): SearchHistoryDao = db.searchHistoryDao()
+    @Provides fun provideSearchDao(db: StreamVaultDatabase): SearchDao = db.searchDao()
     @Provides fun provideSyncMetadataDao(db: StreamVaultDatabase): SyncMetadataDao = db.syncMetadataDao()
     @Provides fun provideMovieCategoryHydrationDao(db: StreamVaultDatabase): MovieCategoryHydrationDao = db.movieCategoryHydrationDao()
     @Provides fun provideSeriesCategoryHydrationDao(db: StreamVaultDatabase): SeriesCategoryHydrationDao = db.seriesCategoryHydrationDao()
@@ -117,4 +126,7 @@ object DatabaseModule {
     @Provides fun provideProgramReminderDao(db: StreamVaultDatabase): ProgramReminderDao = db.programReminderDao()
     @Provides fun provideRecordingStorageDao(db: StreamVaultDatabase): RecordingStorageDao = db.recordingStorageDao()
     @Provides fun providePlaybackCompatibilityDao(db: StreamVaultDatabase): PlaybackCompatibilityDao = db.playbackCompatibilityDao()
+    @Provides fun provideXtreamContentIndexDao(db: StreamVaultDatabase): XtreamContentIndexDao = db.xtreamContentIndexDao()
+    @Provides fun provideXtreamIndexJobDao(db: StreamVaultDatabase): XtreamIndexJobDao = db.xtreamIndexJobDao()
+    @Provides fun provideXtreamLiveOnboardingDao(db: StreamVaultDatabase): XtreamLiveOnboardingDao = db.xtreamLiveOnboardingDao()
 }

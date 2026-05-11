@@ -38,14 +38,7 @@ internal fun LazyListScope.providerSection(
     onEditProvider: (Provider) -> Unit,
     onNavigateToParentalControl: (Long) -> Unit,
     viewModel: SettingsViewModel,
-    selectedCombinedProfileId: Long?,
-    onSelectedCombinedProfileIdChange: (Long?) -> Unit,
-    onPendingSyncProviderIdChange: (Long?) -> Unit,
-    onCustomSyncSelectionsChange: (Set<ProviderSyncSelection>) -> Unit,
-    onShowProviderSyncDialogChange: (Boolean) -> Unit,
-    onShowCreateCombinedDialogChange: (Boolean) -> Unit,
-    onShowRenameCombinedDialogChange: (Boolean) -> Unit,
-    onShowAddCombinedMemberDialogChange: (Boolean) -> Unit
+    providerState: SettingsProviderSectionState
 ) {
     if (uiState.providers.isEmpty()) {
         item {
@@ -94,26 +87,27 @@ internal fun LazyListScope.providerSection(
                 provider = selectedProvider,
                 isActive = selectedProvider.id == uiState.activeProviderId,
                 isSyncing = uiState.isSyncing,
+                xtreamLiveOnboardingPhase = uiState.xtreamLiveOnboardingPhaseByProvider[selectedProvider.id],
+                xtreamLiveOnboarding = uiState.xtreamLiveOnboardingByProvider[selectedProvider.id],
+                xtreamIndexSectionStatuses = uiState.xtreamIndexSectionStatusByProvider[selectedProvider.id].orEmpty(),
                 diagnostics = uiState.diagnosticsByProvider[selectedProvider.id],
                 databaseMaintenance = uiState.databaseMaintenance,
                 syncWarnings = uiState.syncWarningsByProvider[selectedProvider.id].orEmpty(),
                 onRetryWarningAction = { action -> viewModel.retryWarningAction(selectedProvider.id, action) },
                 onConnect = { viewModel.setActiveProvider(selectedProvider.id) },
                 onRefresh = {
-                    onPendingSyncProviderIdChange(selectedProvider.id)
-                    onCustomSyncSelectionsChange(
-                        buildSet {
-                            add(ProviderSyncSelection.TV)
-                            add(ProviderSyncSelection.MOVIES)
-                            add(ProviderSyncSelection.EPG)
-                            if (selectedProvider.type == ProviderType.XTREAM_CODES) {
-                                add(ProviderSyncSelection.SERIES)
-                            }
+                    providerState.pendingSyncProviderId = selectedProvider.id
+                    providerState.customSyncSelections = buildSet {
+                        add(ProviderSyncSelection.TV)
+                        add(ProviderSyncSelection.MOVIES)
+                        add(ProviderSyncSelection.EPG)
+                        if (selectedProvider.type == ProviderType.XTREAM_CODES) {
+                            add(ProviderSyncSelection.SERIES)
                         }
-                    )
-                    onShowProviderSyncDialogChange(true)
+                    }
+                    providerState.showProviderSyncDialog = true
                 },
-                onDelete = { viewModel.deleteProvider(selectedProvider.id) },
+                onDelete = { providerState.pendingDeleteProviderId = selectedProvider.id },
                 onEdit = { onEditProvider(selectedProvider) },
                 onParentalControl = { onNavigateToParentalControl(selectedProvider.id) },
                 onToggleM3uVodClassification = { enabled ->
@@ -128,24 +122,24 @@ internal fun LazyListScope.providerSection(
             CombinedM3uProfilesCard(
                 profiles = uiState.combinedProfiles,
                 availableProviders = uiState.availableM3uProviders,
-                selectedProfileId = selectedCombinedProfileId,
+                selectedProfileId = providerState.selectedCombinedProfileId,
                 activeLiveSource = uiState.activeLiveSource,
-                onSelectProfile = onSelectedCombinedProfileIdChange,
-                onCreateProfile = { onShowCreateCombinedDialogChange(true) },
+                onSelectProfile = { providerState.selectedCombinedProfileId = it },
+                onCreateProfile = { providerState.showCreateCombinedDialog = true },
                 onActivateProfile = { profileId -> viewModel.setActiveCombinedProfile(profileId) },
                 onDeleteProfile = { profileId ->
-                    if (selectedCombinedProfileId == profileId) {
-                        onSelectedCombinedProfileIdChange(null)
+                    if (providerState.selectedCombinedProfileId == profileId) {
+                        providerState.selectedCombinedProfileId = null
                     }
                     viewModel.deleteCombinedProfile(profileId)
                 },
                 onRenameProfile = { profileId ->
-                    onSelectedCombinedProfileIdChange(profileId)
-                    onShowRenameCombinedDialogChange(true)
+                    providerState.selectedCombinedProfileId = profileId
+                    providerState.showRenameCombinedDialog = true
                 },
                 onAddProvider = { profileId ->
-                    onSelectedCombinedProfileIdChange(profileId)
-                    onShowAddCombinedMemberDialogChange(true)
+                    providerState.selectedCombinedProfileId = profileId
+                    providerState.showAddCombinedMemberDialog = true
                 },
                 onRemoveProvider = { profileId, providerId ->
                     viewModel.removeProviderFromCombinedProfile(profileId, providerId)

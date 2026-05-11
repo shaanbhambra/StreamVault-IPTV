@@ -79,6 +79,7 @@ import com.streamvault.app.MainActivity
 import com.streamvault.app.cast.CastConnectionState
 import com.streamvault.app.ui.components.PlayerRenderView
 import com.streamvault.app.ui.design.requestFocusSafely
+import com.streamvault.app.ui.notifications.rememberNotificationPermissionGate
 import com.streamvault.app.ui.screens.player.overlay.ChannelInfoOverlay
 import com.streamvault.app.ui.screens.player.overlay.ChannelVariantSelectionDialog
 import com.streamvault.app.ui.screens.player.overlay.CategoryListOverlay
@@ -126,6 +127,7 @@ fun PlayerScreen(
     seriesId: Long? = null,
     seasonNumber: Int? = null,
     episodeNumber: Int? = null,
+    episodeId: Long? = null,
     returnRoute: String? = null,
     onBack: () -> Unit,
     onNavigate: ((String) -> Unit)? = null,
@@ -148,6 +150,11 @@ fun PlayerScreen(
         400.dp
     }
     val mainActivity = LocalContext.current.findMainActivity()
+    val notificationPermissionGate = rememberNotificationPermissionGate(
+        onNotificationsBlocked = { message -> viewModel.showPlayerNotice(message = message) },
+        reminderBlockedMessage = stringResource(R.string.notification_permission_reminder_required),
+        recordingBlockedMessage = stringResource(R.string.notification_permission_recording_alert_required)
+    )
     val isInPictureInPictureMode = mainActivity
         ?.pictureInPictureModeFlow
         ?.collectAsState(initial = mainActivity.isInPictureInPictureMode)
@@ -179,6 +186,7 @@ fun PlayerScreen(
     val showChannelListOverlay by viewModel.showChannelListOverlay.collectAsStateWithLifecycle()
     val showCategoryListOverlay by viewModel.showCategoryListOverlay.collectAsStateWithLifecycle()
     val availableCategories by viewModel.availableCategories.collectAsStateWithLifecycle()
+    val parentalControlLevel by viewModel.parentalControlLevel.collectAsStateWithLifecycle()
     val activeCategoryId by viewModel.activeCategoryId.collectAsStateWithLifecycle()
     val showEpgOverlay by viewModel.showEpgOverlay.collectAsStateWithLifecycle()
     val currentChannelList by viewModel.currentChannelList.collectAsStateWithLifecycle()
@@ -200,6 +208,7 @@ fun PlayerScreen(
     val isMuted by viewModel.isMuted.collectAsStateWithLifecycle()
     val mediaTitle by viewModel.mediaTitle.collectAsStateWithLifecycle()
     val playbackSpeed by viewModel.playbackSpeed.collectAsStateWithLifecycle()
+    val audioVideoSyncEnabled by viewModel.audioVideoSyncEnabled.collectAsStateWithLifecycle()
     val audioVideoOffsetState by viewModel.audioVideoOffsetUiState.collectAsStateWithLifecycle()
     val castConnectionState by viewModel.castConnectionState.collectAsStateWithLifecycle()
     val seekPreview by viewModel.seekPreview.collectAsStateWithLifecycle()
@@ -255,6 +264,13 @@ fun PlayerScreen(
         if (sleepTimerExitEvent > 0) {
             viewModel.consumeSleepTimerExitEvent()
             onBack()
+        }
+    }
+
+    LaunchedEffect(audioVideoSyncEnabled) {
+        if (!audioVideoSyncEnabled && showAudioVideoOffsetDialog) {
+            showAudioVideoOffsetDialog = false
+            viewModel.dismissAudioVideoOffsetPreview()
         }
     }
 
@@ -388,7 +404,21 @@ fun PlayerScreen(
         )
     }
 
-    LaunchedEffect(streamUrl, epgChannelId, internalChannelId, categoryId, providerId, isVirtual, combinedProfileId, combinedSourceFilterProviderId, contentType, archiveStartMs, archiveEndMs, archiveTitle, seriesId, seasonNumber, episodeNumber) {
+    val prepareIdentity = buildPlayerPrepareIdentity(
+        streamUrl = streamUrl,
+        epgChannelId = epgChannelId,
+        internalChannelId = internalChannelId,
+        categoryId = categoryId,
+        providerId = providerId,
+        isVirtual = isVirtual,
+        combinedProfileId = combinedProfileId,
+        combinedSourceFilterProviderId = combinedSourceFilterProviderId,
+        contentType = contentType,
+        archiveStartMs = archiveStartMs,
+        archiveEndMs = archiveEndMs
+    )
+
+    LaunchedEffect(prepareIdentity) {
         viewModel.prepare(
             streamUrl = streamUrl,
             epgChannelId = epgChannelId,
@@ -401,6 +431,23 @@ fun PlayerScreen(
             contentType = contentType,
             title = title,
             artworkUrl = artworkUrl,
+            archiveStartMs = archiveStartMs,
+            archiveEndMs = archiveEndMs,
+            archiveTitle = archiveTitle,
+            seriesId = seriesId,
+            seasonNumber = seasonNumber,
+            episodeNumber = episodeNumber,
+            episodeId = episodeId
+        )
+    }
+
+    LaunchedEffect(title, artworkUrl, archiveTitle, seriesId, seasonNumber, episodeNumber, prepareIdentity) {
+        viewModel.updatePreparedRouteMetadata(
+            title = title,
+            artworkUrl = artworkUrl,
+            contentType = contentType,
+            providerId = providerId ?: -1L,
+            internalChannelId = internalChannelId,
             archiveStartMs = archiveStartMs,
             archiveEndMs = archiveEndMs,
             archiveTitle = archiveTitle,
@@ -958,11 +1005,27 @@ fun PlayerScreen(
             onSeekForward = viewModel::seekForward,
             onRestartProgram = viewModel::restartCurrentProgram,
             onOpenArchive = { showProgramHistory = true },
-            onStartRecording = viewModel::startManualRecording,
+            onStartRecording = {
+                notificationPermissionGate.runRecordingAction {
+                    viewModel.startManualRecording()
+                }
+            },
             onStopRecording = viewModel::stopCurrentRecording,
-            onScheduleRecording = viewModel::scheduleRecording,
-            onScheduleDailyRecording = viewModel::scheduleDailyRecording,
-            onScheduleWeeklyRecording = viewModel::scheduleWeeklyRecording,
+            onScheduleRecording = {
+                notificationPermissionGate.runRecordingAction {
+                    viewModel.scheduleRecording()
+                }
+            },
+            onScheduleDailyRecording = {
+                notificationPermissionGate.runRecordingAction {
+                    viewModel.scheduleDailyRecording()
+                }
+            },
+            onScheduleWeeklyRecording = {
+                notificationPermissionGate.runRecordingAction {
+                    viewModel.scheduleWeeklyRecording()
+                }
+            },
             onToggleAspectRatio = viewModel::toggleAspectRatio,
             onOpenSubtitleTracks = { showTrackSelection = TrackType.TEXT },
             onOpenAudioTracks = { showTrackSelection = TrackType.AUDIO },
@@ -971,6 +1034,7 @@ fun PlayerScreen(
             onOpenStopPlaybackTimer = { showStopPlaybackTimerDialog = true },
             onOpenIdleStandbyTimer = { showIdleStandbyTimerDialog = true },
             onOpenAudioVideoSync = { showAudioVideoOffsetDialog = true },
+            audioVideoSyncEnabled = audioVideoSyncEnabled,
             showEpisodesAction = canOpenEpisodePicker,
             onOpenEpisodes = { showEpisodePicker = true },
             onOpenSplitScreen = { showSplitDialog = true },
@@ -1100,7 +1164,9 @@ fun PlayerScreen(
                 }
             )
             PlayerAudioVideoOffsetDialog(
-                visible = showAudioVideoOffsetDialog && castConnectionState != CastConnectionState.CONNECTED,
+                visible = showAudioVideoOffsetDialog &&
+                    audioVideoSyncEnabled &&
+                    castConnectionState != CastConnectionState.CONNECTED,
                 state = audioVideoOffsetState,
                 canSaveChannel = currentChannel != null,
                 onDismiss = {
@@ -1176,6 +1242,9 @@ fun PlayerScreen(
                     categories = availableCategories,
                     currentCategoryId = activeCategoryId,
                     overlayFocusRequester = categoryListFocusRequester,
+                    isCategoryLocked = { category ->
+                        parentalControlLevel in 1..2 && (category.isAdult || category.isUserProtected)
+                    },
                     onSelectCategory = { category ->
                         viewModel.selectCategoryFromOverlay(category)
                     },
@@ -1236,11 +1305,27 @@ fun PlayerScreen(
                         viewModel.openLastVisitedCategory()
                     },
                     currentRecordingStatus = currentChannelRecording?.status,
-                    onStartRecording = viewModel::startManualRecording,
+                    onStartRecording = {
+                        notificationPermissionGate.runRecordingAction {
+                            viewModel.startManualRecording()
+                        }
+                    },
                     onStopRecording = viewModel::stopCurrentRecording,
-                    onScheduleRecording = viewModel::scheduleRecording,
-                    onScheduleDailyRecording = viewModel::scheduleDailyRecording,
-                    onScheduleWeeklyRecording = viewModel::scheduleWeeklyRecording,
+                    onScheduleRecording = {
+                        notificationPermissionGate.runRecordingAction {
+                            viewModel.scheduleRecording()
+                        }
+                    },
+                    onScheduleDailyRecording = {
+                        notificationPermissionGate.runRecordingAction {
+                            viewModel.scheduleDailyRecording()
+                        }
+                    },
+                    onScheduleWeeklyRecording = {
+                        notificationPermissionGate.runRecordingAction {
+                            viewModel.scheduleWeeklyRecording()
+                        }
+                    },
                     onRestartProgram = { viewModel.restartCurrentProgram() },
                     onOpenArchive = { showProgramHistory = true },
                     onToggleAspectRatio = { viewModel.toggleAspectRatio() },
@@ -1264,6 +1349,7 @@ fun PlayerScreen(
                     onOpenVideoTracks = { showTrackSelection = TrackType.VIDEO },
                     onOpenVariants = { showVariantSelection = true },
                     onOpenAudioVideoSync = { showAudioVideoOffsetDialog = true },
+                    audioVideoSyncEnabled = audioVideoSyncEnabled,
                     onEnterPictureInPicture = enterPictureInPicture,
                     isCastConnected = castConnectionState == CastConnectionState.CONNECTED,
                     onCast = { viewModel.castCurrentMedia { mainActivity?.openCastRouteChooser() } },
@@ -1339,6 +1425,7 @@ private fun PlayerControlsOverlayHost(
     onOpenStopPlaybackTimer: () -> Unit,
     onOpenIdleStandbyTimer: () -> Unit,
     onOpenAudioVideoSync: () -> Unit,
+    audioVideoSyncEnabled: Boolean,
     showEpisodesAction: Boolean,
     onOpenEpisodes: () -> Unit,
     onOpenSplitScreen: () -> Unit,
@@ -1400,6 +1487,7 @@ private fun PlayerControlsOverlayHost(
         onOpenStopPlaybackTimer = onOpenStopPlaybackTimer,
         onOpenIdleStandbyTimer = onOpenIdleStandbyTimer,
         onOpenAudioVideoSync = onOpenAudioVideoSync,
+        audioVideoSyncEnabled = audioVideoSyncEnabled,
         showEpisodesAction = showEpisodesAction,
         onOpenEpisodes = onOpenEpisodes,
         onOpenSplitScreen = onOpenSplitScreen,

@@ -1,6 +1,7 @@
 package com.streamvault.data.remote.xtream
 
 import android.util.Log
+import com.streamvault.data.remote.http.HttpRequestProfile
 import com.streamvault.data.remote.dto.*
 import com.streamvault.data.util.AdultContentClassifier
 import com.streamvault.domain.model.*
@@ -32,10 +33,43 @@ class XtreamProvider(
     private val password: String,
     private val allowedOutputFormats: List<String> = emptyList(),
     private val useTextClassification: Boolean = true,
-    private val enableBase64TextCompatibility: Boolean = false
+    private val enableBase64TextCompatibility: Boolean = false,
+    private val requestProfile: HttpRequestProfile = HttpRequestProfile(ownerTag = "provider:$providerId/xtream")
 ) : IptvProvider {
     companion object {
         private const val TAG = "XtreamProvider"
+        private const val STREAM_SUMMARY_BATCH_SIZE = 500
+
+        /**
+         * Offset-aware formatters for Xtream EPG textual timestamps.
+         * Only [OffsetDateTime] is attempted with these; we never fall back to
+         * [LocalDateTime] on these formatters, which would silently drop the
+         * timezone and produce a time that is wrong by several hours.
+         */
+        private val xtreamEpgOffsetFormats: List<DateTimeFormatter> = listOf(
+            // ISO 8601 with colon offset: "2025-01-01T12:00:00+03:00"
+            DateTimeFormatter.ISO_OFFSET_DATE_TIME,
+            // Space-separated with colon offset: "2025-01-01 12:00:00+03:00"
+            DateTimeFormatterBuilder()
+                .parseCaseInsensitive()
+                .appendPattern("yyyy-MM-dd HH:mm:ssXXX")
+                .toFormatter(Locale.US),
+            // Space-separated with numeric offset: "2025-01-01 12:00:00+0300"
+            DateTimeFormatterBuilder()
+                .parseCaseInsensitive()
+                .appendPattern("yyyy-MM-dd HH:mm:ssxx")
+                .toFormatter(Locale.US)
+        )
+
+        /**
+         * Local (no timezone) formatters for Xtream EPG textual timestamps.
+         * Values parsed with these are assumed to be UTC, which is the
+         * convention used by Xtream Codes providers.
+         */
+        private val xtreamEpgLocalFormats: List<DateTimeFormatter> = listOf(
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.US),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+        )
     }
 
     private enum class XtreamTextDecodeMode {
@@ -53,10 +87,10 @@ class XtreamProvider(
     private var liveOutputFormats: List<String> = normalizeAllowedOutputFormats(allowedOutputFormats)
     private val adultCategoryCache = mutableMapOf<ContentType, Set<Long>>()
     private val adultCategoryCacheMutex = Mutex()
-
     override suspend fun authenticate(): Result<Provider> = try {
         val response = api.authenticate(
-            XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password)
+            XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password),
+            requestProfile
         )
         serverInfo = response.serverInfo
         liveOutputFormats = normalizeAllowedOutputFormats(response.userInfo.allowedOutputFormats)
@@ -102,7 +136,8 @@ class XtreamProvider(
 
     override suspend fun getLiveCategories(): Result<List<Category>> = try {
         val categories = api.getLiveCategories(
-            XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_live_categories")
+            XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_live_categories"),
+            requestProfile
         )
         cacheAdultCategoryIds(ContentType.LIVE, categories)
         Result.success(categories.map { it.toDomain(ContentType.LIVE) })
@@ -119,11 +154,12 @@ class XtreamProvider(
                 password = password,
                 action = "get_live_streams",
                 extraQueryParams = mapOf("category_id" to categoryId?.toString())
-            )
+            ),
+            requestProfile
         )
         Result.success(
             streams.mapNotNull { stream ->
-                runCatching { stream.toChannel(adultCategoryIds) }
+                runCatching { stream.toChannel(adultCategoryIds, includePlaybackVariants = true) }
                     .onFailure {
                         Log.w(
                             TAG,
@@ -142,7 +178,8 @@ class XtreamProvider(
 
     override suspend fun getVodCategories(): Result<List<Category>> = try {
         val categories = api.getVodCategories(
-            XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_vod_categories")
+            XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_vod_categories"),
+            requestProfile
         )
         cacheAdultCategoryIds(ContentType.MOVIE, categories)
         Result.success(categories.map { it.toDomain(ContentType.MOVIE) })
@@ -159,7 +196,8 @@ class XtreamProvider(
                 password = password,
                 action = "get_vod_streams",
                 extraQueryParams = mapOf("category_id" to categoryId?.toString())
-            )
+            ),
+            requestProfile
         )
         Result.success(
             streams.mapNotNull { stream ->
@@ -178,6 +216,42 @@ class XtreamProvider(
         Result.error(XtreamErrorFormatter.message("Failed to load VOD", e), e)
     }
 
+    suspend fun streamVodSummaries(
+        categoryId: Long? = null,
+        batchSize: Int = STREAM_SUMMARY_BATCH_SIZE,
+        adultCategoryIds: Set<Long>? = null,
+        onBatch: suspend (List<Movie>) -> Unit
+    ): Result<Int> = try {
+        val resolvedAdultCategoryIds = adultCategoryIds ?: loadAdultCategoryIds(ContentType.MOVIE)
+        val buffer = mutableListOf<Movie>()
+        var acceptedCount = 0
+        api.streamVodStreams(
+            XtreamUrlFactory.buildPlayerApiUrl(
+                serverUrl = serverUrl,
+                username = username,
+                password = password,
+                action = "get_vod_streams",
+                extraQueryParams = mapOf("category_id" to categoryId?.toString())
+            ),
+            requestProfile
+        ) { stream ->
+            mapVodStream(stream, resolvedAdultCategoryIds)?.let { movie ->
+                buffer += movie
+                acceptedCount++
+                if (buffer.size >= batchSize) {
+                    onBatch(buffer.toList())
+                    buffer.clear()
+                }
+            }
+        }
+        if (buffer.isNotEmpty()) {
+            onBatch(buffer.toList())
+        }
+        Result.success(acceptedCount)
+    } catch (e: Exception) {
+        Result.error(XtreamErrorFormatter.message("Failed to stream VOD index", e), e)
+    }
+
     override suspend fun getVodInfo(vodId: Long): Result<Movie> = try {
         val response = api.getVodInfo(
             XtreamUrlFactory.buildPlayerApiUrl(
@@ -186,7 +260,8 @@ class XtreamProvider(
                 password = password,
                 action = "get_vod_info",
                 extraQueryParams = mapOf("vod_id" to vodId.toString())
-            )
+            ),
+            requestProfile
         )
         val movieData = response.movieData
         val info = response.info
@@ -245,7 +320,8 @@ class XtreamProvider(
 
     override suspend fun getSeriesCategories(): Result<List<Category>> = try {
         val categories = api.getSeriesCategories(
-            XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_series_categories")
+            XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_series_categories"),
+            requestProfile
         )
         cacheAdultCategoryIds(ContentType.SERIES, categories)
         Result.success(categories.map { it.toDomain(ContentType.SERIES) })
@@ -262,7 +338,8 @@ class XtreamProvider(
                 password = password,
                 action = "get_series",
                 extraQueryParams = mapOf("category_id" to categoryId?.toString())
-            )
+            ),
+            requestProfile
         )
         Result.success(
             items.mapNotNull { item ->
@@ -279,6 +356,42 @@ class XtreamProvider(
         )
     } catch (e: Exception) {
         Result.error(XtreamErrorFormatter.message("Failed to load series", e), e)
+    }
+
+    suspend fun streamSeriesSummaries(
+        categoryId: Long? = null,
+        batchSize: Int = STREAM_SUMMARY_BATCH_SIZE,
+        adultCategoryIds: Set<Long>? = null,
+        onBatch: suspend (List<Series>) -> Unit
+    ): Result<Int> = try {
+        val resolvedAdultCategoryIds = adultCategoryIds ?: loadAdultCategoryIds(ContentType.SERIES)
+        val buffer = mutableListOf<Series>()
+        var acceptedCount = 0
+        api.streamSeriesList(
+            XtreamUrlFactory.buildPlayerApiUrl(
+                serverUrl = serverUrl,
+                username = username,
+                password = password,
+                action = "get_series",
+                extraQueryParams = mapOf("category_id" to categoryId?.toString())
+            ),
+            requestProfile
+        ) { item ->
+            mapSeriesItem(item, resolvedAdultCategoryIds)?.let { series ->
+                buffer += series
+                acceptedCount++
+                if (buffer.size >= batchSize) {
+                    onBatch(buffer.toList())
+                    buffer.clear()
+                }
+            }
+        }
+        if (buffer.isNotEmpty()) {
+            onBatch(buffer.toList())
+        }
+        Result.success(acceptedCount)
+    } catch (e: Exception) {
+        Result.error(XtreamErrorFormatter.message("Failed to stream series index", e), e)
     }
 
     override suspend fun getSeriesInfo(seriesId: Long): Result<Series> = try {
@@ -300,16 +413,19 @@ class XtreamProvider(
             val resolvedSeasonNumber = seasonNum.toIntOrNull() ?: episodes.firstNotNullOfOrNull { episode ->
                 episode.season.takeIf { it > 0 }
             } ?: 0
-            val mappedEpisodes = episodes.mapNotNull { ep ->
-                val episodeId = ep.id.toLongOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
+            val mappedEpisodes = episodes.mapIndexedNotNull { index, ep ->
+                val episodeId = ep.id.toLongOrNull()?.takeIf { it > 0 }
+                    ?: ep.episodeNum.takeIf { it > 0 }?.let { resolvedSeasonNumber * 10000L + it }
+                    ?: ((index + 1).let { resolvedSeasonNumber * 10000L + it })
+                val normalizedEpisodeNum = if (ep.episodeNum > 0) ep.episodeNum else index + 1
                 val normalizedExtension = normalizeContainerExtension(ep.containerExtension)
                 Episode(
                     id = episodeId,
                     title = decodeXtreamText(
-                        ep.title.ifBlank { decodeXtreamNullableText(ep.info?.name, XtreamTextDecodeMode.RAW) ?: "Episode ${ep.episodeNum}" },
+                        ep.title.ifBlank { decodeXtreamNullableText(ep.info?.name, XtreamTextDecodeMode.RAW) ?: "Episode $normalizedEpisodeNum" },
                         XtreamTextDecodeMode.RAW
                     ),
-                    episodeNumber = ep.episodeNum,
+                    episodeNumber = normalizedEpisodeNum,
                     seasonNumber = ep.season.takeIf { it > 0 } ?: resolvedSeasonNumber,
                     containerExtension = normalizedExtension,
                     coverUrl = sanitizeAssetValue(ep.info?.movieImage),
@@ -370,9 +486,10 @@ class XtreamProvider(
                 password = password,
                 action = "get_simple_data_table",
                 extraQueryParams = mapOf("stream_id" to streamId.toString())
-            )
+            ),
+            requestProfile
         )
-        Result.success(response.epgListings.map { it.toDomain() })
+        Result.success(response.epgListings.mapNotNull { it.toDomainOrNull() })
     } catch (e: Exception) {
         Result.error(XtreamErrorFormatter.message("Failed to load EPG", e), e)
     }
@@ -389,9 +506,10 @@ class XtreamProvider(
                     "stream_id" to streamId.toString(),
                     "limit" to limit.toString()
                 )
-            )
+            ),
+            requestProfile
         )
-        Result.success(response.epgListings.map { it.toDomain() })
+        Result.success(response.epgListings.mapNotNull { it.toDomainOrNull() })
     } catch (e: Exception) {
         Result.error(XtreamErrorFormatter.message("Failed to load EPG", e), e)
     }
@@ -473,7 +591,7 @@ class XtreamProvider(
     suspend fun mapLiveStreamsResponse(streams: List<XtreamStream>): List<Channel> {
         val adultCategoryIds = loadAdultCategoryIds(ContentType.LIVE)
         return streams.mapNotNull { stream ->
-            runCatching { stream.toChannel(adultCategoryIds) }
+            runCatching { stream.toChannel(adultCategoryIds, includePlaybackVariants = false) }
                 .onFailure {
                     Log.w(
                         TAG,
@@ -488,11 +606,26 @@ class XtreamProvider(
     suspend fun mapLiveStreamsSequence(streams: Sequence<XtreamStream>): Sequence<Channel> {
         val adultCategoryIds = loadAdultCategoryIds(ContentType.LIVE)
         return streams.mapNotNull { stream ->
-            runCatching { stream.toChannel(adultCategoryIds) }
+            runCatching { stream.toChannel(adultCategoryIds, includePlaybackVariants = false) }
                 .onFailure {
                     Log.w(
                         TAG,
                         "Skipping malformed live item ${stream.streamId}: " +
+                            XtreamUrlFactory.sanitizeLogMessage(it.message ?: "mapping failed")
+                    )
+                }
+                .getOrNull()
+        }
+    }
+
+    suspend fun mapLiveStreamRowsSequence(rows: Sequence<XtreamLiveStreamRow>): Sequence<Channel> {
+        val adultCategoryIds = loadAdultCategoryIds(ContentType.LIVE)
+        return rows.mapNotNull { row ->
+            runCatching { row.toChannel(adultCategoryIds) }
+                .onFailure {
+                    Log.w(
+                        TAG,
+                        "Skipping malformed live row ${row.streamId}: " +
                             XtreamUrlFactory.sanitizeLogMessage(it.message ?: "mapping failed")
                     )
                 }
@@ -520,13 +653,16 @@ class XtreamProvider(
             val categories = runCatching {
                 when (type) {
                     ContentType.LIVE -> api.getLiveCategories(
-                        XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_live_categories")
+                        XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_live_categories"),
+                        requestProfile
                     )
                     ContentType.MOVIE -> api.getVodCategories(
-                        XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_vod_categories")
+                        XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_vod_categories"),
+                        requestProfile
                     )
                     ContentType.SERIES -> api.getSeriesCategories(
-                        XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_series_categories")
+                        XtreamUrlFactory.buildPlayerApiUrl(serverUrl, username, password, action = "get_series_categories"),
+                        requestProfile
                     )
                     ContentType.SERIES_EPISODE -> emptyList()
                 }
@@ -661,24 +797,80 @@ class XtreamProvider(
         )
     }
 
-    private fun XtreamStream.toChannel(adultCategoryIds: Set<Long>): Channel? {
+    private fun XtreamStream.toChannel(
+        adultCategoryIds: Set<Long>,
+        includePlaybackVariants: Boolean
+    ): Channel? = buildLiveChannel(
+        streamId = streamId,
+        num = num,
+        name = name,
+        streamIcon = streamIcon,
+        epgChannelId = epgChannelId,
+        categoryId = primaryCategoryId(),
+        categoryName = categoryName,
+        tvArchive = tvArchive,
+        tvArchiveDuration = tvArchiveDuration,
+        containerExtension = containerExtension,
+        explicitAdult = isAdult,
+        directSource = directSource,
+        includePlaybackVariants = includePlaybackVariants,
+        adultCategoryIds = adultCategoryIds
+    )
+
+    private fun XtreamLiveStreamRow.toChannel(adultCategoryIds: Set<Long>): Channel? = buildLiveChannel(
+        streamId = streamId,
+        num = num,
+        name = name,
+        streamIcon = streamIcon,
+        epgChannelId = epgChannelId,
+        categoryId = primaryCategoryId(),
+        categoryName = categoryName,
+        tvArchive = tvArchive,
+        tvArchiveDuration = tvArchiveDuration,
+        containerExtension = containerExtension,
+        explicitAdult = isAdult,
+        directSource = null,
+        includePlaybackVariants = false,
+        adultCategoryIds = adultCategoryIds
+    )
+
+    private fun buildLiveChannel(
+        streamId: Long,
+        num: Int,
+        name: String?,
+        streamIcon: String?,
+        epgChannelId: String?,
+        categoryId: String?,
+        categoryName: String?,
+        tvArchive: Int,
+        tvArchiveDuration: Int?,
+        containerExtension: String?,
+        explicitAdult: Boolean?,
+        directSource: String?,
+        includePlaybackVariants: Boolean,
+        adultCategoryIds: Set<Long>
+    ): Channel? {
         if (streamId <= 0) return null
         val category = resolveXtreamCategory(ContentType.LIVE, categoryId, categoryName)
         val primaryContainerExtension = preferredLiveContainerExtension(containerExtension)
         val resolvedName = decodeXtreamNullableText(name, XtreamTextDecodeMode.RAW)?.ifBlank { null } ?: "Channel $streamId"
         val sanitizedLogoUrl = sanitizeAssetValue(streamIcon)
         val sanitizedEpgChannelId = decodeXtreamNullableText(epgChannelId, XtreamTextDecodeMode.RAW)
-        val sanitizedDirectSource = sanitizeAssetValue(directSource)
+        val sanitizedDirectSource = if (includePlaybackVariants) sanitizeAssetValue(directSource) else null
         val streamUrl = buildInternalLiveStreamUrl(
             streamId = streamId,
             containerExtension = primaryContainerExtension,
             directSource = sanitizedDirectSource
         )
-        val qualityOptions = buildLiveQualityOptions(
-            streamId = streamId,
-            primaryContainerExtension = primaryContainerExtension,
-            directSource = sanitizedDirectSource
-        )
+        val qualityOptions = if (includePlaybackVariants) {
+            buildLiveQualityOptions(
+                streamId = streamId,
+                primaryContainerExtension = primaryContainerExtension,
+                directSource = sanitizedDirectSource
+            )
+        } else {
+            emptyList()
+        }
         return Channel(
             id = 0,
             name = resolvedName,
@@ -692,7 +884,7 @@ class XtreamProvider(
             providerId = providerId,
             streamUrl = streamUrl,
             isAdult = resolveAdultFlag(
-                explicitAdult = isAdult,
+                explicitAdult = explicitAdult,
                 categoryId = category.id,
                 categoryName = category.name,
                 adultCategoryIds = adultCategoryIds
@@ -700,14 +892,18 @@ class XtreamProvider(
             isUserProtected = false,
             logicalGroupId = ChannelNormalizer.getLogicalGroupId(resolvedName, providerId),
             qualityOptions = qualityOptions,
-            alternativeStreams = qualityOptions.mapNotNull { it.url }.filter { it != streamUrl },
+            alternativeStreams = if (includePlaybackVariants) {
+                qualityOptions.mapNotNull { it.url }.filter { it != streamUrl }
+            } else {
+                emptyList()
+            },
             streamId = streamId
         )
     }
 
     private fun XtreamStream.toMovie(adultCategoryIds: Set<Long>): Movie? {
         if (streamId <= 0) return null
-        val category = resolveXtreamCategory(ContentType.MOVIE, categoryId, categoryName)
+        val category = resolveXtreamCategory(ContentType.MOVIE, primaryCategoryId(), categoryName)
         val resolvedName = decodeXtreamNullableText(name, XtreamTextDecodeMode.RAW)?.ifBlank { null } ?: "Movie $streamId"
         val normalizedContainerExtension = normalizeContainerExtension(containerExtension)
         val sanitizedDirectSource = sanitizeAssetValue(directSource)
@@ -843,7 +1039,8 @@ class XtreamProvider(
                 password = password,
                 action = "get_series_info",
                 extraQueryParams = mapOf(queryParamName to seriesId.toString())
-            )
+            ),
+            requestProfile
         )
     }
 
@@ -871,7 +1068,18 @@ class XtreamProvider(
         )
     }
 
-    private fun XtreamEpgListing.toDomain(): Program {
+    private fun XtreamEpgListing.toDomainOrNull(): Program? {
+        // Resolve start and end independently: use the numeric timestamp when present
+        // (> 0), otherwise fall back to the textual field. Using per-field resolution
+        // prevents a valid numeric startTimestamp from being discarded just because
+        // stopTimestamp is absent (some providers omit one but not the other).
+        val resolvedStart = if (startTimestamp > 0L) startTimestamp * 1000L
+                            else parseXtreamEpgTimestamp(start)
+        val resolvedEnd   = if (stopTimestamp  > 0L) stopTimestamp  * 1000L
+                            else parseXtreamEpgTimestamp(end)
+        // Skip silently rather than emitting an epoch-zero programme that corrupts the guide.
+        if (resolvedStart <= 0L || resolvedEnd <= resolvedStart) return null
+
         // Xtream sometimes base64-encodes title and description
         val decodedTitle = decodeXtreamText(title, XtreamTextDecodeMode.EPG)
         val decodedDescription = decodeXtreamText(description, XtreamTextDecodeMode.EPG)
@@ -881,14 +1089,47 @@ class XtreamProvider(
             channelId = channelId,
             title = decodedTitle,
             description = decodedDescription,
-            startTime = startTimestamp * 1000L,
-            endTime = stopTimestamp * 1000L,
+            startTime = resolvedStart,
+            endTime = resolvedEnd,
             lang = lang,
             category = null,
             hasArchive = hasArchive == 1,
             isNowPlaying = nowPlaying == 1,
             providerId = providerId
         )
+    }
+
+    /**
+     * Parses an Xtream EPG time value which may be:
+     * - A numeric epoch-seconds string (e.g. `"1735726800"`)
+     * - An ISO-style date-time with timezone offset (e.g. `"2025-01-01T12:00:00+03:00"`)
+     * - An ISO-style local date-time, assumed UTC (e.g. `"2025-01-01 12:00:00"`)
+     *
+     * Offset-aware formats are tried first so that a valid `+HH:mm` suffix is never
+     * silently dropped. Local formats are only tried after all offset paths fail.
+     *
+     * Returns epoch-milliseconds, or 0 if the value cannot be parsed.
+     */
+    private fun parseXtreamEpgTimestamp(value: String): Long {
+        if (value.isBlank()) return 0L
+        val trimmed = value.trim()
+        // Numeric string: epoch seconds (must be > 0 to exclude placeholder zeroes)
+        trimmed.toLongOrNull()?.takeIf { it > 0L }?.let { return it * 1000L }
+        // Offset-aware text timestamps: use OffsetDateTime only — never LocalDateTime
+        // on these formatters, because LocalDateTime.from(OffsetDateTime) strips the
+        // offset and would return a time that is wrong by the provider's UTC offset.
+        xtreamEpgOffsetFormats.forEach { formatter ->
+            runCatching {
+                OffsetDateTime.parse(trimmed, formatter).toInstant().toEpochMilli()
+            }.getOrNull()?.let { return it }
+        }
+        // Local text timestamps: UTC is assumed (Xtream convention)
+        xtreamEpgLocalFormats.forEach { formatter ->
+            runCatching {
+                LocalDateTime.parse(trimmed, formatter).toInstant(ZoneOffset.UTC).toEpochMilli()
+            }.getOrNull()?.let { return it }
+        }
+        return 0L
     }
 
     private fun decodeXtreamNullableText(
@@ -953,6 +1194,31 @@ class XtreamProvider(
             ResolvedXtreamCategory(id = null, name = null)
         }
     }
+
+    private fun XtreamStream.primaryCategoryId(): String? {
+        return primaryCategoryId(categoryId, categoryIds)
+    }
+
+    private fun XtreamLiveStreamRow.primaryCategoryId(): String? {
+        return primaryCategoryId(categoryId, categoryIds)
+    }
+
+    private fun primaryCategoryId(categoryId: String?, categoryIds: List<String>?): String? {
+        val normalizedCategoryId = categoryId.normalizedCategoryToken()
+        val firstAlternateCategoryId = categoryIds.orEmpty()
+            .mapNotNull { it.normalizedCategoryToken() }
+            .firstOrNull { it != "0" }
+            ?: categoryIds.orEmpty().firstNotNullOfOrNull { it.normalizedCategoryToken() }
+        return when {
+            normalizedCategoryId == null -> firstAlternateCategoryId
+            normalizedCategoryId == "0" && firstAlternateCategoryId != null && firstAlternateCategoryId != "0" -> firstAlternateCategoryId
+            else -> normalizedCategoryId
+        }
+    }
+
+    private fun String?.normalizedCategoryToken(): String? = this
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() && !it.equals("null", ignoreCase = true) }
 
     private fun syntheticCategoryId(type: ContentType, seed: String): Long {
         val normalized = "$providerId/${type.name}/${seed.trim().lowercase(Locale.ROOT)}"

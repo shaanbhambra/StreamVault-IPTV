@@ -7,6 +7,7 @@ import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
+import com.streamvault.app.diagnostics.CrashReportStore
 import com.streamvault.app.diagnostics.RuntimeDiagnosticsManager
 import com.streamvault.app.update.GitHubReleaseChecker
 import com.streamvault.app.ui.accessibility.isReducedMotionEnabled
@@ -27,6 +28,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.streamvault.data.manager.recording.RecordingReconcileWorker
 import com.streamvault.data.sync.ProviderSyncWorker
+import com.streamvault.data.sync.XtreamIndexWorker
 import com.streamvault.player.timeshift.TimeshiftDiskManager
 import javax.inject.Inject
 
@@ -43,6 +45,7 @@ class StreamVaultApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        CrashReportStore.install(this)
         runtimeDiagnosticsManager.start()
         applicationScope.launch {
             // Clean up any timeshift temp directories left behind by crashes, OOM kills, or
@@ -72,6 +75,9 @@ class StreamVaultApp : Application(), SingletonImageLoader.Factory {
         )
 
         ProviderSyncWorker.enqueuePeriodic(this)
+        ProviderSyncWorker.enqueueLaunchStaleCheck(this)
+        XtreamIndexWorker.enqueuePeriodic(this)
+        XtreamIndexWorker.enqueueLaunchStaleCheck(this)
         RecordingReconcileWorker.enqueuePeriodic(this)
         RecordingReconcileWorker.enqueueOneShot(this)
     }

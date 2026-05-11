@@ -3,8 +3,11 @@ package com.streamvault.data.repository
 import com.streamvault.data.local.DatabaseTransactionRunner
 import com.streamvault.data.local.dao.*
 import com.streamvault.data.local.entity.ProviderEntity
+import com.streamvault.data.manager.recording.RecordingAlarmScheduler
+import com.streamvault.data.manager.reminder.ProgramReminderAlarmScheduler
 import com.streamvault.data.mapper.*
 import com.streamvault.data.preferences.PreferencesRepository
+import com.streamvault.data.remote.http.buildGenericProviderRequestProfile
 import com.streamvault.data.remote.stalker.StalkerApiService
 import com.streamvault.data.remote.stalker.StalkerProvider
 import com.streamvault.data.remote.xtream.XtreamApiService
@@ -12,6 +15,7 @@ import com.streamvault.data.remote.xtream.XtreamProvider
 import com.streamvault.data.security.CredentialCrypto
 import com.streamvault.data.security.CredentialDecryptionException
 import com.streamvault.data.sync.SyncManager
+import com.streamvault.data.sync.hasUsableLiveCatalogForActivation
 import com.streamvault.data.util.ProviderInputSanitizer
 import com.streamvault.data.util.UrlSecurityPolicy
 import com.streamvault.domain.model.*
@@ -30,6 +34,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import java.util.logging.Logger
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -38,17 +43,22 @@ class ProviderRepositoryImpl @Inject constructor(
     private val providerDao: ProviderDao,
     private val channelDao: ChannelDao,
     private val programDao: ProgramDao,
+    private val recordingRunDao: RecordingRunDao,
+    private val programReminderDao: ProgramReminderDao,
     private val stalkerApiService: StalkerApiService,
     private val xtreamApiService: XtreamApiService,
     private val credentialCrypto: CredentialCrypto,
     private val preferencesRepository: PreferencesRepository,
     private val syncManager: SyncManager,
     private val syncMetadataRepository: SyncMetadataRepository,
-    private val transactionRunner: DatabaseTransactionRunner
+    private val transactionRunner: DatabaseTransactionRunner,
+    private val recordingAlarmScheduler: RecordingAlarmScheduler,
+    private val programReminderAlarmScheduler: ProgramReminderAlarmScheduler
 ) : ProviderRepository {
     private companion object {
         const val XTREAM_GUIDE_BATCH_CONCURRENCY = 4
         const val BACKGROUND_EPG_START_DELAY_MS = 15_000L
+        val logger: Logger = Logger.getLogger(ProviderRepositoryImpl::class.java.name)
     }
 
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -77,20 +87,50 @@ class ProviderRepositoryImpl @Inject constructor(
     }
 
     override suspend fun deleteProvider(id: Long): Result<Unit> = try {
-        // ProgramEntity still has no provider FK, so it requires explicit cleanup.
-        programDao.deleteByProvider(id)
-        providerDao.delete(id)
-        syncManager.onProviderDeleted(id)
+        val recordingRunIds = recordingRunDao.getIdsByProvider(id)
+        val reminderIds = programReminderDao.getIdsByProvider(id)
+        transactionRunner.inTransaction {
+            // ProgramEntity still has no provider FK, so it requires explicit cleanup.
+            programDao.deleteByProvider(id)
+            providerDao.delete(id)
+        }
+        recordingRunIds.forEach { runId ->
+            runPostDeleteCleanup("recording alarm $runId") {
+                recordingAlarmScheduler.cancel(runId)
+            }
+        }
+        reminderIds.forEach { reminderId ->
+            runPostDeleteCleanup("reminder alarm $reminderId") {
+                programReminderAlarmScheduler.cancel(reminderId)
+            }
+        }
+        runPostDeleteCleanup("provider sync cleanup $id") {
+            syncManager.onProviderDeleted(id)
+        }
         Result.success(Unit)
     } catch (e: Exception) {
         Result.error("Failed to delete provider: ${e.message}", e)
     }
 
-    override suspend fun setActiveProvider(id: Long): Result<Unit> = try {
-        providerDao.setActive(id)
-        Result.success(Unit)
-    } catch (e: Exception) {
-        Result.error("Failed to set active provider: ${e.message}", e)
+    private inline fun runPostDeleteCleanup(step: String, block: () -> Unit) {
+        runCatching(block).onFailure { throwable ->
+            logger.warning("Provider delete committed but post-delete cleanup failed for $step: ${throwable.message}")
+        }
+    }
+
+    override suspend fun setActiveProvider(id: Long): Result<Unit> {
+        return try {
+            val provider = providerDao.getById(id)
+                ?: return Result.error("Provider not found")
+            if (!hasUsableLiveCatalogForActivation(id, provider.type, channelDao)) {
+                syncManager.scheduleProviderSyncResume(id)
+                return Result.error("Provider is saved but Live TV is still importing. Sync will resume in background.")
+            }
+            providerDao.setActive(id)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.error("Failed to set active provider: ${e.message}", e)
+        }
     }
 
     override suspend fun loginXtream(
@@ -98,8 +138,11 @@ class ProviderRepositoryImpl @Inject constructor(
         username: String,
         password: String,
         name: String,
+        httpUserAgent: String,
+        httpHeaders: String,
         xtreamFastSyncEnabled: Boolean,
         epgSyncMode: ProviderEpgSyncMode,
+        xtreamLiveSyncMode: com.streamvault.domain.model.ProviderXtreamLiveSyncMode,
         onProgress: ((String) -> Unit)?,
         id: Long?
     ): Result<Provider> {
@@ -115,6 +158,12 @@ class ProviderRepositoryImpl @Inject constructor(
         }
         onProgress?.invoke("Authenticating...")
         val existingProvider = if (id != null) {
+            // Edit path: check that the new normalized identity does not collide with a
+            // different provider before we commit the update.
+            val collision = providerDao.getByUrlAndUser(normalizedServerUrl, normalizedUsername)
+            if (collision != null && collision.id != id) {
+                return Result.error("A provider with this server URL and username already exists.")
+            }
             providerDao.getById(id)
         } else {
             providerDao.getByUrlAndUser(normalizedServerUrl, normalizedUsername)
@@ -126,7 +175,14 @@ class ProviderRepositoryImpl @Inject constructor(
         } catch (e: CredentialDecryptionException) {
             return Result.error(e.message ?: CredentialDecryptionException.MESSAGE, e)
         }
-        val provider = createXtreamProvider(0, normalizedServerUrl, normalizedUsername, effectivePassword)
+        val provider = createXtreamProvider(
+            providerId = 0,
+            serverUrl = normalizedServerUrl,
+            username = normalizedUsername,
+            password = effectivePassword,
+            httpUserAgent = httpUserAgent,
+            httpHeaders = httpHeaders
+        )
         return when (val authResult = provider.authenticate()) {
             is Result.Success -> {
                 val providerData = if (existingProvider != null) {
@@ -137,9 +193,13 @@ class ProviderRepositoryImpl @Inject constructor(
                         serverUrl = normalizedServerUrl,
                         username = normalizedUsername,
                         password = effectivePassword,
+                        httpUserAgent = httpUserAgent,
+                        httpHeaders = httpHeaders,
                         epgSyncMode = epgSyncMode,
-                        xtreamFastSyncEnabled = xtreamFastSyncEnabled,
-                        isActive = true,
+                        xtreamLiveSyncMode = xtreamLiveSyncMode,
+                        xtreamFastSyncEnabled = false,
+                        isActive = false,
+                        status = ProviderStatus.PARTIAL,
                         lastSyncedAt = 0,
                         createdAt = existingProvider.createdAt
                     )
@@ -148,34 +208,28 @@ class ProviderRepositoryImpl @Inject constructor(
                 } else {
                     val newData = authResult.data.copy(
                         name = normalizedName.ifBlank { authResult.data.name },
+                        httpUserAgent = httpUserAgent,
+                        httpHeaders = httpHeaders,
                         epgSyncMode = epgSyncMode,
-                        xtreamFastSyncEnabled = xtreamFastSyncEnabled
+                        xtreamLiveSyncMode = xtreamLiveSyncMode,
+                        xtreamFastSyncEnabled = false,
+                        isActive = false,
+                        status = ProviderStatus.PARTIAL
                     )
                     val newId = providerDao.insert(newData.toSecureEntity())
                     newData.copy(id = newId).copy(password = "")
                 }
 
-                providerDao.setActive(providerData.id)
-                when (val syncResult = syncManager.sync(providerData.id, force = false, onProgress = onProgress)) {
-                    is Result.Success -> {
-                        val finalStatus = if (syncManager.currentSyncState(providerData.id) is SyncState.Partial) {
-                            ProviderStatus.PARTIAL
-                        } else {
-                            ProviderStatus.ACTIVE
-                        }
-                        updateProviderSyncStatus(providerData.id, finalStatus, System.currentTimeMillis())
-                        maybeScheduleBackgroundEpgSync(providerData.id)
-                        Result.success(providerData.copy(status = finalStatus))
-                    }
-                    is Result.Error -> {
-                        updateProviderSyncStatus(providerData.id, ProviderStatus.ERROR)
-                        Result.error(
-                            "Provider login succeeded, but initial sync failed. The provider was saved and can be retried from Settings: ${syncResult.message}",
-                            syncResult.exception
-                        )
-                    }
-                    is Result.Loading -> Result.error("Unexpected loading state")
-                }
+                handleInitialOnboardingSync(
+                    providerData = providerData,
+                    syncResult = syncManager.sync(
+                        providerData.id,
+                        force = false,
+                        onProgress = onProgress,
+                        trackInitialLiveOnboarding = true
+                    ),
+                    syncFailurePrefix = "Provider login succeeded, but initial sync failed. The provider was saved and can be retried from Settings"
+                )
             }
             is Result.Error -> Result.error(authResult.message, authResult.exception)
             is Result.Loading -> Result.error("Unexpected loading state")
@@ -185,6 +239,8 @@ class ProviderRepositoryImpl @Inject constructor(
     override suspend fun validateM3u(
         url: String,
         name: String,
+        httpUserAgent: String,
+        httpHeaders: String,
         epgSyncMode: ProviderEpgSyncMode,
         m3uVodClassificationEnabled: Boolean,
         onProgress: ((String) -> Unit)?,
@@ -205,6 +261,12 @@ class ProviderRepositoryImpl @Inject constructor(
         }
 
         val existingProvider = if (id != null) {
+            // Edit path: check that the new normalized URL does not collide with a different
+            // provider before we commit the update.
+            val collision = providerDao.getByUrlAndUser(normalizedUrl, "")
+            if (collision != null && collision.id != id) {
+                return Result.error("A playlist provider with this URL already exists.")
+            }
             providerDao.getById(id)
         } else {
             providerDao.getByUrlAndUser(normalizedUrl, "")
@@ -215,9 +277,12 @@ class ProviderRepositoryImpl @Inject constructor(
                 name = if (normalizedName.isNotBlank()) normalizedName else existingProvider.name,
                 serverUrl = normalizedUrl,
                 m3uUrl = normalizedUrl,
+                httpUserAgent = httpUserAgent,
+                httpHeaders = httpHeaders,
                 epgSyncMode = epgSyncMode,
                 m3uVodClassificationEnabled = m3uVodClassificationEnabled,
-                isActive = true,
+                isActive = false,
+                status = ProviderStatus.PARTIAL,
                 lastSyncedAt = 0
             )
             providerDao.update(updated)
@@ -228,36 +293,22 @@ class ProviderRepositoryImpl @Inject constructor(
                 type = ProviderType.M3U,
                 serverUrl = normalizedUrl,
                 m3uUrl = normalizedUrl,
+                httpUserAgent = httpUserAgent,
+                httpHeaders = httpHeaders,
                 epgSyncMode = epgSyncMode,
                 m3uVodClassificationEnabled = m3uVodClassificationEnabled,
-                status = ProviderStatus.ACTIVE
+                isActive = false,
+                status = ProviderStatus.PARTIAL
             )
             val newId = providerDao.insert(provider.toSecureEntity())
             provider.copy(id = newId).copy(password = "")
         }
 
-        providerDao.deactivateAll()
-        providerDao.activate(providerData.id)
-        when (val syncResult = syncManager.sync(providerData.id, force = false, onProgress = onProgress)) {
-            is Result.Success -> {
-                val finalStatus = if (syncManager.currentSyncState(providerData.id) is SyncState.Partial) {
-                    ProviderStatus.PARTIAL
-                } else {
-                    ProviderStatus.ACTIVE
-                }
-                updateProviderSyncStatus(providerData.id, finalStatus, System.currentTimeMillis())
-                maybeScheduleBackgroundEpgSync(providerData.id)
-                Result.success(providerData.copy(status = finalStatus))
-            }
-            is Result.Error -> {
-                updateProviderSyncStatus(providerData.id, ProviderStatus.ERROR)
-                Result.error(
-                    "Playlist saved, but initial sync failed. The provider was saved and can be retried from Settings: ${syncResult.message}",
-                    syncResult.exception
-                )
-            }
-            is Result.Loading -> Result.error("Unexpected loading state")
-        }
+        handleInitialOnboardingSync(
+            providerData = providerData,
+            syncResult = syncManager.sync(providerData.id, force = false, onProgress = onProgress),
+            syncFailurePrefix = "Playlist saved, but initial sync failed. The provider was saved and can be retried from Settings"
+        )
     } catch (e: Exception) {
         Result.error("Failed to add M3U provider: ${e.message}", e)
     }
@@ -292,6 +343,12 @@ class ProviderRepositoryImpl @Inject constructor(
 
         onProgress?.invoke("Authenticating...")
         val existingProvider = if (id != null) {
+            // Edit path: check that the new normalized identity does not collide with a
+            // different provider before we commit the update.
+            val collision = providerDao.getByUrlAndUser(normalizedPortalUrl, "", normalizedMacAddress)
+            if (collision != null && collision.id != id) {
+                return Result.error("A Stalker provider with this portal URL and MAC address already exists.")
+            }
             providerDao.getById(id)
         } else {
             providerDao.getByUrlAndUser(normalizedPortalUrl, "", normalizedMacAddress)
@@ -322,7 +379,8 @@ class ProviderRepositoryImpl @Inject constructor(
                         epgSyncMode = epgSyncMode,
                         xtreamFastSyncEnabled = false,
                         m3uVodClassificationEnabled = false,
-                        isActive = true,
+                        isActive = false,
+                        status = ProviderStatus.PARTIAL,
                         lastSyncedAt = 0L,
                         createdAt = existingProvider.createdAt
                     )
@@ -338,37 +396,77 @@ class ProviderRepositoryImpl @Inject constructor(
                         stalkerDeviceLocale = normalizedLocale,
                         epgSyncMode = epgSyncMode,
                         xtreamFastSyncEnabled = false,
-                        m3uVodClassificationEnabled = false
+                        m3uVodClassificationEnabled = false,
+                        isActive = false,
+                        status = ProviderStatus.PARTIAL
                     )
                     val newId = providerDao.insert(newData.toSecureEntity())
                     newData.copy(id = newId).copy(password = "")
                 }
 
-                providerDao.setActive(providerData.id)
-                when (val syncResult = syncManager.sync(providerData.id, force = false, onProgress = onProgress)) {
-                    is Result.Success -> {
-                        val finalStatus = if (syncManager.currentSyncState(providerData.id) is SyncState.Partial) {
-                            ProviderStatus.PARTIAL
-                        } else {
-                            ProviderStatus.ACTIVE
-                        }
-                        updateProviderSyncStatus(providerData.id, finalStatus, System.currentTimeMillis())
-                        maybeScheduleBackgroundEpgSync(providerData.id)
-                        Result.success(providerData.copy(status = finalStatus))
-                    }
-                    is Result.Error -> {
-                        updateProviderSyncStatus(providerData.id, ProviderStatus.ERROR)
-                        Result.error(
-                            "Provider login succeeded, but initial sync failed. The provider was saved and can be retried from Settings: ${syncResult.message}",
-                            syncResult.exception
-                        )
-                    }
-                    is Result.Loading -> Result.error("Unexpected loading state")
-                }
+                handleInitialOnboardingSync(
+                    providerData = providerData,
+                    syncResult = syncManager.sync(providerData.id, force = false, onProgress = onProgress),
+                    syncFailurePrefix = "Provider login succeeded, but initial sync failed. The provider was saved and can be retried from Settings"
+                )
             }
             is Result.Error -> Result.error(authResult.message, authResult.exception)
             is Result.Loading -> Result.error("Unexpected loading state")
         }
+    }
+
+    private suspend fun handleInitialOnboardingSync(
+        providerData: Provider,
+        syncResult: Result<Unit>,
+        syncFailurePrefix: String
+    ): Result<Provider> = when (syncResult) {
+        is Result.Success -> {
+            val finalStatus = if (syncManager.currentSyncState(providerData.id) is SyncState.Partial) {
+                ProviderStatus.PARTIAL
+            } else {
+                ProviderStatus.ACTIVE
+            }
+            if (!hasUsableLiveCatalogForActivation(providerData.id, providerData.type, channelDao)) {
+                updateProviderSyncStatus(
+                    providerData.id,
+                    ProviderStatus.PARTIAL,
+                    lastSyncedAt = System.currentTimeMillis(),
+                    isActive = false
+                )
+                syncManager.scheduleProviderSyncResume(providerData.id)
+                val message = "$syncFailurePrefix: Live TV did not finish with any committed channels."
+                Result.error(
+                    message,
+                    ProviderSavedWithSyncErrorException(
+                        provider = providerData.copy(status = ProviderStatus.PARTIAL, isActive = false),
+                        message = message
+                    )
+                )
+            } else {
+                providerDao.setActive(providerData.id)
+                updateProviderSyncStatus(
+                    providerData.id,
+                    finalStatus,
+                    lastSyncedAt = System.currentTimeMillis()
+                )
+                maybeScheduleBackgroundEpgSync(providerData.id)
+                Result.success(providerData.copy(status = finalStatus, isActive = true))
+            }
+        }
+        is Result.Error -> {
+            updateProviderSyncStatus(providerData.id, ProviderStatus.PARTIAL, isActive = false)
+            syncManager.scheduleProviderSyncResume(providerData.id)
+            val message = "$syncFailurePrefix: ${syncResult.message}"
+            Result.error(
+                message,
+                ProviderSavedWithSyncErrorException(
+                    provider = providerData.copy(status = ProviderStatus.PARTIAL, isActive = false),
+                    message = message,
+                    cause = syncResult.exception
+                )
+            )
+        }
+        is Result.Loading -> Result.error("Unexpected loading state")
     }
 
     /**
@@ -396,8 +494,19 @@ class ProviderRepositoryImpl @Inject constructor(
                 } else {
                     ProviderStatus.ACTIVE
                 }
-                updateProviderSyncStatus(providerId, finalStatus, System.currentTimeMillis())
-                maybeScheduleBackgroundEpgSync(providerId)
+                val provider = providerDao.getById(providerId)
+                if (provider != null && !hasUsableLiveCatalogForActivation(providerId, provider.type, channelDao)) {
+                    updateProviderSyncStatus(
+                        providerId,
+                        ProviderStatus.PARTIAL,
+                        lastSyncedAt = System.currentTimeMillis(),
+                        isActive = false
+                    )
+                    syncManager.scheduleProviderSyncResume(providerId)
+                } else {
+                    updateProviderSyncStatus(providerId, finalStatus, System.currentTimeMillis())
+                    maybeScheduleBackgroundEpgSync(providerId)
+                }
                 syncResult
             }
             is Result.Error -> {
@@ -543,7 +652,9 @@ class ProviderRepositoryImpl @Inject constructor(
                 serverUrl = provider.serverUrl,
                 username = provider.username,
                 password = providerPassword,
-                allowedOutputFormats = provider.allowedOutputFormats
+                allowedOutputFormats = provider.allowedOutputFormats,
+                httpUserAgent = provider.httpUserAgent,
+                httpHeaders = provider.httpHeaders
             ).buildCatchUpUrls(resolvedStreamId, start, end)
             ProviderType.M3U -> {
                 val source = channel?.catchUpSource ?: return emptyList()
@@ -558,7 +669,9 @@ class ProviderRepositoryImpl @Inject constructor(
         serverUrl: String,
         username: String,
         password: String,
-        allowedOutputFormats: List<String> = emptyList()
+        allowedOutputFormats: List<String> = emptyList(),
+        httpUserAgent: String = "",
+        httpHeaders: String = ""
     ): IptvProvider {
         val enableBase64TextCompatibility = preferencesRepository.xtreamBase64TextCompatibility.first()
         return XtreamProvider(
@@ -568,7 +681,12 @@ class ProviderRepositoryImpl @Inject constructor(
             username = username,
             password = password,
             allowedOutputFormats = allowedOutputFormats,
-            enableBase64TextCompatibility = enableBase64TextCompatibility
+            enableBase64TextCompatibility = enableBase64TextCompatibility,
+            requestProfile = buildGenericProviderRequestProfile(
+                ownerTag = "provider:$providerId/xtream",
+                httpUserAgent = httpUserAgent,
+                httpHeaders = httpHeaders
+            )
         )
     }
 
@@ -630,7 +748,9 @@ class ProviderRepositoryImpl @Inject constructor(
                 serverUrl = provider.serverUrl,
                 username = provider.username,
                 password = providerPassword,
-                allowedOutputFormats = provider.allowedOutputFormats
+                allowedOutputFormats = provider.allowedOutputFormats,
+                httpUserAgent = provider.httpUserAgent,
+                httpHeaders = provider.httpHeaders
             ) as XtreamProvider
         )
     }
@@ -695,12 +815,14 @@ class ProviderRepositoryImpl @Inject constructor(
     private suspend fun updateProviderSyncStatus(
         providerId: Long,
         status: ProviderStatus,
-        lastSyncedAt: Long? = null
+        lastSyncedAt: Long? = null,
+        isActive: Boolean? = null
     ) {
         val current = providerDao.getById(providerId) ?: return
         val updated = current.copy(
             status = status,
-            lastSyncedAt = lastSyncedAt ?: current.lastSyncedAt
+            lastSyncedAt = lastSyncedAt ?: current.lastSyncedAt,
+            isActive = isActive ?: current.isActive
         )
         providerDao.update(updated)
     }

@@ -51,6 +51,14 @@ internal class SyncManagerXtreamSupport(
         while (nextIndex < categories.size && !stoppedEarly) {
             val windowConcurrency = if (forceSequential) 1 else initialConcurrency
             val window = categories.subList(nextIndex, minOf(nextIndex + windowConcurrency, categories.size))
+            val startingCategoryNumber = nextIndex + 1
+            val endingCategoryNumber = nextIndex + window.size
+            val windowLabel = if (startingCategoryNumber == endingCategoryNumber) {
+                startingCategoryNumber.toString()
+            } else {
+                "$startingCategoryNumber-$endingCategoryNumber"
+            }
+            progress(provider.id, onProgress, "Downloading $sectionLabel by category $windowLabel/${categories.size}...")
             val windowOutcomes = coroutineScope {
                 window.map { category ->
                     async { fetch(category) }
@@ -95,42 +103,6 @@ internal class SyncManagerXtreamSupport(
         }
 
         return CategoryExecutionPlan(outcomes = outcomes, warnings = warnings.distinct())
-    }
-
-    fun <T> evaluatePageRecoveryPlan(
-        provider: Provider,
-        sectionLabel: String,
-        pageWindow: List<Int>,
-        outcomes: List<TimedPageOutcome<T>>,
-        sequentialModeWarning: String
-    ): PageExecutionPlan<T> {
-        if (pageWindow.isEmpty()) {
-            return PageExecutionPlan(emptyList())
-        }
-        val warnings = mutableListOf<String>()
-        val stressFailures = outcomes.count { outcome ->
-            (outcome.outcome as? PageFetchOutcome.Failure)
-                ?.error
-                ?.let(shouldRememberSequentialPreference)
-                ?: false
-        }
-        val stoppedEarly = stressFailures >= minOf(3, pageWindow.size)
-        val shouldDegrade = !stoppedEarly && pageWindow.size > 1 && stressFailures >= minOf(2, pageWindow.size)
-        if (shouldDegrade) {
-            warnings += sequentialModeWarning
-            Log.w(
-                XTREAM_SUPPORT_TAG,
-                "Xtream $sectionLabel paged sync is switching remaining pages to sequential mode for provider ${provider.id} after window ${pageWindow.first()}-${pageWindow.last()}."
-            )
-        }
-        if (stoppedEarly) {
-            warnings += "$sectionLabel $recoveryAbortWarningSuffix"
-            Log.w(
-                XTREAM_SUPPORT_TAG,
-                "Xtream $sectionLabel paged sync stopped early for provider ${provider.id} after repeated stress failures in window ${pageWindow.first()}-${pageWindow.last()}."
-            )
-        }
-        return PageExecutionPlan(outcomes = outcomes, warnings = warnings.distinct(), stoppedEarly = stoppedEarly)
     }
 
     suspend fun <T> retryTransient(
@@ -252,31 +224,6 @@ internal class SyncManagerXtreamSupport(
             XTREAM_SUPPORT_TAG,
             "Xtream $section $stage failed for provider ${provider.id} after ${elapsedMs}ms ($reason). Switching to $nextStep."
         )
-    }
-
-    suspend fun <T> continueFailedPageOutcomes(
-        provider: Provider,
-        timedOutcomes: List<TimedPageOutcome<T>>,
-        fetchSequentially: suspend (Int) -> TimedPageOutcome<T>
-    ): List<TimedPageOutcome<T>> {
-        val failedPages = timedOutcomes
-            .filter { it.outcome is PageFetchOutcome.Failure }
-            .map { it.page }
-        if (failedPages.isEmpty()) {
-            return timedOutcomes
-        }
-        val replacements = LinkedHashMap<Int, TimedPageOutcome<T>>()
-        failedPages.forEach { page ->
-            replacements[page] = fetchSequentially(page)
-        }
-        return timedOutcomes.map { existing ->
-            replacements[existing.page] ?: existing
-        }.also {
-            Log.i(
-                XTREAM_SUPPORT_TAG,
-                "Xtream continuation fallback kept ${timedOutcomes.size - failedPages.size} successful page results for provider ${provider.id} and retried only ${failedPages.size} failed pages."
-            )
-        }
     }
 
     suspend fun <T> continueFailedCategoryOutcomes(

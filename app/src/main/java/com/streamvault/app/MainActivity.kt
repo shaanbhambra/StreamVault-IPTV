@@ -13,9 +13,11 @@ import androidx.activity.compose.setContent
 import androidx.lifecycle.lifecycleScope
 import com.streamvault.app.cast.CastManager
 import com.streamvault.app.cast.CastRouteChooserActivity
+import com.streamvault.app.backup.BackupFileBridge
 import com.streamvault.app.device.isTelevisionDevice
 import com.streamvault.app.localization.resolveAppLocale
 import com.streamvault.app.navigation.AppNavigation
+import com.streamvault.app.navigation.ExternalDestination
 import com.streamvault.app.navigation.ExternalNavigationRequest
 import com.streamvault.app.navigation.PlayerNavigationRequest
 import com.streamvault.app.tv.LauncherRecommendationsManager
@@ -55,6 +57,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_PLAYER_REQUEST = "com.streamvault.app.extra.PLAYER_REQUEST"
+        const val EXTRA_EXTERNAL_DESTINATION = "com.streamvault.app.extra.EXTERNAL_DESTINATION"
         const val EXTRA_EXTERNAL_ROUTE = "com.streamvault.app.extra.EXTERNAL_ROUTE"
         private const val MAX_PIP_ASPECT_RATIO = 2.39f
         private const val MIN_PIP_ASPECT_RATIO = 1f / MAX_PIP_ASPECT_RATIO
@@ -280,8 +283,15 @@ class MainActivity : ComponentActivity() {
 
     private fun Intent.toExternalNavigationRequest(): ExternalNavigationRequest? {
         readPlayerRequestExtra()?.let { return ExternalNavigationRequest.Player(it) }
-        getStringExtra(EXTRA_EXTERNAL_ROUTE)?.let { return ExternalNavigationRequest.Route(it) }
+        readExternalDestinationExtra()?.let { return ExternalNavigationRequest.Destination(it) }
+        getStringExtra(EXTRA_EXTERNAL_ROUTE)
+            ?.let(ExternalDestination::fromLegacyRoute)
+            ?.let { return ExternalNavigationRequest.Destination(it) }
+        if (hasExtra(EXTRA_EXTERNAL_ROUTE)) {
+            return ExternalNavigationRequest.Destination(ExternalDestination.Home)
+        }
         readImportedPlaylistUri()?.let { return ExternalNavigationRequest.ImportM3u(it) }
+        readImportedBackupUri()?.let { return ExternalNavigationRequest.ImportBackup(it) }
 
         val query = when (action) {
             Intent.ACTION_SEARCH,
@@ -294,7 +304,13 @@ class MainActivity : ComponentActivity() {
             else -> null
         }?.trim().orEmpty()
 
-        return query.takeIf { it.isNotBlank() }?.let(ExternalNavigationRequest::Search)
+        query.takeIf { it.isNotBlank() }?.let(ExternalNavigationRequest::Search)?.let { return it }
+
+        return if (action == Intent.ACTION_VIEW) {
+            ExternalNavigationRequest.Destination(ExternalDestination.Home)
+        } else {
+            null
+        }
     }
 
     private fun Intent.readImportedPlaylistUri(): String? {
@@ -317,12 +333,51 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun Intent.readImportedBackupUri(): String? {
+        val targetUri = when (action) {
+            Intent.ACTION_VIEW -> data
+            Intent.ACTION_SEND -> readStreamUriExtra()
+            else -> null
+        } ?: return null
+        if (!isBackupJsonCandidate(targetUri)) return null
+        return BackupFileBridge.copyToImportInbox(this@MainActivity, targetUri)?.toString()
+            ?: targetUri.toString()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun Intent.readStreamUriExtra(): Uri? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+        } ?: clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+    }
+
+    private fun Intent.isBackupJsonCandidate(uri: Uri): Boolean {
+        val normalizedPath = uri.toString().substringBefore('?').lowercase(Locale.ROOT)
+        val mimeType = type?.lowercase(Locale.ROOT).orEmpty()
+        val isJsonMime = mimeType in setOf("application/json", "text/json", "application/x-json")
+        val isJsonPath = normalizedPath.endsWith(".json")
+        val isGenericJsonFile = mimeType == "application/octet-stream" && isJsonPath
+        if (!isJsonMime && !isJsonPath && !isGenericJsonFile) return false
+        return uri.scheme?.lowercase(Locale.ROOT) in setOf("content", "file")
+    }
+
     @Suppress("DEPRECATION")
     private fun Intent.readPlayerRequestExtra(): PlayerNavigationRequest? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             getSerializableExtra(EXTRA_PLAYER_REQUEST, PlayerNavigationRequest::class.java)
         } else {
             getSerializableExtra(EXTRA_PLAYER_REQUEST) as? PlayerNavigationRequest
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun Intent.readExternalDestinationExtra(): ExternalDestination? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getSerializableExtra(EXTRA_EXTERNAL_DESTINATION, ExternalDestination::class.java)
+        } else {
+            getSerializableExtra(EXTRA_EXTERNAL_DESTINATION) as? ExternalDestination
         }
     }
 }

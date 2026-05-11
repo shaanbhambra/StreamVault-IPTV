@@ -1,11 +1,18 @@
 package com.streamvault.data.repository
 
+import android.util.Log
 import com.streamvault.data.local.DatabaseTransactionRunner
 import com.streamvault.data.local.dao.ProgramDao
+import com.streamvault.data.local.dao.ProviderDao
+import com.streamvault.data.local.entity.ProgramBrowseEntity
 import com.streamvault.data.local.entity.ProgramEntity
 import com.streamvault.data.mapper.toDomain
 import com.streamvault.data.mapper.toEntity
 import com.streamvault.data.parser.XmltvParser
+import com.streamvault.data.remote.http.HttpRequestProfile
+import com.streamvault.data.remote.http.safeRequestIdentitySummary
+import com.streamvault.data.remote.http.toGenericRequestProfile
+import com.streamvault.data.remote.http.withRequestProfile
 import com.streamvault.data.util.rankSearchResults
 import com.streamvault.domain.model.Program
 import com.streamvault.domain.model.Result
@@ -45,6 +52,7 @@ import javax.inject.Singleton
 @OptIn(ExperimentalCoroutinesApi::class)
 class EpgRepositoryImpl @Inject constructor(
     private val programDao: ProgramDao,
+    private val providerDao: ProviderDao,
     private val xmltvParser: XmltvParser,
     private val okHttpClient: OkHttpClient,
     private val transactionRunner: DatabaseTransactionRunner,
@@ -161,20 +169,19 @@ class EpgRepositoryImpl @Inject constructor(
 
     override fun getNowPlayingForChannels(providerId: Long, channelIds: List<String>): Flow<Map<String, Program?>> {
         if (channelIds.isEmpty()) return flowOf(emptyMap())
-        val now = System.currentTimeMillis()
+
         val chunks = channelIds.chunked(500)
-        if (chunks.size == 1) {
-            return programDao.getNowPlayingForChannels(providerId, channelIds, now)
-                .map { entities ->
-                    val grouped = entities.map { it.toDomain() }.groupBy { it.channelId }
-                    channelIds.associateWith { id -> grouped[id]?.firstOrNull() }
+        return nowTicker.flatMapLatest { now ->
+            if (chunks.size == 1) {
+                programDao.getNowPlayingForChannels(providerId, channelIds, now)
+                    .map { entities -> mapNowPlayingByChannel(channelIds, entities) }
+            } else {
+                combine(chunks.map { chunk ->
+                    programDao.getNowPlayingForChannels(providerId, chunk, now)
+                }) { arrays ->
+                    mapNowPlayingByChannel(channelIds, arrays.flatMap { it.toList() })
                 }
-        }
-        return combine(chunks.map { chunk ->
-            programDao.getNowPlayingForChannels(providerId, chunk, now)
-        }) { arrays ->
-            val grouped = arrays.flatMap { it.toList() }.map { it.toDomain() }.groupBy { it.channelId }
-            channelIds.associateWith { id -> grouped[id]?.firstOrNull() }
+            }
         }
     }
 
@@ -217,6 +224,10 @@ class EpgRepositoryImpl @Inject constructor(
         withContext(Dispatchers.IO) {
             providerRefreshMutex(providerId).withLock {
                 val stagingProviderId = -providerId
+                val providerTimezoneId = providerDao.getById(providerId)
+                    ?.stalkerDeviceTimezone
+                    ?.trim()
+                    ?.takeIf(String::isNotEmpty)
                 val batch = ArrayList<ProgramEntity>(EPG_PROGRAM_BATCH_SIZE)
                 suspend fun flushBatch() {
                     if (batch.isEmpty()) return
@@ -228,13 +239,21 @@ class EpgRepositoryImpl @Inject constructor(
                     yield()
                 }
                 try {
+                    val providerRequestProfile = providerDao.getById(providerId)
+                        ?.toGenericRequestProfile(ownerTag = "provider:$providerId/epg")
+                        ?: HttpRequestProfile(ownerTag = "provider:$providerId/epg")
                     val request = Request.Builder()
                         .url(epgUrl)
                         .header("Accept-Encoding", "identity")
                         .build()
+                        .withRequestProfile(providerRequestProfile)
                     val response = epgHttpClient.newCall(request).execute()
 
                     if (!response.isSuccessful) {
+                        Log.w(
+                            "EpgRepository",
+                            "EPG request failed for provider $providerId (${request.safeRequestIdentitySummary(providerRequestProfile)}): HTTP ${response.code}"
+                        )
                         return@withLock Result.error("Failed to download EPG: HTTP ${response.code}")
                     }
 
@@ -278,7 +297,7 @@ class EpgRepositoryImpl @Inject constructor(
                             xmltvParser.maybeDecompressGzip(epgUrl, limitedStream)
                         }
                         xmlInput.use {
-                            xmltvParser.parseStreaming(xmlInput) { program ->
+                            xmltvParser.parseStreaming(xmlInput, timezoneId = providerTimezoneId) { program ->
                                 batch.add(program.copy(providerId = stagingProviderId).toEntity())
                                 if (batch.size >= EPG_PROGRAM_BATCH_SIZE) {
                                     flushBatch()
@@ -360,6 +379,14 @@ class EpgRepositoryImpl @Inject constructor(
             delay(NOW_AND_NEXT_REFRESH_INTERVAL_MS)
         }
     }.shareIn(externalScope, SharingStarted.WhileSubscribed(), replay = 1)
+
+    private fun mapNowPlayingByChannel(
+        channelIds: List<String>,
+        entities: List<ProgramBrowseEntity>
+    ): Map<String, Program?> {
+        val grouped = entities.map { it.toDomain() }.groupBy { it.channelId }
+        return channelIds.associateWith { id -> grouped[id]?.firstOrNull() }
+    }
 
     private fun providerRefreshMutex(providerId: Long): Mutex =
         providerRefreshMutexes.computeIfAbsent(providerId) { Mutex() }

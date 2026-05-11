@@ -80,6 +80,7 @@ private class FakeSyncStateReader(
     private val syncState: SyncState = SyncState.Success()
 ) : ProviderSyncStateReader {
     override fun currentSyncState(providerId: Long): SyncState = syncState
+    override fun observeBackgroundIndexingActive(providerId: Long): Flow<Boolean> = flowOf(false)
 }
 
 private class FakeSyncProviderRepository(
@@ -107,6 +108,8 @@ private class FakeSyncProviderRepository(
         username: String,
         password: String,
         name: String,
+        httpUserAgent: String,
+        httpHeaders: String,
         xtreamFastSyncEnabled: Boolean,
         epgSyncMode: ProviderEpgSyncMode,
         onProgress: ((String) -> Unit)?,
@@ -116,6 +119,8 @@ private class FakeSyncProviderRepository(
     override suspend fun validateM3u(
         url: String,
         name: String,
+        httpUserAgent: String,
+        httpHeaders: String,
         epgSyncMode: ProviderEpgSyncMode,
         m3uVodClassificationEnabled: Boolean,
         onProgress: ((String) -> Unit)?,

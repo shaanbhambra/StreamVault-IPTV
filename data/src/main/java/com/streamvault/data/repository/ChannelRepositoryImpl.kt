@@ -1,6 +1,7 @@
 package com.streamvault.data.repository
 
 import android.database.sqlite.SQLiteException
+import android.util.Log
 import com.streamvault.data.local.dao.CategoryDao
 import com.streamvault.data.local.dao.ChannelDao
 import com.streamvault.data.local.dao.FavoriteDao
@@ -33,9 +34,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
@@ -54,7 +56,8 @@ class ChannelRepositoryImpl @Inject constructor(
     private val xtreamStreamUrlResolver: XtreamStreamUrlResolver
 ) : ChannelRepository {
     private companion object {
-        const val GLOBAL_SEARCH_LIMIT = 200
+        const val TAG = "ChannelRepository"
+        const val GLOBAL_SEARCH_LIMIT = 500
         const val CATEGORY_SEARCH_LIMIT = 300
         const val MIN_SEARCH_QUERY_LENGTH = 2
     }
@@ -167,20 +170,20 @@ class ChannelRepositoryImpl @Inject constructor(
             parentalControlManager.unlockedCategoriesForProvider(providerId)
         ) { categories: List<CategoryEntity>, categoryCounts: List<CategoryCount>, level: Int, unlockedCats: Set<Long> ->
             val countMap = categoryCounts.associate { count -> count.categoryId to count.item_count }
-            val mappedCategories = categories.map { entity ->
-                val domain = entity.toDomain().copy(count = countMap[entity.categoryId] ?: 0)
-                if (unlockedCats.contains(entity.categoryId)) {
-                    domain.copy(isUserProtected = false)
-                } else {
-                    domain
-                }
+            val countedCategories = categories.map { entity ->
+                entity.toDomain().copy(count = countMap[entity.categoryId] ?: 0)
             }
-            val filteredCategories = if (level >= 3) {
-                mappedCategories.filter { category ->
-                    (!category.isAdult && !category.isUserProtected) || unlockedCats.contains(category.id)
-                }
+            val visibleCategories = if (level >= 3) {
+                countedCategories.filter { category -> !category.isAdult && !category.isUserProtected }
             } else {
-                mappedCategories
+                countedCategories
+            }
+            val filteredCategories = visibleCategories.map { category ->
+                if (level < 3 && unlockedCats.contains(category.id)) {
+                    category.copy(isUserProtected = false)
+                } else {
+                    category
+                }
             }
 
             val allChannelsCategory = Category(
@@ -359,9 +362,19 @@ class ChannelRepositoryImpl @Inject constructor(
             if (ftsQuery.isNullOrBlank()) {
                 flowOf(emptyList())
             } else if (categoryId == ChannelRepository.ALL_CHANNELS_ID) {
-                safeSearchFlow(channelDao.search(providerId, ftsQuery, limit))
+                safeSearchFlow(
+                    source = channelDao.search(providerId, ftsQuery, limit),
+                    fallback = { channelDao.searchFallback(providerId, query.trim().toSqlLikePattern(), limit) },
+                    rawQuery = query.trim()
+                )
             } else {
-                safeSearchFlow(channelDao.searchByCategory(providerId, categoryId, ftsQuery, limit))
+                safeSearchFlow(
+                    source = channelDao.searchByCategory(providerId, categoryId, ftsQuery, limit),
+                    fallback = {
+                        channelDao.searchByCategoryFallback(providerId, categoryId, query.trim().toSqlLikePattern(), limit)
+                    },
+                    rawQuery = query.trim()
+                )
             }
         }
 
@@ -676,14 +689,36 @@ class ChannelRepositoryImpl @Inject constructor(
             channelDao.getByCategoryWithoutErrorsBrowsePage(providerId, categoryId, limit)
         }
 
-    private fun safeSearchFlow(source: Flow<List<ChannelBrowseEntity>>): Flow<List<ChannelBrowseEntity>> =
-        source.catch { error ->
-            if (error is SQLiteException) {
-                emit(emptyList())
-            } else {
-                throw error
+    private fun safeSearchFlow(
+        source: Flow<List<ChannelBrowseEntity>>,
+        fallback: () -> Flow<List<ChannelBrowseEntity>>,
+        rawQuery: String
+    ): Flow<List<ChannelBrowseEntity>> = flow {
+        try {
+            source.collect { ftsRows ->
+                if (ftsRows.isEmpty()) {
+                    emitAll(fallback())
+                } else {
+                    emit(ftsRows)
+                }
+            }
+        } catch (error: SQLiteException) {
+            Log.w(TAG, "FTS channel search failed for query '$rawQuery'; using LIKE-only search", error)
+            emitAll(fallback())
+        }
+    }
+
+    private fun String.toSqlLikePattern(): String {
+        val escaped = buildString(length) {
+            this@toSqlLikePattern.forEach { char ->
+                when (char) {
+                    '%', '_', '\\' -> append('\\')
+                }
+                append(char)
             }
         }
+        return "%$escaped%"
+    }
 
     private fun channelGroupKey(entity: ChannelBrowseEntity): String =
         entity.logicalGroupId.takeIf(String::isNotBlank) ?: entity.id.toString()

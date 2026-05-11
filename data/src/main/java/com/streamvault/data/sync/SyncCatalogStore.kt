@@ -17,6 +17,8 @@ import com.streamvault.data.local.entity.MovieImportStageEntity
 import com.streamvault.data.local.entity.SeriesEntity
 import com.streamvault.data.local.entity.SeriesImportStageEntity
 import com.streamvault.data.local.entity.TmdbIdentityEntity
+import com.streamvault.data.remote.xtream.XtreamStreamKind
+import com.streamvault.data.remote.xtream.XtreamUrlFactory
 import com.streamvault.domain.model.ContentType
 import java.net.URI
 import java.security.MessageDigest
@@ -37,6 +39,21 @@ internal class SyncCatalogStore(
         private const val TAG = "SyncCatalogStore"
         private const val STAGE_BATCH_SIZE = 500
     }
+
+    data class StagedLiveImportState(
+        val sessionId: Long,
+        val channelCount: Int,
+        val movieCount: Int,
+        val seriesCount: Int,
+        val categories: List<CategoryEntity>
+    )
+
+    /**
+     * Result returned from staged-import helpers that track both the accepted count and
+     * whether the size limit was hit, so callers can choose between full-replace and
+     * upsert-only commit semantics.
+     */
+    private data class StagingResult(val acceptedCount: Int, val overflowed: Boolean)
 
     private val sessionIds = AtomicLong(Random.nextLong(1L, Long.MAX_VALUE))
     private val digest = ThreadLocal.withInitial { MessageDigest.getInstance("SHA-256") }
@@ -59,15 +76,23 @@ internal class SyncCatalogStore(
         val sessionId = newSessionId()
         val stagedChannels = buildChannelStages(providerId, sessionId, channels)
         val limitedChannels = limitChannels(providerId, stagedChannels)
+        // If the provider exceeded the size limit we applied a subset. Running full stale
+        // deletion would then delete every row outside the retained subset, converting a
+        // safety cap into destructive data loss. Switch to upsert-only for overflow syncs.
+        val overflowed = limitedChannels.size < stagedChannels.size
         try {
             clearProviderStaging(providerId)
             categories?.let { stageCategories(providerId, sessionId, it) }
             insertStageRows(limitedChannels, catalogSyncDao::insertChannelStages)
             transactionRunner.inTransaction {
-                categories?.let { applyCategories(providerId, sessionId, "LIVE") }
-                applyChannels(providerId, sessionId)
+                categories?.let { applyCategories(providerId, sessionId, "LIVE", pruneStale = !overflowed) }
+                if (overflowed) {
+                    upsertChannels(providerId, sessionId)
+                } else {
+                    applyChannels(providerId, sessionId)
+                }
+                catalogSyncDao.rebuildChannelFts()
             }
-            catalogSyncDao.rebuildChannelFts()
             return limitedChannels.size
         } finally {
             clearSession(providerId, sessionId)
@@ -79,14 +104,18 @@ internal class SyncCatalogStore(
         try {
             clearProviderStaging(providerId)
             categories?.let { stageCategories(providerId, sessionId, it) }
-            val acceptedCount = stageMovieSequence(providerId, sessionId, movies)
+            val stagingResult = stageMovieSequence(providerId, sessionId, movies)
             transactionRunner.inTransaction {
-                categories?.let { applyCategories(providerId, sessionId, "MOVIE") }
-                applyMovies(providerId, sessionId)
+                categories?.let { applyCategories(providerId, sessionId, "MOVIE", pruneStale = !stagingResult.overflowed) }
+                if (stagingResult.overflowed) {
+                    upsertMovies(providerId, sessionId)
+                } else {
+                    applyMovies(providerId, sessionId)
+                }
+                catalogSyncDao.rebuildMovieFts()
             }
-            catalogSyncDao.rebuildMovieFts()
             movieDao.restoreWatchProgress(providerId)
-            return acceptedCount
+            return stagingResult.acceptedCount
         } finally {
             clearSession(providerId, sessionId)
         }
@@ -97,13 +126,17 @@ internal class SyncCatalogStore(
         try {
             clearProviderStaging(providerId)
             categories?.let { stageCategories(providerId, sessionId, it) }
-            val acceptedCount = stageSeriesSequence(providerId, sessionId, series)
+            val stagingResult = stageSeriesSequence(providerId, sessionId, series)
             transactionRunner.inTransaction {
-                categories?.let { applyCategories(providerId, sessionId, "SERIES") }
-                applySeries(providerId, sessionId)
+                categories?.let { applyCategories(providerId, sessionId, "SERIES", pruneStale = !stagingResult.overflowed) }
+                if (stagingResult.overflowed) {
+                    upsertSeries(providerId, sessionId)
+                } else {
+                    applySeries(providerId, sessionId)
+                }
+                catalogSyncDao.rebuildSeriesFts()
             }
-            catalogSyncDao.rebuildSeriesFts()
-            return acceptedCount
+            return stagingResult.acceptedCount
         } finally {
             clearSession(providerId, sessionId)
         }
@@ -115,8 +148,8 @@ internal class SyncCatalogStore(
                 categories?.let { stageCategories(providerId, sessionId, it) }
                 categories?.let { applyCategories(providerId, sessionId, "LIVE") }
                 applyChannels(providerId, sessionId)
+                catalogSyncDao.rebuildChannelFts()
             }
-            catalogSyncDao.rebuildChannelFts()
         } finally {
             clearSession(providerId, sessionId)
         }
@@ -128,8 +161,8 @@ internal class SyncCatalogStore(
                 categories?.let { stageCategories(providerId, sessionId, it) }
                 categories?.let { applyCategories(providerId, sessionId, "MOVIE") }
                 applyMovies(providerId, sessionId)
+                catalogSyncDao.rebuildMovieFts()
             }
-            catalogSyncDao.rebuildMovieFts()
             movieDao.restoreWatchProgress(providerId)
         } finally {
             clearSession(providerId, sessionId)
@@ -142,8 +175,141 @@ internal class SyncCatalogStore(
                 categories?.let { stageCategories(providerId, sessionId, it) }
                 categories?.let { applyCategories(providerId, sessionId, "SERIES") }
                 applySeries(providerId, sessionId)
+                catalogSyncDao.rebuildSeriesFts()
             }
-            catalogSyncDao.rebuildSeriesFts()
+        } finally {
+            clearSession(providerId, sessionId)
+        }
+    }
+
+    // ── Upsert-only staged apply methods (Issue 1: Partial commit scope) ──────────────
+
+    /**
+     * Staged live-catalog commit that updates and inserts without deleting stale rows.
+     * Use when the staged session represents a partial (subset) of categories/channels —
+     * absent rows must NOT be treated as deletions.
+     */
+    suspend fun applyStagedLiveCatalogUpsertOnly(providerId: Long, sessionId: Long, categories: List<CategoryEntity>?) {
+        try {
+            transactionRunner.inTransaction {
+                categories?.let { stageCategories(providerId, sessionId, it) }
+                categories?.let { applyCategories(providerId, sessionId, "LIVE", pruneStale = false) }
+                upsertChannels(providerId, sessionId)
+                catalogSyncDao.rebuildChannelFts()
+            }
+        } finally {
+            clearSession(providerId, sessionId)
+        }
+    }
+
+    /**
+     * Staged movie-catalog commit that updates and inserts without deleting stale rows.
+     * Use when the staged session represents a partial (subset) of categories/pages.
+     */
+    suspend fun applyStagedMovieCatalogUpsertOnly(providerId: Long, sessionId: Long, categories: List<CategoryEntity>?) {
+        try {
+            transactionRunner.inTransaction {
+                categories?.let { stageCategories(providerId, sessionId, it) }
+                categories?.let { applyCategories(providerId, sessionId, "MOVIE", pruneStale = false) }
+                upsertMovies(providerId, sessionId)
+                catalogSyncDao.rebuildMovieFts()
+            }
+            movieDao.restoreWatchProgress(providerId)
+        } finally {
+            clearSession(providerId, sessionId)
+        }
+    }
+
+    /**
+     * Staged series-catalog commit that updates and inserts without deleting stale rows.
+     * Use when the staged session represents a partial (subset) of categories/pages.
+     */
+    suspend fun applyStagedSeriesCatalogUpsertOnly(providerId: Long, sessionId: Long, categories: List<CategoryEntity>?) {
+        try {
+            transactionRunner.inTransaction {
+                categories?.let { stageCategories(providerId, sessionId, it) }
+                categories?.let { applyCategories(providerId, sessionId, "SERIES", pruneStale = false) }
+                upsertSeries(providerId, sessionId)
+                catalogSyncDao.rebuildSeriesFts()
+            }
+        } finally {
+            clearSession(providerId, sessionId)
+        }
+    }
+
+    /**
+     * Non-staged live-catalog upsert: stages the given channels, then updates and inserts
+     * without deleting stale rows. Used for partial Xtream category results.
+     */
+    suspend fun upsertLiveCatalog(providerId: Long, categories: List<CategoryEntity>?, channels: List<ChannelEntity>): Int {
+        val sessionId = newSessionId()
+        val stagedChannels = buildChannelStages(providerId, sessionId, channels)
+        try {
+            clearProviderStaging(providerId)
+            categories?.let { stageCategories(providerId, sessionId, it) }
+            insertStageRows(stagedChannels, catalogSyncDao::insertChannelStages)
+            transactionRunner.inTransaction {
+                categories?.let { applyCategories(providerId, sessionId, "LIVE", pruneStale = false) }
+                upsertChannels(providerId, sessionId)
+                catalogSyncDao.rebuildChannelFts()
+            }
+            return stagedChannels.size
+        } finally {
+            clearSession(providerId, sessionId)
+        }
+    }
+
+    /**
+     * Non-staged movie-catalog upsert: stages the given movies, then updates and inserts
+     * without deleting stale rows. Used for partial Xtream category/page results.
+     */
+    suspend fun upsertMovieCatalog(providerId: Long, categories: List<CategoryEntity>?, movies: Sequence<MovieEntity>): Int {
+        val sessionId = newSessionId()
+        try {
+            clearProviderStaging(providerId)
+            categories?.let { stageCategories(providerId, sessionId, it) }
+            val stagingResult = stageMovieSequence(providerId, sessionId, movies)
+            transactionRunner.inTransaction {
+                categories?.let { applyCategories(providerId, sessionId, "MOVIE", pruneStale = false) }
+                upsertMovies(providerId, sessionId)
+                catalogSyncDao.rebuildMovieFts()
+            }
+            movieDao.restoreWatchProgress(providerId)
+            return stagingResult.acceptedCount
+        } finally {
+            clearSession(providerId, sessionId)
+        }
+    }
+
+    /**
+     * Non-staged series-catalog upsert: stages the given series, then updates and inserts
+     * without deleting stale rows. Used for partial Xtream category/page results.
+     */
+    suspend fun upsertSeriesCatalog(providerId: Long, categories: List<CategoryEntity>?, series: Sequence<SeriesEntity>): Int {
+        val sessionId = newSessionId()
+        try {
+            clearProviderStaging(providerId)
+            categories?.let { stageCategories(providerId, sessionId, it) }
+            val stagingResult = stageSeriesSequence(providerId, sessionId, series)
+            transactionRunner.inTransaction {
+                categories?.let { applyCategories(providerId, sessionId, "SERIES", pruneStale = false) }
+                upsertSeries(providerId, sessionId)
+                catalogSyncDao.rebuildSeriesFts()
+            }
+            return stagingResult.acceptedCount
+        } finally {
+            clearSession(providerId, sessionId)
+        }
+    }
+
+    suspend fun upsertCategories(providerId: Long, type: String, categories: List<CategoryEntity>) {
+        val sessionId = newSessionId()
+        try {
+            clearProviderStaging(providerId)
+            stageCategories(providerId, sessionId, categories)
+            transactionRunner.inTransaction {
+                applyCategories(providerId, sessionId, type, pruneStale = false)
+            }
         } finally {
             clearSession(providerId, sessionId)
         }
@@ -205,22 +371,56 @@ internal class SyncCatalogStore(
                 stageCategories(providerId, sessionId, liveCategories.orEmpty())
                 applyCategories(providerId, sessionId, "LIVE")
                 applyChannels(providerId, sessionId)
+                catalogSyncDao.rebuildChannelFts()
             }
             if (includeMovies) {
                 stageCategories(providerId, sessionId, movieCategories.orEmpty())
                 applyCategories(providerId, sessionId, "MOVIE")
                 applyMovies(providerId, sessionId)
+                catalogSyncDao.rebuildMovieFts()
             }
         }
-        if (includeLive) { catalogSyncDao.rebuildChannelFts() }
         if (includeMovies) {
-            catalogSyncDao.rebuildMovieFts()
             movieDao.restoreWatchProgress(providerId)
         }
     }
 
     suspend fun discardStagedImport(providerId: Long, sessionId: Long) {
         clearSession(providerId, sessionId)
+    }
+
+    suspend fun stagedLiveImportState(providerId: Long, sessionId: Long): StagedLiveImportState {
+        val stagedCategories = catalogSyncDao.getCategoryStages(providerId, sessionId, "LIVE")
+        val categorySummaries = catalogSyncDao.getChannelStageCategorySummaries(providerId, sessionId)
+        return StagedLiveImportState(
+            sessionId = sessionId,
+            channelCount = catalogSyncDao.countChannelStages(providerId, sessionId),
+            movieCount = catalogSyncDao.countMovieStages(providerId, sessionId),
+            seriesCount = catalogSyncDao.countSeriesStages(providerId, sessionId),
+            categories = if (stagedCategories.isNotEmpty()) {
+                stagedCategories.map { stage ->
+                    CategoryEntity(
+                        categoryId = stage.categoryId,
+                        name = stage.name,
+                        parentId = stage.parentId,
+                        type = ContentType.LIVE,
+                        providerId = providerId,
+                        isAdult = stage.isAdult
+                    )
+                }
+            } else {
+                categorySummaries.map { summary ->
+                    CategoryEntity(
+                        categoryId = summary.categoryId,
+                        name = summary.name,
+                        parentId = 0,
+                        type = ContentType.LIVE,
+                        providerId = providerId,
+                        isAdult = summary.isAdult
+                    )
+                }
+            }
+        )
     }
 
     suspend fun clearProviderStaging(providerId: Long) {
@@ -230,44 +430,55 @@ internal class SyncCatalogStore(
         catalogSyncDao.clearProviderCategoryStages(providerId)
     }
 
-    private suspend fun applyCategories(providerId: Long, sessionId: Long, type: String) {
+    private suspend fun applyCategories(
+        providerId: Long,
+        sessionId: Long,
+        type: String,
+        pruneStale: Boolean = true
+    ) {
         val stagedByCategoryId = catalogSyncDao.getCategoryStages(providerId, sessionId, type)
             .associateBy { it.categoryId }
-        val remappedProtectedCategoryIds = mutableListOf<Long>()
         val changed = categoryDao.getByProviderAndTypeSync(providerId, type)
             .mapNotNull { current ->
                 val stage = stagedByCategoryId[current.categoryId] ?: return@mapNotNull null
                 if (current.syncFingerprint == stage.syncFingerprint) return@mapNotNull null
-                val invalidateProtection = current.isUserProtected
-                if (invalidateProtection) {
-                    remappedProtectedCategoryIds += current.categoryId
-                }
+                // User-set protection is preserved across provider metadata changes (rename,
+                // parent, adult-flag). Protection is removed only when the category identity
+                // truly disappears (deleteStaleCategoriesForStage cascade) or via explicit
+                // user action — never by a harmless provider-side metadata drift.
                 current.copy(
                     name = stage.name,
                     parentId = stage.parentId,
                     isAdult = stage.isAdult,
-                    isUserProtected = if (invalidateProtection) false else current.isUserProtected,
+                    isUserProtected = current.isUserProtected,
                     syncFingerprint = stage.syncFingerprint
                 )
             }
         if (changed.isNotEmpty()) {
             categoryDao.updateAll(changed)
         }
-        if (remappedProtectedCategoryIds.isNotEmpty()) {
-            when (type) {
-                "LIVE" -> channelDao.clearProtectionForCategories(providerId, remappedProtectedCategoryIds)
-                "MOVIE" -> movieDao.clearProtectionForCategories(providerId, remappedProtectedCategoryIds)
-                "SERIES" -> seriesDao.clearProtectionForCategories(providerId, remappedProtectedCategoryIds)
-            }
-        }
         catalogSyncDao.insertMissingCategoriesFromStage(providerId, sessionId, type)
-        catalogSyncDao.deleteStaleCategoriesForStage(providerId, sessionId, type)
+        if (pruneStale) {
+            catalogSyncDao.deleteStaleCategoriesForStage(providerId, sessionId, type)
+        }
     }
 
     private suspend fun applyChannels(providerId: Long, sessionId: Long) {
         catalogSyncDao.updateChangedChannelsFromStage(providerId, sessionId)
         catalogSyncDao.insertMissingChannelsFromStage(providerId, sessionId)
         catalogSyncDao.deleteStaleChannelsForStage(providerId, sessionId)
+    }
+
+    /**
+     * Upsert-only channel apply: updates and inserts staged rows without deleting any
+     * existing rows. Used when a partial result or size-limit overflow makes it unsafe
+     * to treat absent staged rows as deletions.
+     */
+    private suspend fun upsertChannels(providerId: Long, sessionId: Long) {
+        catalogSyncDao.updateChangedChannelsFromStage(providerId, sessionId)
+        catalogSyncDao.insertMissingChannelsFromStage(providerId, sessionId)
+        // Intentionally no stale deletion — partial or overflow commits must not remove
+        // channels that were not part of the successfully fetched subset.
     }
 
     private suspend fun applyMovies(providerId: Long, sessionId: Long) {
@@ -277,10 +488,32 @@ internal class SyncCatalogStore(
         refreshMovieTmdbIdentities(providerId)
     }
 
+    /**
+     * Upsert-only movie apply: updates and inserts staged rows without deleting any
+     * existing rows. Used for partial category/page results and size-limit overflow.
+     */
+    private suspend fun upsertMovies(providerId: Long, sessionId: Long) {
+        catalogSyncDao.updateChangedMoviesFromStage(providerId, sessionId)
+        catalogSyncDao.insertMissingMoviesFromStage(providerId, sessionId)
+        // Intentionally no stale deletion.
+        refreshMovieTmdbIdentities(providerId)
+    }
+
     private suspend fun applySeries(providerId: Long, sessionId: Long) {
         catalogSyncDao.updateChangedSeriesFromStage(providerId, sessionId)
         catalogSyncDao.insertMissingSeriesFromStage(providerId, sessionId)
         catalogSyncDao.deleteStaleSeriesForStage(providerId, sessionId)
+        refreshSeriesTmdbIdentities(providerId)
+    }
+
+    /**
+     * Upsert-only series apply: updates and inserts staged rows without deleting any
+     * existing rows. Used for partial category/page results and size-limit overflow.
+     */
+    private suspend fun upsertSeries(providerId: Long, sessionId: Long) {
+        catalogSyncDao.updateChangedSeriesFromStage(providerId, sessionId)
+        catalogSyncDao.insertMissingSeriesFromStage(providerId, sessionId)
+        // Intentionally no stale deletion.
         refreshSeriesTmdbIdentities(providerId)
     }
 
@@ -387,7 +620,8 @@ internal class SyncCatalogStore(
                     tmdbId = movie.tmdbId,
                     youtubeTrailer = movie.youtubeTrailer,
                     isAdult = movie.isAdult,
-                    syncFingerprint = movieFingerprint(movie)
+                    syncFingerprint = movieFingerprint(movie),
+                    addedAt = movie.addedAt
                 )
             }
     }
@@ -398,12 +632,14 @@ internal class SyncCatalogStore(
         series: List<SeriesEntity>
     ): List<SeriesImportStageEntity> {
         return series
-            .distinctBy { it.seriesId }
+            .distinctBy(::seriesRemoteKey)
             .map { item ->
                 SeriesImportStageEntity(
                     sessionId = sessionId,
                     providerId = providerId,
                     seriesId = item.seriesId,
+                    providerSeriesId = item.providerSeriesId,
+                    providerSeriesKey = seriesRemoteKey(item),
                     name = item.name,
                     posterUrl = item.posterUrl,
                     backdropUrl = item.backdropUrl,
@@ -429,7 +665,7 @@ internal class SyncCatalogStore(
         providerId: Long,
         sessionId: Long,
         movies: Sequence<MovieEntity>
-    ): Int {
+    ): StagingResult {
         return stageDistinctRows(
             items = movies,
             keySelector = { movie -> movie.streamId },
@@ -448,7 +684,7 @@ internal class SyncCatalogStore(
         providerId: Long,
         sessionId: Long,
         series: Sequence<SeriesEntity>
-    ): Int {
+    ): StagingResult {
         return stageDistinctRows(
             items = series,
             keySelector = { item -> item.seriesId },
@@ -472,7 +708,7 @@ internal class SyncCatalogStore(
         providerId: Long,
         stageBuilder: (T) -> S,
         insert: suspend (List<S>) -> Unit
-    ): Int {
+    ): StagingResult {
         val seenKeys = HashSet<K>()
         val bestItems = java.util.PriorityQueue<T>(limit.coerceAtLeast(1), bestFirstComparator.reversed())
         val batch = ArrayList<S>(STAGE_BATCH_SIZE)
@@ -491,7 +727,8 @@ internal class SyncCatalogStore(
             }
         }
 
-        if (distinctCount > limit) {
+        val overflowed = distinctCount > limit
+        if (overflowed) {
             Log.w(
                 TAG,
                 "Provider $providerId $logLabel staging exceeded limit $limit; kept ${bestItems.size} highest-priority distinct rows out of $distinctCount."
@@ -513,7 +750,7 @@ internal class SyncCatalogStore(
             insert(batch)
         }
 
-        return bestItems.size
+        return StagingResult(acceptedCount = bestItems.size, overflowed = overflowed)
     }
 
     private suspend fun <T> insertStageRows(
@@ -569,6 +806,8 @@ internal class SyncCatalogStore(
             sessionId = sessionId,
             providerId = providerId,
             seriesId = item.seriesId,
+            providerSeriesId = item.providerSeriesId,
+            providerSeriesKey = seriesRemoteKey(item),
             name = item.name,
             posterUrl = item.posterUrl,
             backdropUrl = item.backdropUrl,
@@ -590,6 +829,23 @@ internal class SyncCatalogStore(
     }
 
     private fun channelFingerprint(channel: ChannelEntity): String {
+        val xtreamLiveToken = XtreamUrlFactory.parseInternalStreamUrl(channel.streamUrl)
+            ?.takeIf { token -> token.kind == XtreamStreamKind.LIVE }
+        if (xtreamLiveToken != null) {
+            return fingerprint(
+                channel.streamId.toString(),
+                normalizeText(channel.name),
+                normalizeUrl(channel.logoUrl),
+                normalizeText(channel.groupTitle),
+                channel.categoryId?.toString().orEmpty(),
+                normalizeText(channel.epgChannelId),
+                channel.number.toString(),
+                channel.catchUpSupported.toString(),
+                channel.catchUpDays.toString(),
+                channel.isAdult.toString(),
+                normalizeText(xtreamLiveToken.containerExtension)
+            )
+        }
         return fingerprint(
             normalizeText(channel.name),
             normalizeUrl(channel.logoUrl),
@@ -626,12 +882,14 @@ internal class SyncCatalogStore(
             normalizeText(movie.year),
             movie.tmdbId?.toString().orEmpty(),
             normalizeUrl(movie.youtubeTrailer),
-            movie.isAdult.toString()
+            movie.isAdult.toString(),
+            movie.addedAt.toString()
         )
     }
 
     private fun seriesFingerprint(series: SeriesEntity): String {
         return fingerprint(
+            seriesRemoteKey(series),
             normalizeText(series.name),
             normalizeUrl(series.posterUrl),
             normalizeUrl(series.backdropUrl),
@@ -649,6 +907,10 @@ internal class SyncCatalogStore(
             series.lastModified.toString(),
             series.isAdult.toString()
         )
+    }
+
+    private fun seriesRemoteKey(series: SeriesEntity): String {
+        return series.providerSeriesId?.takeIf { it.isNotBlank() } ?: series.seriesId.toString()
     }
 
     private fun categoryFingerprint(category: CategoryEntity): String {

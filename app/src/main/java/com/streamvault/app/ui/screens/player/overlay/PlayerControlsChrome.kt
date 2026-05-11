@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +27,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
@@ -135,6 +138,7 @@ fun PlayerControlsOverlay(
     onOpenStopPlaybackTimer: () -> Unit = {},
     onOpenIdleStandbyTimer: () -> Unit = {},
     onOpenAudioVideoSync: () -> Unit = {},
+    audioVideoSyncEnabled: Boolean = false,
     showEpisodesAction: Boolean = false,
     onOpenEpisodes: () -> Unit = {},
     onOpenSplitScreen: () -> Unit,
@@ -221,6 +225,7 @@ fun PlayerControlsOverlay(
                 onOpenStopPlaybackTimer = onOpenStopPlaybackTimer,
                 onOpenIdleStandbyTimer = onOpenIdleStandbyTimer,
                 onOpenAudioVideoSync = onOpenAudioVideoSync,
+                audioVideoSyncEnabled = audioVideoSyncEnabled,
                 showEpisodesAction = showEpisodesAction,
                 onOpenEpisodes = onOpenEpisodes,
                 onOpenSplitScreen = onOpenSplitScreen,
@@ -549,6 +554,7 @@ private fun PlayerBottomBar(
     onOpenStopPlaybackTimer: () -> Unit,
     onOpenIdleStandbyTimer: () -> Unit,
     onOpenAudioVideoSync: () -> Unit,
+    audioVideoSyncEnabled: Boolean,
     showEpisodesAction: Boolean,
     onOpenEpisodes: () -> Unit,
     onOpenSplitScreen: () -> Unit,
@@ -568,6 +574,7 @@ private fun PlayerBottomBar(
     modifier: Modifier = Modifier
 ) {
     val isVod = contentType != "LIVE" || isCatchUpPlayback
+    val bottomBarWidthFraction = if (isVod) 0.78f else 1f
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -577,19 +584,20 @@ private fun PlayerBottomBar(
                 )
             )
             .padding(
-                horizontal = if (isVod) 18.dp else 32.dp,
-                vertical = if (isVod) 14.dp else 24.dp
+                horizontal = if (isVod) 14.dp else 32.dp,
+                vertical = if (isVod) 10.dp else 24.dp
             )
     ) {
         Surface(
             modifier = if (isVod) {
                 Modifier
-                    .fillMaxWidth(0.88f)
+                    .fillMaxWidth(bottomBarWidthFraction)
+                    .widthIn(max = 980.dp)
                     .align(Alignment.Center)
             } else {
                 Modifier.fillMaxWidth()
             },
-            shape = RoundedCornerShape(if (isVod) 22.dp else 28.dp),
+            shape = RoundedCornerShape(if (isVod) 20.dp else 28.dp),
             colors = SurfaceDefaults.colors(containerColor = Color(0xFF0C1624).copy(alpha = 0.92f))
         ) {
             Column(
@@ -604,8 +612,8 @@ private fun PlayerBottomBar(
                         )
                     )
                     .padding(
-                        horizontal = if (isVod) 18.dp else 24.dp,
-                        vertical = if (isVod) 14.dp else 22.dp
+                        horizontal = if (isVod) 14.dp else 24.dp,
+                        vertical = if (isVod) 12.dp else 22.dp
                     )
             ) {
                 if (contentType == "LIVE") {
@@ -638,6 +646,7 @@ private fun PlayerBottomBar(
                         onOpenStopPlaybackTimer = onOpenStopPlaybackTimer,
                         onOpenIdleStandbyTimer = onOpenIdleStandbyTimer,
                         onOpenAudioVideoSync = onOpenAudioVideoSync,
+                        audioVideoSyncEnabled = audioVideoSyncEnabled,
                         onOpenSplitScreen = onOpenSplitScreen,
                         onEnterPictureInPicture = onEnterPictureInPicture,
                         onToggleMute = onToggleMute,
@@ -679,6 +688,7 @@ private fun PlayerBottomBar(
                         onOpenStopPlaybackTimer = onOpenStopPlaybackTimer,
                         onOpenIdleStandbyTimer = onOpenIdleStandbyTimer,
                         onOpenAudioVideoSync = onOpenAudioVideoSync,
+                        audioVideoSyncEnabled = audioVideoSyncEnabled,
                         showEpisodesAction = showEpisodesAction,
                         onOpenEpisodes = onOpenEpisodes,
                         onEnterPictureInPicture = onEnterPictureInPicture,
@@ -728,6 +738,7 @@ private fun PlayerLiveInfo(
     onOpenStopPlaybackTimer: () -> Unit,
     onOpenIdleStandbyTimer: () -> Unit,
     onOpenAudioVideoSync: () -> Unit,
+    audioVideoSyncEnabled: Boolean,
     onOpenSplitScreen: () -> Unit,
     onEnterPictureInPicture: () -> Unit,
     onToggleMute: () -> Unit,
@@ -804,7 +815,7 @@ private fun PlayerLiveInfo(
         if (videoQualityCount > 0) {
             add(PlayerActionSpec(stringResource(R.string.player_video_quality), onOpenVideoTracks))
         }
-        if (!isCastConnected) {
+        if (audioVideoSyncEnabled && !isCastConnected) {
             add(PlayerActionSpec(stringResource(R.string.player_av_sync_short), onOpenAudioVideoSync))
         }
         add(PlayerActionSpec(stringResource(R.string.multiview_nav), onOpenSplitScreen))
@@ -955,6 +966,7 @@ private fun PlayerVodInfo(
     isMuted: Boolean,
     playbackSpeed: Float,
     sleepTimerUiState: SleepTimerUiState,
+    audioVideoSyncEnabled: Boolean,
     playButtonFocusRequester: FocusRequester,
     quickActionsFocusRequester: FocusRequester,
     onSeekToPosition: (Long) -> Unit,
@@ -1005,14 +1017,14 @@ private fun PlayerVodInfo(
         else -> 188.dp
     }
     val outerSpacing = when {
-        compactControls -> 10.dp
-        tabletControls -> 12.dp
-        else -> 14.dp
+        compactControls -> 8.dp
+        tabletControls -> 10.dp
+        else -> 12.dp
     }
     val transportGroupHorizontalPadding = when {
-        compactControls -> 6.dp
-        tabletControls -> 7.dp
-        else -> 8.dp
+        compactControls -> 5.dp
+        tabletControls -> 6.dp
+        else -> 7.dp
     }
 
     val playbackLabel = stringResource(R.string.player_playback_label)
@@ -1039,7 +1051,7 @@ private fun PlayerVodInfo(
                 onOpenPlaybackSpeed
             )
         )
-        if (!isCastConnected) {
+        if (audioVideoSyncEnabled && !isCastConnected) {
             add(PlayerActionSpec(stringResource(R.string.player_av_sync_short), onOpenAudioVideoSync))
         }
         add(PlayerActionSpec(
@@ -1089,9 +1101,9 @@ private fun PlayerVodInfo(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(
             when {
-                compactControls -> 10.dp
-                tabletControls -> 12.dp
-                else -> 14.dp
+                compactControls -> 8.dp
+                tabletControls -> 10.dp
+                else -> 12.dp
             }
         )
     ) {
@@ -1114,16 +1126,16 @@ private fun PlayerVodInfo(
         )
     }
 
-    Spacer(modifier = Modifier.height(14.dp))
+    Spacer(modifier = Modifier.height(10.dp))
 
     Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = SurfaceDefaults.colors(containerColor = Color.White.copy(alpha = 0.06f))
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(outerSpacing),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1132,12 +1144,12 @@ private fun PlayerVodInfo(
                 colors = SurfaceDefaults.colors(containerColor = Color.Black.copy(alpha = 0.24f))
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = transportGroupHorizontalPadding, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = transportGroupHorizontalPadding, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(
                         when {
-                            compactControls -> 8.dp
-                            tabletControls -> 9.dp
-                            else -> 10.dp
+                            compactControls -> 6.dp
+                            tabletControls -> 7.dp
+                            else -> 8.dp
                         }
                     ),
                     verticalAlignment = Alignment.CenterVertically
@@ -1197,7 +1209,7 @@ private fun PlayerVodInfo(
 
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 AnimatedVisibility(visible = seekPreview.visible) {
                     PlayerSeekPreviewCard(
@@ -1267,7 +1279,7 @@ private fun PlayerVodInfo(
                         },
                         modifier = Modifier
                             .weight(1f)
-                            .padding(horizontal = 16.dp)
+                            .padding(horizontal = 12.dp)
                             .focusProperties {
                                 down = quickActionsFocusRequester
                             }
@@ -1292,7 +1304,9 @@ private fun PlayerVodInfo(
         primaryActions = actions,
         secondaryActions = emptyList(),
         firstActionFocusRequester = quickActionsFocusRequester,
-        primaryActionsUpFocusRequester = playButtonFocusRequester
+        primaryActionsUpFocusRequester = playButtonFocusRequester,
+        singleRow = true,
+        compactButtons = true
     )
 }
 
@@ -1402,6 +1416,7 @@ private fun formatTimerRemaining(ms: Long): String {
 private fun PlayerQuickSettingsButton(
     text: String,
     onClick: () -> Unit,
+    compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     TvClickableSurface(
@@ -1416,8 +1431,13 @@ private fun PlayerQuickSettingsButton(
         Text(
             text = text,
             color = Color.White,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+            style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(
+                horizontal = if (compact) 12.dp else 14.dp,
+                vertical = if (compact) 7.dp else 9.dp
+            )
         )
     }
 }
@@ -1526,12 +1546,44 @@ private fun PlayerQuickActionRows(
     primaryActions: List<PlayerActionSpec>,
     secondaryActions: List<PlayerActionSpec>,
     firstActionFocusRequester: FocusRequester,
-    primaryActionsUpFocusRequester: FocusRequester? = null
+    primaryActionsUpFocusRequester: FocusRequester? = null,
+    singleRow: Boolean = false,
+    compactButtons: Boolean = false
 ) {
     val rows = listOf(primaryActions, secondaryActions).filter { it.isNotEmpty() }
     if (rows.isEmpty()) return
 
-    Spacer(modifier = Modifier.height(14.dp))
+    Spacer(modifier = Modifier.height(if (compactButtons) 10.dp else 14.dp))
+
+    if (singleRow) {
+        val actions = rows.flatten()
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(end = 4.dp)
+        ) {
+            itemsIndexed(actions) { actionIndex, action ->
+                PlayerQuickSettingsButton(
+                    text = action.label,
+                    onClick = action.onClick,
+                    compact = compactButtons,
+                    modifier = Modifier
+                        .then(
+                            if (actionIndex == 0) {
+                                Modifier.focusRequester(firstActionFocusRequester)
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .focusProperties {
+                            if (actionIndex == 0 && primaryActionsUpFocusRequester != null) {
+                                up = primaryActionsUpFocusRequester
+                            }
+                        }
+                )
+            }
+        }
+        return
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         rows.forEachIndexed { index, row ->
@@ -1546,6 +1598,7 @@ private fun PlayerQuickActionRows(
                     PlayerQuickSettingsButton(
                         text = action.label,
                         onClick = action.onClick,
+                        compact = compactButtons,
                         modifier = Modifier
                             .then(
                                 if (index == 0 && actionIndex == 0) {

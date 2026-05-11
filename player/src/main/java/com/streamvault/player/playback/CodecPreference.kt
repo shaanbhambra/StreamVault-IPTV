@@ -14,6 +14,42 @@ enum class ActiveDecoderPolicy {
     COMPATIBILITY
 }
 
+internal fun shouldUseManagedCodecSelector(
+    requestedMode: DecoderMode,
+    decoderPolicy: ActiveDecoderPolicy
+): Boolean = requestedMode != DecoderMode.AUTO && decoderPolicy != ActiveDecoderPolicy.AUTO
+
+internal data class PlaybackRendererPlan(
+    val useAudioVideoSyncSink: Boolean,
+    val useVideoRendererWorkaround: Boolean,
+    val useManagedCodecSelector: Boolean,
+    val renderPath: String
+) {
+    val useStockRenderersFactory: Boolean
+        get() = !useAudioVideoSyncSink && !useVideoRendererWorkaround
+}
+
+internal fun buildPlaybackRendererPlan(
+    requestedMode: DecoderMode,
+    decoderPolicy: ActiveDecoderPolicy,
+    useAudioVideoSyncSink: Boolean,
+    useVideoRendererWorkaround: Boolean
+): PlaybackRendererPlan {
+    val useManagedCodecSelector = shouldUseManagedCodecSelector(requestedMode, decoderPolicy)
+    val useEffectiveVideoRendererWorkaround = useVideoRendererWorkaround && requestedMode != DecoderMode.AUTO
+    val renderPath = buildList {
+        if (useAudioVideoSyncSink) add("av-sync-sink")
+        if (useEffectiveVideoRendererWorkaround) add("decoder-reuse-workaround")
+        if (useManagedCodecSelector) add("managed-codec-selector")
+    }.ifEmpty { listOf("stock-media3") }.joinToString("+")
+    return PlaybackRendererPlan(
+        useAudioVideoSyncSink = useAudioVideoSyncSink,
+        useVideoRendererWorkaround = useEffectiveVideoRendererWorkaround,
+        useManagedCodecSelector = useManagedCodecSelector,
+        renderPath = renderPath
+    )
+}
+
 @UnstableApi
 class PlaybackCodecSelector(
     private val delegate: MediaCodecSelector = MediaCodecSelector.DEFAULT,
@@ -48,8 +84,7 @@ class PlaybackCodecSelector(
             return normalized.startsWith("omx.google.") ||
                 normalized.startsWith("c2.android.") ||
                 normalized.contains("ffmpeg") ||
-                normalized.contains("avcodec") ||
-                normalized.contains("sw")
+                normalized.contains("avcodec")
         }
 
         fun knownBadDecoderNames(records: List<PlaybackCompatibilityRecord>): Set<String> =

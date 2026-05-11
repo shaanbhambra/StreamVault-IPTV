@@ -65,13 +65,16 @@ import com.streamvault.app.device.rememberIsTelevisionDevice
 import com.streamvault.app.ui.components.dialogs.PremiumDialog
 import com.streamvault.app.ui.components.dialogs.PremiumDialogFooterButton
 import com.streamvault.app.ui.components.shell.StatusPill
+import com.streamvault.app.ui.screens.settings.BackupImportPreviewDialog
 import com.streamvault.app.ui.theme.*
 import com.streamvault.data.util.ProviderInputSanitizer
 import com.streamvault.domain.model.ProviderEpgSyncMode
+import com.streamvault.domain.model.ProviderXtreamLiveSyncMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.widget.Toast
 
 // ??? Source type ?????????????????????????????????????????????????????????????
 
@@ -100,6 +103,8 @@ fun ProviderSetupScreen(
     var serverUrl by rememberSaveable { mutableStateOf("") }
     var username by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
+    var httpUserAgent by rememberSaveable { mutableStateOf("") }
+    var httpHeaders by rememberSaveable { mutableStateOf("") }
     var stalkerMacAddress by rememberSaveable { mutableStateOf("") }
     var stalkerDeviceProfile by rememberSaveable { mutableStateOf("") }
     var stalkerDeviceTimezone by rememberSaveable { mutableStateOf("") }
@@ -156,6 +161,10 @@ fun ProviderSetupScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: android.net.Uri? -> if (uri != null) importM3uUri(uri) }
 
+    val backupImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: android.net.Uri? -> uri?.let { viewModel.inspectBackup(it.toString()) } }
+
     // ?? Effects ???????????????????????????????????????????????????????????????
     LaunchedEffect(knownLocalM3uUrls) {
         cleanupOldImportedM3uFilesAsync(context.filesDir, knownLocalM3uUrls, 20)
@@ -170,49 +179,20 @@ fun ProviderSetupScreen(
         runCatching { android.net.Uri.parse(importUri) }.getOrNull()?.let(::importM3uUri)
     }
 
-    LaunchedEffect(uiState.loginSuccess) {
-        if (uiState.loginSuccess) {
-            val previousLocal = uiState.m3uUrl.takeIf { it.startsWith("file://") }
-            val selectedLocal = m3uUrl.takeIf { it.startsWith("file://") }
-            val protectedUris = buildSet {
-                knownLocalM3uUrls.forEach { knownUri ->
-                    if (knownUri != previousLocal || previousLocal == selectedLocal) add(knownUri)
-                }
-                selectedLocal?.let(::add)
-            }
-            cleanupOldImportedM3uFilesAsync(context.filesDir, protectedUris, 20)
+    LaunchedEffect(uiState.backupImportSuccess) {
+        if (uiState.backupImportSuccess) {
             onProviderAdded()
         }
     }
-
-    if (uiState.pendingCombinedAttachProfileId != null) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { viewModel.skipCreatedProviderCombinedAttach() },
-            title = { Text("Add Playlist To Combined M3U?") },
-            text = {
-                Text(
-                    buildString {
-                        append("Add ")
-                        append(uiState.createdProviderName ?: "this playlist")
-                        append(" to ")
-                        append(uiState.pendingCombinedAttachProfileName ?: "the active combined source")
-                        append(" and keep that combined source active for Live TV?")
-                    },
-                    color = OnSurface
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { viewModel.attachCreatedProviderToCombined() }) {
-                    Text("Add To Combined", color = Primary)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.skipCreatedProviderCombinedAttach() }) {
-                    Text("Not Now", color = OnSurface)
-                }
-            }
-        )
-    }
+    ProviderSetupCompletionLayer(
+        uiState = uiState,
+        knownLocalM3uUrls = knownLocalM3uUrls,
+        selectedM3uUrl = m3uUrl,
+        filesDir = context.filesDir,
+        onProviderAdded = onProviderAdded,
+        onAttachCreatedProvider = viewModel::attachCreatedProviderToCombined,
+        onSkipCreatedProviderCombinedAttach = viewModel::skipCreatedProviderCombinedAttach
+    )
 
     LaunchedEffect(editProviderId) {
         if (editProviderId != null) viewModel.loadProvider(editProviderId)
@@ -226,6 +206,8 @@ fun ProviderSetupScreen(
             username = uiState.username
             password = uiState.password
             m3uUrl = uiState.m3uUrl
+            httpUserAgent = uiState.httpUserAgent
+            httpHeaders = uiState.httpHeaders
             stalkerMacAddress = uiState.stalkerMacAddress
             stalkerDeviceProfile = uiState.stalkerDeviceProfile
             stalkerDeviceTimezone = uiState.stalkerDeviceTimezone
@@ -269,6 +251,8 @@ fun ProviderSetupScreen(
         serverUrl.isNotBlank() ||
             username.isNotBlank() ||
             password.isNotBlank() ||
+            httpUserAgent.isNotBlank() ||
+            httpHeaders.isNotBlank() ||
             stalkerMacAddress.isNotBlank() ||
             stalkerDeviceProfile.isNotBlank() ||
             stalkerDeviceTimezone.isNotBlank() ||
@@ -320,18 +304,23 @@ fun ProviderSetupScreen(
                         username = username, onUsernameChange = { username = ProviderInputSanitizer.sanitizeUsernameForEditing(it) },
                         password = password, onPasswordChange = { password = ProviderInputSanitizer.sanitizePasswordForEditing(it) },
                         m3uUrl = m3uUrl, onM3uUrlChange = { m3uUrl = ProviderInputSanitizer.sanitizeUrlForEditing(it) },
+                        httpUserAgent = httpUserAgent, onHttpUserAgentChange = { httpUserAgent = ProviderInputSanitizer.sanitizeHttpUserAgentForEditing(it) },
+                        httpHeaders = httpHeaders, onHttpHeadersChange = { httpHeaders = ProviderInputSanitizer.sanitizeHttpHeadersForEditing(it) },
                         stalkerMacAddress = stalkerMacAddress, onStalkerMacAddressChange = { stalkerMacAddress = ProviderInputSanitizer.sanitizeMacAddressForEditing(it) },
                         stalkerDeviceProfile = stalkerDeviceProfile, onStalkerDeviceProfileChange = { stalkerDeviceProfile = ProviderInputSanitizer.sanitizeDeviceProfileForEditing(it) },
                         stalkerDeviceTimezone = stalkerDeviceTimezone, onStalkerDeviceTimezoneChange = { stalkerDeviceTimezone = ProviderInputSanitizer.sanitizeTimezoneForEditing(it) },
                         stalkerDeviceLocale = stalkerDeviceLocale, onStalkerDeviceLocaleChange = { stalkerDeviceLocale = ProviderInputSanitizer.sanitizeLocaleForEditing(it) },
                         fileImportError = fileImportError,
                         onFilePick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                        onLoginXtream = { viewModel.loginXtream(serverUrl, username, password, name) },
+                        onLoginXtream = { viewModel.loginXtream(serverUrl, username, password, name, httpUserAgent, httpHeaders) },
                         onLoginStalker = { viewModel.loginStalker(serverUrl, stalkerMacAddress, name, stalkerDeviceProfile, stalkerDeviceTimezone, stalkerDeviceLocale) },
-                        onAddM3u = { viewModel.addM3u(m3uUrl, name) },
-                        onToggleFastSync = { viewModel.updateXtreamFastSyncEnabled(!uiState.xtreamFastSyncEnabled) },
+                        onAddM3u = { viewModel.addM3u(m3uUrl, name, httpUserAgent, httpHeaders) },
                         onToggleM3uVodClassification = { viewModel.updateM3uVodClassificationEnabled(!uiState.m3uVodClassificationEnabled) },
                         onSelectEpgSyncMode = viewModel::updateEpgSyncMode,
+                        onSelectXtreamLiveSyncMode = viewModel::updateXtreamLiveSyncMode,
+                        showImportBackupButton = !uiState.isEditing,
+                        isImportingBackup = uiState.isImportingBackup || uiState.syncProgress != null,
+                        onImportBackup = { backupImportLauncher.launch(arrayOf("application/json")) },
                         modifier = Modifier.weight(1f).fillMaxHeight()
                     )
                 }
@@ -354,18 +343,23 @@ fun ProviderSetupScreen(
                         username = username, onUsernameChange = { username = ProviderInputSanitizer.sanitizeUsernameForEditing(it) },
                         password = password, onPasswordChange = { password = ProviderInputSanitizer.sanitizePasswordForEditing(it) },
                         m3uUrl = m3uUrl, onM3uUrlChange = { m3uUrl = ProviderInputSanitizer.sanitizeUrlForEditing(it) },
+                        httpUserAgent = httpUserAgent, onHttpUserAgentChange = { httpUserAgent = ProviderInputSanitizer.sanitizeHttpUserAgentForEditing(it) },
+                        httpHeaders = httpHeaders, onHttpHeadersChange = { httpHeaders = ProviderInputSanitizer.sanitizeHttpHeadersForEditing(it) },
                         stalkerMacAddress = stalkerMacAddress, onStalkerMacAddressChange = { stalkerMacAddress = ProviderInputSanitizer.sanitizeMacAddressForEditing(it) },
                         stalkerDeviceProfile = stalkerDeviceProfile, onStalkerDeviceProfileChange = { stalkerDeviceProfile = ProviderInputSanitizer.sanitizeDeviceProfileForEditing(it) },
                         stalkerDeviceTimezone = stalkerDeviceTimezone, onStalkerDeviceTimezoneChange = { stalkerDeviceTimezone = ProviderInputSanitizer.sanitizeTimezoneForEditing(it) },
                         stalkerDeviceLocale = stalkerDeviceLocale, onStalkerDeviceLocaleChange = { stalkerDeviceLocale = ProviderInputSanitizer.sanitizeLocaleForEditing(it) },
                         fileImportError = fileImportError,
                         onFilePick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                        onLoginXtream = { viewModel.loginXtream(serverUrl, username, password, name) },
+                        onLoginXtream = { viewModel.loginXtream(serverUrl, username, password, name, httpUserAgent, httpHeaders) },
                         onLoginStalker = { viewModel.loginStalker(serverUrl, stalkerMacAddress, name, stalkerDeviceProfile, stalkerDeviceTimezone, stalkerDeviceLocale) },
-                        onAddM3u = { viewModel.addM3u(m3uUrl, name) },
-                        onToggleFastSync = { viewModel.updateXtreamFastSyncEnabled(!uiState.xtreamFastSyncEnabled) },
+                        onAddM3u = { viewModel.addM3u(m3uUrl, name, httpUserAgent, httpHeaders) },
                         onToggleM3uVodClassification = { viewModel.updateM3uVodClassificationEnabled(!uiState.m3uVodClassificationEnabled) },
                         onSelectEpgSyncMode = viewModel::updateEpgSyncMode,
+                        onSelectXtreamLiveSyncMode = viewModel::updateXtreamLiveSyncMode,
+                        showImportBackupButton = !uiState.isEditing,
+                        isImportingBackup = uiState.isImportingBackup || uiState.syncProgress != null,
+                        onImportBackup = { backupImportLauncher.launch(arrayOf("application/json")) },
                         modifier = Modifier.weight(1f).fillMaxWidth()
                     )
                 }
@@ -375,6 +369,24 @@ fun ProviderSetupScreen(
 
     if (uiState.syncProgress != null) {
         SyncProgressDialog(message = uiState.syncProgress!!)
+    }
+
+    val backupPreview = uiState.backupPreview
+    if (backupPreview != null && uiState.pendingBackupUri != null) {
+        BackupImportPreviewDialog(
+            preview = backupPreview,
+            plan = uiState.backupImportPlan,
+            onDismiss = { viewModel.dismissBackupPreview() },
+            onStrategySelected = { viewModel.setBackupConflictStrategy(it) },
+            onImportPreferencesChanged = { viewModel.setImportPreferences(it) },
+            onImportProvidersChanged = { viewModel.setImportProviders(it) },
+            onImportSavedLibraryChanged = { viewModel.setImportSavedLibrary(it) },
+            onImportPlaybackHistoryChanged = { viewModel.setImportPlaybackHistory(it) },
+            onImportMultiViewChanged = { viewModel.setImportMultiViewPresets(it) },
+            onImportRecordingSchedulesChanged = { viewModel.setImportRecordingSchedules(it) },
+            isImporting = uiState.isImportingBackup,
+            onConfirm = { viewModel.confirmBackupImport() }
+        )
     }
 
     if (showDiscardDraftDialog) {
@@ -399,7 +411,75 @@ fun ProviderSetupScreen(
             }
         )
     }
+
 }
+
+    @Composable
+    internal fun ProviderSetupCompletionLayer(
+        uiState: ProviderSetupState,
+        knownLocalM3uUrls: Set<String>,
+        selectedM3uUrl: String,
+        filesDir: java.io.File,
+        onProviderAdded: () -> Unit,
+        onAttachCreatedProvider: () -> Unit,
+        onSkipCreatedProviderCombinedAttach: () -> Unit,
+        cleanupImportedFiles: suspend (java.io.File, Set<String>, Int) -> Unit = ::cleanupOldImportedM3uFilesAsync
+    ) {
+        val context = LocalContext.current
+        LaunchedEffect(uiState.onboardingCompletion, uiState.completionWarning, uiState.pendingCombinedAttachProfileId) {
+            if (
+                uiState.onboardingCompletion != ProviderSetupViewModel.OnboardingCompletion.NONE &&
+                uiState.pendingCombinedAttachProfileId == null
+            ) {
+                if (uiState.completionWarning != null) {
+                    Toast.makeText(
+                        context,
+                        "Provider saved. Sync will resume in background.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                val previousLocal = uiState.m3uUrl.takeIf { it.startsWith("file://") }
+                val selectedLocal = selectedM3uUrl.takeIf { it.startsWith("file://") }
+                val protectedUris = buildSet {
+                    knownLocalM3uUrls.forEach { knownUri ->
+                        if (knownUri != previousLocal || previousLocal == selectedLocal) add(knownUri)
+                    }
+                    selectedLocal?.let(::add)
+                }
+                cleanupImportedFiles(filesDir, protectedUris, 20)
+                onProviderAdded()
+            }
+        }
+
+        if (uiState.pendingCombinedAttachProfileId != null) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = onSkipCreatedProviderCombinedAttach,
+                title = { Text("Add Playlist To Combined M3U?") },
+                text = {
+                    Text(
+                        buildString {
+                            append("Add ")
+                            append(uiState.createdProviderName ?: "this playlist")
+                            append(" to ")
+                            append(uiState.pendingCombinedAttachProfileName ?: "the active combined source")
+                            append(" and keep that combined source active for Live TV?")
+                        },
+                        color = OnSurface
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = onAttachCreatedProvider) {
+                        Text("Add To Combined", color = Primary)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = onSkipCreatedProviderCombinedAttach) {
+                        Text("Not Now", color = OnSurface)
+                    }
+                }
+            )
+        }
+    }
 
 // ??? Form content ?????????????????????????????????????????????????????????????
 
@@ -413,6 +493,8 @@ private fun ProviderFormContent(
     username: String, onUsernameChange: (String) -> Unit,
     password: String, onPasswordChange: (String) -> Unit,
     m3uUrl: String, onM3uUrlChange: (String) -> Unit,
+    httpUserAgent: String, onHttpUserAgentChange: (String) -> Unit,
+    httpHeaders: String, onHttpHeadersChange: (String) -> Unit,
     stalkerMacAddress: String, onStalkerMacAddressChange: (String) -> Unit,
     stalkerDeviceProfile: String, onStalkerDeviceProfileChange: (String) -> Unit,
     stalkerDeviceTimezone: String, onStalkerDeviceTimezoneChange: (String) -> Unit,
@@ -422,9 +504,12 @@ private fun ProviderFormContent(
     onLoginXtream: () -> Unit,
     onLoginStalker: () -> Unit,
     onAddM3u: () -> Unit,
-    onToggleFastSync: () -> Unit,
     onToggleM3uVodClassification: () -> Unit,
     onSelectEpgSyncMode: (ProviderEpgSyncMode) -> Unit,
+    onSelectXtreamLiveSyncMode: (ProviderXtreamLiveSyncMode) -> Unit,
+    showImportBackupButton: Boolean,
+    isImportingBackup: Boolean,
+    onImportBackup: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -489,9 +574,13 @@ private fun ProviderFormContent(
                     AdvancedProviderOptionsSection(
                         sourceType = sourceType,
                         uiState = uiState,
-                        onToggleFastSync = onToggleFastSync,
+                        httpUserAgent = httpUserAgent,
+                        onHttpUserAgentChange = onHttpUserAgentChange,
+                        httpHeaders = httpHeaders,
+                        onHttpHeadersChange = onHttpHeadersChange,
                         onToggleM3uVodClassification = onToggleM3uVodClassification,
                         onSelectEpgSyncMode = onSelectEpgSyncMode,
+                        onSelectXtreamLiveSyncMode = onSelectXtreamLiveSyncMode,
                         stalkerDeviceProfile = stalkerDeviceProfile,
                         onStalkerDeviceProfileChange = onStalkerDeviceProfileChange,
                         stalkerDeviceTimezone = stalkerDeviceTimezone,
@@ -535,9 +624,13 @@ private fun ProviderFormContent(
                     AdvancedProviderOptionsSection(
                         sourceType = sourceType,
                         uiState = uiState,
-                        onToggleFastSync = onToggleFastSync,
+                        httpUserAgent = httpUserAgent,
+                        onHttpUserAgentChange = onHttpUserAgentChange,
+                        httpHeaders = httpHeaders,
+                        onHttpHeadersChange = onHttpHeadersChange,
                         onToggleM3uVodClassification = onToggleM3uVodClassification,
                         onSelectEpgSyncMode = onSelectEpgSyncMode,
+                        onSelectXtreamLiveSyncMode = onSelectXtreamLiveSyncMode,
                         stalkerDeviceProfile = stalkerDeviceProfile,
                         onStalkerDeviceProfileChange = onStalkerDeviceProfileChange,
                         stalkerDeviceTimezone = stalkerDeviceTimezone,
@@ -566,9 +659,13 @@ private fun ProviderFormContent(
                     AdvancedProviderOptionsSection(
                         sourceType = sourceType,
                         uiState = uiState,
-                        onToggleFastSync = onToggleFastSync,
+                        httpUserAgent = httpUserAgent,
+                        onHttpUserAgentChange = onHttpUserAgentChange,
+                        httpHeaders = httpHeaders,
+                        onHttpHeadersChange = onHttpHeadersChange,
                         onToggleM3uVodClassification = onToggleM3uVodClassification,
                         onSelectEpgSyncMode = onSelectEpgSyncMode,
+                        onSelectXtreamLiveSyncMode = onSelectXtreamLiveSyncMode,
                         stalkerDeviceProfile = stalkerDeviceProfile,
                         onStalkerDeviceProfileChange = onStalkerDeviceProfileChange,
                         stalkerDeviceTimezone = stalkerDeviceTimezone,
@@ -602,9 +699,13 @@ private fun ProviderFormContent(
                     AdvancedProviderOptionsSection(
                         sourceType = sourceType,
                         uiState = uiState,
-                        onToggleFastSync = onToggleFastSync,
+                        httpUserAgent = httpUserAgent,
+                        onHttpUserAgentChange = onHttpUserAgentChange,
+                        httpHeaders = httpHeaders,
+                        onHttpHeadersChange = onHttpHeadersChange,
                         onToggleM3uVodClassification = onToggleM3uVodClassification,
                         onSelectEpgSyncMode = onSelectEpgSyncMode,
+                        onSelectXtreamLiveSyncMode = onSelectXtreamLiveSyncMode,
                         stalkerDeviceProfile = stalkerDeviceProfile,
                         onStalkerDeviceProfileChange = onStalkerDeviceProfileChange,
                         stalkerDeviceTimezone = stalkerDeviceTimezone,
@@ -624,6 +725,13 @@ private fun ProviderFormContent(
                     )
                 }
             }
+            if (showImportBackupButton) {
+                SmallActionButton(
+                    text = androidx.compose.ui.res.stringResource(R.string.setup_import_backup),
+                    isLoading = isImportingBackup,
+                    onClick = onImportBackup
+                )
+            }
         }
     }
 }
@@ -632,9 +740,13 @@ private fun ProviderFormContent(
 private fun AdvancedProviderOptionsSection(
     sourceType: SourceType,
     uiState: ProviderSetupState,
-    onToggleFastSync: () -> Unit,
+    httpUserAgent: String,
+    onHttpUserAgentChange: (String) -> Unit,
+    httpHeaders: String,
+    onHttpHeadersChange: (String) -> Unit,
     onToggleM3uVodClassification: () -> Unit,
     onSelectEpgSyncMode: (ProviderEpgSyncMode) -> Unit,
+    onSelectXtreamLiveSyncMode: (ProviderXtreamLiveSyncMode) -> Unit,
     stalkerDeviceProfile: String,
     onStalkerDeviceProfileChange: (String) -> Unit,
     stalkerDeviceTimezone: String,
@@ -650,10 +762,12 @@ private fun AdvancedProviderOptionsSection(
         SourceType.M3U_FILE -> ProviderEpgSyncMode.UPFRONT
     }
 
-    LaunchedEffect(uiState.isEditing, uiState.epgSyncMode, uiState.xtreamFastSyncEnabled, sourceType) {
+    LaunchedEffect(uiState.isEditing, uiState.epgSyncMode, uiState.xtreamLiveSyncMode, sourceType) {
         val hasNonDefaultSelection = ((sourceType == SourceType.XTREAM || sourceType == SourceType.STALKER) && uiState.epgSyncMode != defaultEpgSyncMode) ||
-            (sourceType == SourceType.XTREAM && !uiState.xtreamFastSyncEnabled) ||
+            (sourceType == SourceType.XTREAM && uiState.xtreamLiveSyncMode != ProviderXtreamLiveSyncMode.AUTO) ||
             ((sourceType == SourceType.M3U_URL || sourceType == SourceType.M3U_FILE) && !uiState.m3uVodClassificationEnabled) ||
+            ((sourceType == SourceType.XTREAM || sourceType == SourceType.M3U_URL || sourceType == SourceType.M3U_FILE) &&
+                (httpUserAgent.isNotBlank() || httpHeaders.isNotBlank())) ||
             (sourceType == SourceType.STALKER && (stalkerDeviceProfile.isNotBlank() || stalkerDeviceTimezone.isNotBlank() || stalkerDeviceLocale.isNotBlank()))
         if (uiState.isEditing && hasNonDefaultSelection) {
             showAdvancedOptions = true
@@ -716,53 +830,6 @@ private fun AdvancedProviderOptionsSection(
 
         AnimatedVisibility(visible = showAdvancedOptions) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (sourceType == SourceType.XTREAM) {
-                    Surface(
-                        onClick = onToggleFastSync,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .mouseClickable(onClick = onToggleFastSync),
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = if (uiState.xtreamFastSyncEnabled) Primary.copy(alpha = 0.1f) else Surface,
-                            focusedContainerColor = Primary.copy(alpha = 0.22f)
-                        ),
-                        border = ClickableSurfaceDefaults.border(
-                            border = Border(
-                                BorderStroke(
-                                    1.dp,
-                                    if (uiState.xtreamFastSyncEnabled) Primary.copy(alpha = 0.4f) else SurfaceHighlight
-                                )
-                            ),
-                            focusedBorder = Border(BorderStroke(3.dp, PrimaryLight))
-                        ),
-                        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(
-                                    text = androidx.compose.ui.res.stringResource(R.string.setup_xtream_fast_sync_label),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = TextPrimary
-                                )
-                                Text(
-                                    text = androidx.compose.ui.res.stringResource(R.string.setup_xtream_fast_sync_helper),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = OnSurfaceDim
-                                )
-                            }
-                            Switch(
-                                checked = uiState.xtreamFastSyncEnabled,
-                                onCheckedChange = { onToggleFastSync() }
-                            )
-                        }
-                    }
-                }
-
                 if (sourceType == SourceType.M3U_URL || sourceType == SourceType.M3U_FILE) {
                     Surface(
                         onClick = onToggleM3uVodClassification,
@@ -810,7 +877,61 @@ private fun AdvancedProviderOptionsSection(
                     }
                 }
 
+                if (sourceType == SourceType.XTREAM || sourceType == SourceType.M3U_URL || sourceType == SourceType.M3U_FILE) {
+                    ProviderTextField(
+                        value = httpUserAgent,
+                        onValueChange = onHttpUserAgentChange,
+                        placeholder = "User-Agent override (optional)",
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrectEnabled = false,
+                            keyboardType = KeyboardType.Ascii,
+                            imeAction = ImeAction.Next
+                        )
+                    )
+                    ProviderTextField(
+                        value = httpHeaders,
+                        onValueChange = onHttpHeadersChange,
+                        placeholder = "Custom headers (optional, Header: Value | Header2: Value)",
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrectEnabled = false,
+                            keyboardType = KeyboardType.Ascii,
+                            imeAction = ImeAction.Next
+                        )
+                    )
+                }
+
                 if (sourceType == SourceType.XTREAM || sourceType == SourceType.STALKER) {
+                    if (sourceType == SourceType.XTREAM) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Surface, RoundedCornerShape(12.dp))
+                                .border(1.dp, SurfaceHighlight, RoundedCornerShape(12.dp))
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = androidx.compose.ui.res.stringResource(R.string.setup_xtream_live_sync_mode_label),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = androidx.compose.ui.res.stringResource(R.string.setup_xtream_live_sync_mode_helper),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OnSurfaceDim
+                            )
+                            ProviderXtreamLiveSyncMode.entries.forEach { mode ->
+                                XtreamLiveSyncModeOptionRow(
+                                    mode = mode,
+                                    selected = uiState.xtreamLiveSyncMode == mode,
+                                    onSelect = { onSelectXtreamLiveSyncMode(mode) }
+                                )
+                            }
+                        }
+                    }
+
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -863,6 +984,68 @@ private fun AdvancedProviderOptionsSection(
                         placeholder = "Locale (optional)"
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun XtreamLiveSyncModeOptionRow(
+    mode: ProviderXtreamLiveSyncMode,
+    selected: Boolean,
+    onSelect: () -> Unit
+) {
+    val titleRes = when (mode) {
+        ProviderXtreamLiveSyncMode.AUTO -> R.string.setup_xtream_live_sync_mode_auto_title
+        ProviderXtreamLiveSyncMode.CATEGORY_BY_CATEGORY -> R.string.setup_xtream_live_sync_mode_category_title
+        ProviderXtreamLiveSyncMode.STREAM_ALL -> R.string.setup_xtream_live_sync_mode_stream_all_title
+    }
+    val descriptionRes = when (mode) {
+        ProviderXtreamLiveSyncMode.AUTO -> R.string.setup_xtream_live_sync_mode_auto_description
+        ProviderXtreamLiveSyncMode.CATEGORY_BY_CATEGORY -> R.string.setup_xtream_live_sync_mode_category_description
+        ProviderXtreamLiveSyncMode.STREAM_ALL -> R.string.setup_xtream_live_sync_mode_stream_all_description
+    }
+    Surface(
+        onClick = onSelect,
+        modifier = Modifier
+            .fillMaxWidth()
+            .mouseClickable(onClick = onSelect),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (selected) Primary.copy(alpha = 0.12f) else Color.Transparent,
+            focusedContainerColor = if (selected) Primary.copy(alpha = 0.26f) else SurfaceHighlight.copy(alpha = 0.9f)
+        ),
+        border = ClickableSurfaceDefaults.border(
+            border = Border(
+                BorderStroke(
+                    1.dp,
+                    if (selected) Primary.copy(alpha = 0.45f) else Color.Transparent
+                )
+            ),
+            focusedBorder = Border(BorderStroke(3.dp, PrimaryLight))
+        ),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RadioButton(
+                selected = selected,
+                onClick = onSelect
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = androidx.compose.ui.res.stringResource(titleRes),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextPrimary
+                )
+                Text(
+                    text = androidx.compose.ui.res.stringResource(descriptionRes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OnSurfaceDim
+                )
             }
         }
     }
@@ -982,7 +1165,6 @@ private fun SourceTypeSelectorPanel(
                 style = MaterialTheme.typography.bodySmall,
                 color = OnSurfaceDim
             )
-            Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = androidx.compose.ui.res.stringResource(R.string.setup_source_type_label),
                 style = MaterialTheme.typography.labelSmall,
@@ -1452,6 +1634,7 @@ fun SyncProgressDialog(message: String) {
         subtitle = androidx.compose.ui.res.stringResource(R.string.settings_syncing_subtitle),
         onDismissRequest = {},
         widthFraction = 0.32f,
+        heightFraction = null,
         content = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -1482,6 +1665,35 @@ private fun ActionButton(
     isLoading: Boolean = false,
     onClick: () -> Unit
 ) {
+    ProviderActionButton(
+        text = text,
+        height = 52.dp,
+        isLoading = isLoading,
+        onClick = onClick
+    )
+}
+
+@Composable
+private fun SmallActionButton(
+    text: String,
+    isLoading: Boolean = false,
+    onClick: () -> Unit
+) {
+    ProviderActionButton(
+        text = text,
+        height = 40.dp,
+        isLoading = isLoading,
+        onClick = onClick
+    )
+}
+
+@Composable
+private fun ProviderActionButton(
+    text: String,
+    height: androidx.compose.ui.unit.Dp,
+    isLoading: Boolean = false,
+    onClick: () -> Unit
+) {
     var isFocused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isFocused) 1.03f else 1f, tween(150), label = "scale")
 
@@ -1489,7 +1701,7 @@ private fun ActionButton(
         onClick = { if (!isLoading) onClick() },
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(height)
             .scale(scale)
             .onFocusEvent { isFocused = it.hasFocus }
             .mouseClickable(enabled = !isLoading, onClick = onClick),
@@ -1626,7 +1838,10 @@ private fun cleanupOldImportedM3uFiles(
         .toSet()
 
     val importedFiles = filesDir
-        .listFiles { file -> file.isFile && file.name.startsWith("m3u_") && file.name.endsWith(".m3u") }
+        .listFiles { file ->
+            file.isFile && file.name.startsWith("m3u_") &&
+                (file.name.endsWith(".m3u") || file.name.endsWith(".m3u8"))
+        }
         ?.sortedByDescending { it.lastModified() }
         ?: return
 

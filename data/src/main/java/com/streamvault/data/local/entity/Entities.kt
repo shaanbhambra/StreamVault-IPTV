@@ -10,6 +10,7 @@ import com.streamvault.domain.model.ContentType
 import com.streamvault.domain.model.ProviderEpgSyncMode
 import com.streamvault.domain.model.ProviderStatus
 import com.streamvault.domain.model.ProviderType
+import com.streamvault.domain.model.ProviderXtreamLiveSyncMode
 
 @Entity(
     tableName = "providers",
@@ -25,6 +26,8 @@ data class ProviderEntity(
     val password: String = "",
     @ColumnInfo(name = "m3u_url") val m3uUrl: String = "",
     @ColumnInfo(name = "epg_url") val epgUrl: String = "",
+    @ColumnInfo(name = "http_user_agent") val httpUserAgent: String = "",
+    @ColumnInfo(name = "http_headers") val httpHeaders: String = "",
     @ColumnInfo(name = "stalker_mac_address") val stalkerMacAddress: String = "",
     @ColumnInfo(name = "stalker_device_profile") val stalkerDeviceProfile: String = "",
     @ColumnInfo(name = "stalker_device_timezone") val stalkerDeviceTimezone: String = "",
@@ -36,6 +39,7 @@ data class ProviderEntity(
     @ColumnInfo(name = "allowed_output_formats_json") val allowedOutputFormatsJson: String = "[]",
     @ColumnInfo(name = "epg_sync_mode") val epgSyncMode: ProviderEpgSyncMode = ProviderEpgSyncMode.UPFRONT,
     @ColumnInfo(name = "xtream_fast_sync_enabled") val xtreamFastSyncEnabled: Boolean = false,
+    @ColumnInfo(name = "xtream_live_sync_mode") val xtreamLiveSyncMode: ProviderXtreamLiveSyncMode = ProviderXtreamLiveSyncMode.AUTO,
     @ColumnInfo(name = "m3u_vod_classification_enabled") val m3uVodClassificationEnabled: Boolean = false,
     val status: ProviderStatus = ProviderStatus.UNKNOWN,
     @ColumnInfo(name = "last_synced_at") val lastSyncedAt: Long = 0,
@@ -182,7 +186,11 @@ data class PlaybackCompatibilityRecordEntity(
     indices = [
         Index(value = ["provider_id"]),
         Index(value = ["provider_id", "category_id"]),
-        Index(value = ["provider_id", "stream_id"], unique = true)
+        Index(value = ["provider_id", "stream_id"], unique = true),
+        Index(name = "index_movies_provider_id_name_id", value = ["provider_id", "name", "id"]),
+        Index(name = "index_movies_provider_id_category_id_name_id", value = ["provider_id", "category_id", "name", "id"]),
+        Index(name = "index_movies_provider_id_rating_name_id", value = ["provider_id", "rating", "name", "id"]),
+        Index(name = "index_movies_provider_id_added_at_release_date_name_id", value = ["provider_id", "added_at", "release_date", "name", "id"])
     ]
 )
 data class MovieEntity(
@@ -214,7 +222,10 @@ data class MovieEntity(
     @ColumnInfo(name = "is_adult") val isAdult: Boolean = false,
     @ColumnInfo(name = "is_user_protected") val isUserProtected: Boolean = false,
     @ColumnInfo(name = "sync_fingerprint") val syncFingerprint: String = "",
-    @ColumnInfo(name = "added_at") val addedAt: Long = 0L
+    @ColumnInfo(name = "added_at") val addedAt: Long = 0L,
+    @ColumnInfo(name = "cache_state") val cacheState: String = "DETAIL_HYDRATED",
+    @ColumnInfo(name = "detail_hydrated_at") val detailHydratedAt: Long = 0L,
+    @ColumnInfo(name = "remote_stale_at") val remoteStaleAt: Long = 0L
 )
 
 data class MovieBrowseEntity(
@@ -250,7 +261,11 @@ data class MovieBrowseEntity(
     indices = [
         Index(value = ["provider_id"]),
         Index(value = ["provider_id", "category_id"]),
-        Index(value = ["provider_id", "series_id"], unique = true)
+        Index(value = ["provider_id", "series_id"], unique = true),
+        Index(name = "index_series_provider_id_name_id", value = ["provider_id", "name", "id"]),
+        Index(name = "index_series_provider_id_category_id_name_id", value = ["provider_id", "category_id", "name", "id"]),
+        Index(name = "index_series_provider_id_rating_name_id", value = ["provider_id", "rating", "name", "id"]),
+        Index(name = "index_series_provider_id_last_modified_name_id", value = ["provider_id", "last_modified", "name", "id"])
     ]
 )
 data class SeriesEntity(
@@ -276,7 +291,10 @@ data class SeriesEntity(
     @ColumnInfo(name = "provider_id") val providerId: Long = 0,
     @ColumnInfo(name = "is_adult") val isAdult: Boolean = false,
     @ColumnInfo(name = "is_user_protected") val isUserProtected: Boolean = false,
-    @ColumnInfo(name = "sync_fingerprint") val syncFingerprint: String = ""
+    @ColumnInfo(name = "sync_fingerprint") val syncFingerprint: String = "",
+    @ColumnInfo(name = "cache_state") val cacheState: String = "DETAIL_HYDRATED",
+    @ColumnInfo(name = "detail_hydrated_at") val detailHydratedAt: Long = 0L,
+    @ColumnInfo(name = "remote_stale_at") val remoteStaleAt: Long = 0L
 )
 
 data class SeriesBrowseEntity(
@@ -486,7 +504,7 @@ data class MovieImportStageEntity(
 
 @Entity(
     tableName = "series_import_stage",
-    primaryKeys = ["session_id", "provider_id", "series_id"],
+    primaryKeys = ["session_id", "provider_id", "provider_series_key"],
     foreignKeys = [ForeignKey(
         entity = ProviderEntity::class,
         parentColumns = ["id"],
@@ -502,6 +520,8 @@ data class SeriesImportStageEntity(
     @ColumnInfo(name = "session_id") val sessionId: Long,
     @ColumnInfo(name = "provider_id") val providerId: Long,
     @ColumnInfo(name = "series_id") val seriesId: Long,
+    @ColumnInfo(name = "provider_series_id") val providerSeriesId: String? = null,
+    @ColumnInfo(name = "provider_series_key") val providerSeriesKey: String = providerSeriesId?.takeIf { it.isNotBlank() } ?: seriesId.toString(),
     val name: String,
     @ColumnInfo(name = "poster_url") val posterUrl: String? = null,
     @ColumnInfo(name = "backdrop_url") val backdropUrl: String? = null,
@@ -609,7 +629,7 @@ data class ProgramBrowseEntity(
         )
     ],
     indices = [
-        Index(value = ["provider_id", "content_id", "content_type", "group_id"], unique = true),
+        Index(value = ["provider_id", "content_id", "content_type", "group_key"], unique = true),
         Index(value = ["provider_id", "content_type", "group_id"]),
         Index(value = ["group_id", "position"])
     ]
@@ -622,6 +642,7 @@ data class FavoriteEntity(
     @ColumnInfo(name = "content_type") val contentType: ContentType,
     val position: Int = 0,
     @ColumnInfo(name = "group_id") val groupId: Long? = null,
+    @ColumnInfo(name = "group_key") val groupKey: Long = groupId ?: 0L,
     @ColumnInfo(name = "added_at") val addedAt: Long = System.currentTimeMillis()
 )
 
@@ -666,7 +687,9 @@ data class CategoryCount(
     indices = [
         Index(value = ["content_id", "content_type", "provider_id"], unique = true),
         Index(value = ["last_watched_at"]),
-        Index(value = ["provider_id"])
+        Index(value = ["provider_id"]),
+        Index(name = "index_playback_history_provider_id_content_type_content_id", value = ["provider_id", "content_type", "content_id"]),
+        Index(name = "index_playback_history_provider_id_content_type_last_watched_at", value = ["provider_id", "content_type", "last_watched_at"])
     ]
 )
 data class PlaybackHistoryEntity(
