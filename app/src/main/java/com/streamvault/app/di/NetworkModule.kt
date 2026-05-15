@@ -146,6 +146,6 @@ object NetworkModule {
         playbackSupportSnapshotStore
     ).apply {
         enableMediaSession = false
-        bypassAudioFocus = true
+        bypassAudioFocus = false // Respect audio focus — pause when other apps play
     }
 }

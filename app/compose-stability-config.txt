@@ -1,0 +1,11 @@
+// Classes to treat as stable for Compose recomposition optimization
+// See: https://developer.android.com/develop/ui/compose/performance/stability/fix#configuration-file
+com.streamvault.domain.model.Channel
+com.streamvault.domain.model.Category
+com.streamvault.domain.model.ChannelQualityOption
+com.streamvault.domain.model.LiveChannelVariant
+com.streamvault.domain.model.LiveChannelVariantAttributes
+com.streamvault.domain.model.LiveChannelObservedQuality
+com.streamvault.domain.model.Program
+com.streamvault.domain.model.Favorite
+com.streamvault.domain.model.Provider

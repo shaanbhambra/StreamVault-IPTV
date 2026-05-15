@@ -2,6 +2,7 @@ package com.streamvault.app.ui.screens.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.debounce
 import com.streamvault.app.di.AuxiliaryPlayerEngine
 import com.streamvault.app.player.LivePreviewHandoffManager
 import com.streamvault.app.plugins.StreamVaultPluginManager
@@ -259,7 +260,8 @@ class HomeViewModel @Inject constructor(
                 _epgProgramMap
             ) { channels: List<Channel>, favorites: List<Favorite>, epgProgramMap: Map<String, Program> ->
                 Triple(channels, favorites, epgProgramMap)
-            }.collectLatest { (channels, favorites, epgProgramMap) ->
+            }.debounce(300) // Batch EPG updates to reduce recomposition frequency
+            .collectLatest { (channels, favorites, epgProgramMap) ->
                 val favoriteIds = favorites.map { it.contentId }.toSet()
                 val markedChannels = channels.map { channel ->
                     val program = channel.guideLookupKey()?.let { lookupKey -> epgProgramMap[lookupKey] }

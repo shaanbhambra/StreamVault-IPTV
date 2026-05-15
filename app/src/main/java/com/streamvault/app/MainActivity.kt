@@ -112,6 +112,9 @@ class MainActivity : ComponentActivity() {
         applyImmersiveSystemUi()
         _pictureInPictureModeFlow.value = isInPictureInPictureMode
         handleExternalIntent(intent)
+        initDebugApiIfAvailable()
+        // VPN check disabled — WireGuard is always-on VPN on this device
+        // ensureVpnActive()
         if (isTelevisionDevice()) {
             lifecycleScope.launch {
                 watchNextManager.refreshWatchNext()
@@ -411,6 +414,55 @@ class MainActivity : ComponentActivity() {
             getSerializableExtra(EXTRA_EXTERNAL_DESTINATION, ExternalDestination::class.java)
         } else {
             getSerializableExtra(EXTRA_EXTERNAL_DESTINATION) as? ExternalDestination
+        }
+    }
+
+    /**
+     * Checks if VPN is active. If not, attempts to launch Mullvad VPN.
+     * IPTV streams require VPN to avoid ISP blocking.
+     */
+    private fun ensureVpnActive() {
+        val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val network = cm.activeNetwork
+        val caps = network?.let { cm.getNetworkCapabilities(it) }
+        val vpnActive = caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true
+
+        if (!vpnActive) {
+            android.util.Log.w("StreamVault", "VPN not active — attempting to launch Mullvad")
+            try {
+                // Try Mullvad first
+                val mullvadIntent = packageManager.getLaunchIntentForPackage("net.mullvad.mullvadvpn")
+                if (mullvadIntent != null) {
+                    startActivity(mullvadIntent)
+                    return
+                }
+                // Fallback to WireGuard
+                val wgIntent = packageManager.getLaunchIntentForPackage("com.wireguard.android")
+                if (wgIntent != null) {
+                    startActivity(wgIntent)
+                    return
+                }
+                android.util.Log.w("StreamVault", "No VPN app found on device")
+            } catch (e: Exception) {
+                android.util.Log.e("StreamVault", "Failed to launch VPN app", e)
+            }
+        } else {
+            android.util.Log.i("StreamVault", "VPN is active")
+        }
+    }
+
+    /**
+     * Starts the debug HTTP API server if running a debug build.
+     * Uses reflection to call DebugApiStarter which is only in src/debug/.
+     */
+    private fun initDebugApiIfAvailable() {
+        if (!BuildConfig.DEBUG) return
+        try {
+            val clazz = Class.forName("com.streamvault.app.debug.DebugApiStarter")
+            val method = clazz.getMethod("start", android.content.Context::class.java)
+            method.invoke(null, applicationContext)
+        } catch (e: Exception) {
+            android.util.Log.e("DebugAPI", "Failed to start debug API", e)
         }
     }
 }

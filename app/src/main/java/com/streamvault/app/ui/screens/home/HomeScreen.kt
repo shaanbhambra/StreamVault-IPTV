@@ -1166,19 +1166,24 @@ fun HomeScreen(
                             ) {
                                 items(
                                     items = uiState.filteredChannels,
-                                    key = { it.id }
+                                    key = { it.id },
+                                    contentType = { "channel" }
                                 ) { channel ->
                                     val isLocked = isChannelLocked(channel)
                                     val isDraggingThis = draggingChannel == channel
                                     val channelFocusRequester = channelFocusRequesters.getOrPut(channel.id) { FocusRequester() }
 
-                                    LiveChannelRowSurface(
-                                        channel = channel,
-                                        sourceBadgeLabel = uiState.currentCombinedProfileMembers
+                                    val memoizedBadgeLabel = remember(channel.providerId, uiState.isCombinedLiveSource) {
+                                        uiState.currentCombinedProfileMembers
                                             .firstOrNull { it.providerId == channel.providerId }
                                             ?.providerName
                                             ?.ifBlank { providerNameById[channel.providerId] }
-                                            ?.takeIf { uiState.isCombinedLiveSource },
+                                            ?.takeIf { uiState.isCombinedLiveSource }
+                                    }
+
+                                    LiveChannelRowSurface(
+                                        channel = channel,
+                                        sourceBadgeLabel = memoizedBadgeLabel,
                                         isLocked = isLocked,
                                         isReorderMode = uiState.isChannelReorderMode,
                                         isDragging = isDraggingThis,

@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0a0f">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%236c5ce7'/><text x='50' y='68' text-anchor='middle' font-size='50' fill='white'>SV</text></svg>">
+<title>StreamVault Remote</title>
+<style>
+:root {
+  --bg: #0a0a0f;
+  --surface: #14141f;
+  --surface2: #1e1e2e;
+  --accent: #6c5ce7;
+  --accent2: #a29bfe;
+  --text: #e8e8f0;
+  --text2: #8888a0;
+  --success: #00b894;
+  --danger: #e17055;
+  --border: #2a2a3e;
+  --radius: 12px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Header */
+.header {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(10,10,15,0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.header-top {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.header h1 {
+  font-size: 18px; font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block; margin-right: 6px;
+}
+.status-dot.on { background: var(--success); box-shadow: 0 0 6px var(--success); }
+.status-dot.off { background: var(--danger); }
+
+.status-text { font-size: 11px; color: var(--text2); }
+
+/* Search */
+.search-bar {
+  position: relative;
+}
+
+.search-bar input {
+  width: 100%;
+  padding: 10px 14px 10px 38px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.search-bar input:focus {
+  border-color: var(--accent);
+}
+
+.search-bar .icon {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  color: var(--text2); font-size: 16px;
+}
+
+/* Tabs */
+.tabs {
+  display: flex; overflow-x: auto; gap: 6px;
+  padding: 10px 16px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.tabs::-webkit-scrollbar { display: none; }
+
+.tab {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--text2);
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+/* Channel List */
+.channel-list {
+  padding: 0 16px 100px;
+}
+
+.channel-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  -webkit-user-select: none;
+}
+
+.channel-item:active {
+  transform: scale(0.98);
+  background: var(--surface2);
+  border-color: var(--accent);
+}
+
+.channel-item.playing {
+  border-color: var(--success);
+  box-shadow: 0 0 0 1px var(--success);
+}
+
+.channel-logo {
+  width: 44px; height: 44px;
+  border-radius: 8px;
+  background: var(--surface2);
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.channel-logo.placeholder {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 700; color: var(--accent);
+}
+
+.channel-info {
+  flex: 1; min-width: 0;
+}
+
+.channel-name {
+  font-size: 14px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.channel-meta {
+  font-size: 11px; color: var(--text2);
+  margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.channel-actions {
+  display: flex; gap: 8px; flex-shrink: 0;
+}
+
+.btn-icon {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: none;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-play {
+  background: var(--accent);
+  color: white;
+}
+.btn-play:active { background: var(--accent2); }
+
+.btn-fav {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text2);
+}
+.btn-fav.active {
+  color: #fdcb6e;
+  border-color: #fdcb6e;
+}
+
+/* Loading */
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: var(--text2);
+}
+
+.spinner {
+  width: 24px; height: 24px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 10px;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Now Playing Bar */
+.now-playing {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: rgba(20,20,31,0.97);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border);
+  padding: 12px 16px;
+  display: none;
+  align-items: center; gap: 12px;
+  z-index: 100;
+}
+
+.now-playing.visible { display: flex; }
+
+.now-playing .np-info { flex: 1; }
+.now-playing .np-title { font-size: 13px; font-weight: 600; }
+.now-playing .np-sub { font-size: 11px; color: var(--text2); }
+
+.btn-stop {
+  padding: 8px 16px;
+  background: var(--danger);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+}
+
+/* Category badge */
+.cat-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--surface2);
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--accent2);
+  font-weight: 500;
+}
+
+/* AI Chat */
+.ai-chat {
+  padding: 0 16px;
+}
+.ai-messages {
+  min-height: 200px; max-height: 60vh;
+  overflow-y: auto; padding-bottom: 12px;
+}
+.ai-msg {
+  padding: 10px 14px; border-radius: var(--radius);
+  margin-bottom: 8px; font-size: 14px; line-height: 1.5;
+}
+.ai-msg.user {
+  background: var(--accent); color: white;
+  margin-left: 40px; text-align: right;
+}
+.ai-msg.assistant {
+  background: var(--surface); border: 1px solid var(--border);
+  margin-right: 20px;
+}
+.ai-msg .play-btn {
+  display: inline-block; padding: 4px 12px; margin: 4px 2px;
+  background: var(--accent); color: white; border-radius: 8px;
+  font-size: 12px; font-weight: 600; cursor: pointer; border: none;
+}
+.ai-input-bar {
+  display: flex; gap: 8px; padding: 12px 16px;
+  position: sticky; bottom: 0;
+  background: rgba(10,10,15,0.95); backdrop-filter: blur(10px);
+}
+.ai-input-bar input {
+  flex: 1; padding: 10px 14px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); color: var(--text); font-size: 15px; outline: none;
+}
+.ai-input-bar input:focus { border-color: var(--accent); }
+.ai-input-bar button {
+  padding: 10px 18px; background: var(--accent); color: white;
+  border: none; border-radius: var(--radius); font-weight: 600; cursor: pointer;
+}
+.ai-typing { color: var(--text2); font-style: italic; font-size: 13px; padding: 8px 14px; }
+
+/* Empty state */
+.empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text2);
+}
+.empty .emoji { font-size: 40px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-top">
+    <h1>StreamVault</h1>
+    <div>
+      <span class="status-dot" id="statusDot"></span>
+      <span class="status-text" id="statusText">connecting...</span>
+    </div>
+  </div>
+  <div class="search-bar">
+    <span class="icon">&#x1F50D;</span>
+    <input type="search" id="searchInput" placeholder="Search channels..." autocomplete="off">
+  </div>
+</div>
+
+<div class="tabs" id="tabs">
+  <div class="tab active" data-tab="favorites">Favorites</div>
+  <div class="tab" data-tab="all">All Channels</div>
+  <div class="tab" data-tab="sports">Sports</div>
+  <div class="tab" data-tab="news">News</div>
+  <div class="tab" data-tab="4k">4K</div>
+  <div class="tab" data-tab="canada">Canada</div>
+  <div class="tab" data-tab="toronto">Toronto</div>
+  <div class="tab" data-tab="categories">Categories</div>
+  <div class="tab" data-tab="ai" id="aiTab">AI</div>
+  <div class="tab" data-tab="settings">Settings</div>
+</div>
+
+<div class="channel-list" id="channelList">
+  <div class="loading"><div class="spinner"></div>Loading...</div>
+</div>
+
+<div class="now-playing" id="nowPlaying">
+  <div class="np-info">
+    <div class="np-title" id="npTitle"></div>
+    <div class="np-sub" id="npSub">Now Playing</div>
+  </div>
+  <button class="btn-stop" onclick="stopPlayback()">Stop</button>
+</div>
+
+<script>
+const API = window.location.origin;
+let currentTab = 'favorites';
+let favoriteIds = new Set();
+let playingChannelId = null;
+let searchTimeout = null;
+let allCategories = [];
+
+// Register service worker for PWA
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// Init — on PWA open, wake TV and launch StreamVault
+document.addEventListener('DOMContentLoaded', async () => {
+  // Try to launch StreamVault on the TV when PWA opens
+  try {
+    await fetch(API + '/launch', { method: 'POST', signal: AbortSignal.timeout(3000) });
+  } catch { /* TV might be off or unreachable */ }
+
+  await loadStatus();
+  await loadFavoriteIds();
+  await loadTab('favorites');
+
+  // Search debounce
+  document.getElementById('searchInput').addEventListener('input', (e) => {
+    clearTimeout(searchTimeout);
+    const q = e.target.value.trim();
+    if (q.length >= 2) {
+      searchTimeout = setTimeout(() => searchChannels(q), 300);
+    } else if (q.length === 0) {
+      loadTab(currentTab);
+    }
+  });
+
+  // Tab clicks
+  document.getElementById('tabs').addEventListener('click', (e) => {
+    if (e.target.classList.contains('tab')) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      e.target.classList.add('active');
+      currentTab = e.target.dataset.tab;
+      document.getElementById('searchInput').value = '';
+      loadTab(currentTab);
+    }
+  });
+});
+
+async function api(path) {
+  const res = await fetch(API + path);
+  return res.json();
+}
+
+async function apiPost(path, data) {
+  const res = await fetch(API + path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data)
+  });
+  return res.json();
+}
+
+async function loadStatus() {
+  try {
+    const data = await api('/status');
+    const dot = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    dot.className = 'status-dot on';
+    text.textContent = `${data.channel_count} ch | ${data.favorite_count} fav | VPN ${data.vpn_active ? 'on' : 'off'}`;
+  } catch {
+    document.getElementById('statusDot').className = 'status-dot off';
+    document.getElementById('statusText').textContent = 'offline';
+  }
+}
+
+async function loadFavoriteIds() {
+  const data = await api('/favorites');
+  favoriteIds = new Set(data.favorites.map(f => f.channel_id));
+}
+
+async function loadTab(tab) {
+  const list = document.getElementById('channelList');
+  list.innerHTML = '<div class="loading"><div class="spinner"></div>Loading...</div>';
+
+  try {
+    let channels = [];
+
+    switch (tab) {
+      case 'favorites': {
+        const data = await api('/favorites');
+        channels = data.favorites.map(f => ({
+          id: f.channel_id,
+          stream_id: f.stream_id,
+          name: f.channel_name,
+          category_name: f.category_name,
+          logo_url: '',
+          number: f.position
+        }));
+        break;
+      }
+      case 'all': {
+        const data = await api('/channels?limit=100');
+        channels = data.channels;
+        break;
+      }
+      case 'sports': {
+        const data = await api('/channels?search=sport&limit=80');
+        const data2 = await api('/channels?search=ESPN&limit=30');
+        const data3 = await api('/channels?search=NBA&limit=30');
+        const data4 = await api('/channels?search=TSN&limit=30');
+        const seen = new Set();
+        channels = [...data.channels, ...data2.channels, ...data3.channels, ...data4.channels]
+          .filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; })
+          .filter(c => !c.name.includes('NO EVENT'));
+        break;
+      }
+      case 'news': {
+        const data = await api('/channels?search=NEWS&limit=50');
+        const data2 = await api('/channels?search=CNN&limit=10');
+        const data3 = await api('/channels?search=MSNBC&limit=10');
+        const seen = new Set();
+        channels = [...data.channels, ...data2.channels, ...data3.channels]
+          .filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; });
+        break;
+      }
+      case '4k': {
+        const data = await api('/channels?search=4K&limit=60');
+        channels = data.channels.filter(c => !c.name.includes('NO EVENT'));
+        break;
+      }
+      case 'canada': {
+        const data = await api('/channels?search=CA%3A&limit=80');
+        const data2 = await api('/channels?search=CA+EN&limit=80');
+        const seen = new Set();
+        channels = [...data.channels, ...data2.channels]
+          .filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; });
+        break;
+      }
+      case 'toronto': {
+        const data = await api('/channels?search=Toronto&limit=30');
+        const data2 = await api('/channels?search=CP24&limit=5');
+        const data3 = await api('/channels?search=Ontario&limit=20');
+        const seen = new Set();
+        channels = [...data.channels, ...data2.channels, ...data3.channels]
+          .filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; })
+          .filter(c => !c.name.includes('FLSP'));
+        break;
+      }
+      case 'categories': {
+        await loadCategories();
+        return;
+      }
+      case 'ai': {
+        showAiChat();
+        return;
+      }
+      case 'settings': {
+        await showSettings();
+        return;
+      }
+    }
+
+    renderChannels(channels);
+  } catch (e) {
+    list.innerHTML = `<div class="empty"><div class="emoji">&#x26A0;</div>Error loading channels<br><small>${e.message}</small></div>`;
+  }
+}
+
+async function loadCategories() {
+  const list = document.getElementById('channelList');
+  if (allCategories.length === 0) {
+    const data = await api('/categories?type=LIVE');
+    allCategories = data.categories;
+  }
+
+  list.innerHTML = allCategories
+    .filter(cat => (cat.channel_count || 0) > 0)
+    .map(cat => `
+    <div class="channel-item" onclick="loadCategory(${cat.category_id}, '${cat.name.replace(/'/g, "\\'")}')">
+      <div class="channel-logo placeholder">${cat.name.charAt(0)}</div>
+      <div class="channel-info">
+        <div class="channel-name">${esc(cat.name)}</div>
+        <div class="channel-meta">${cat.channel_count || 0} channels</div>
+      </div>
+      <div style="color: var(--text2); font-size: 20px;">&#x276F;</div>
+    </div>
+  `).join('');
+}
+
+async function loadCategory(categoryId, name) {
+  const list = document.getElementById('channelList');
+  list.innerHTML = '<div class="loading"><div class="spinner"></div>Loading...</div>';
+
+  // Add back button
+  const data = await api(`/channels?category_id=${categoryId}&limit=200`);
+
+  const backBtn = `<div class="channel-item" onclick="loadCategories()" style="border-color: var(--accent);">
+    <div style="font-size: 20px;">&#x2190;</div>
+    <div class="channel-info"><div class="channel-name">Back to Categories</div></div>
+  </div>`;
+
+  list.innerHTML = backBtn;
+  renderChannels(data.channels, true);
+}
+
+async function searchChannels(query) {
+  const list = document.getElementById('channelList');
+  list.innerHTML = '<div class="loading"><div class="spinner"></div>Searching...</div>';
+
+  const data = await api(`/channels?search=${encodeURIComponent(query)}&limit=50`);
+  if (data.channels.length === 0) {
+    list.innerHTML = `<div class="empty"><div class="emoji">&#x1F50D;</div>No channels found for "${esc(query)}"</div>`;
+    return;
+  }
+  renderChannels(data.channels);
+}
+
+function renderChannels(channels, append = false) {
+  const list = document.getElementById('channelList');
+  if (!append) list.innerHTML = '';
+
+  if (channels.length === 0) {
+    list.innerHTML = '<div class="empty"><div class="emoji">&#x1F4FA;</div>No channels</div>';
+    return;
+  }
+
+  const html = channels.map(ch => {
+    const isFav = favoriteIds.has(ch.id);
+    const isPlaying = playingChannelId === ch.id;
+    const initial = (ch.name || '?').replace(/[^A-Za-z0-9]/g, '').charAt(0) || '?';
+    const logo = ch.logo_url ? `<img class="channel-logo" src="${ch.logo_url}" onerror="this.outerHTML='<div class=\\'channel-logo placeholder\\'>${initial}</div>'">`
+      : `<div class="channel-logo placeholder">${initial}</div>`;
+
+    return `
+    <div class="channel-item ${isPlaying ? 'playing' : ''}" id="ch-${ch.id}">
+      ${logo}
+      <div class="channel-info" onclick="playChannel(${ch.id}, '${esc(ch.name)}')">
+        <div class="channel-name">${esc(ch.name)}</div>
+        <div class="channel-meta">${esc(ch.category_name || '')} ${ch.stream_id ? '| #' + ch.stream_id : ''}</div>
+      </div>
+      <div class="channel-actions">
+        <button class="btn-icon btn-fav ${isFav ? 'active' : ''}" onclick="toggleFav(${ch.id}, this)">
+          ${isFav ? '&#x2605;' : '&#x2606;'}
+        </button>
+        <button class="btn-icon btn-play" onclick="playChannel(${ch.id}, '${esc(ch.name)}')">
+          &#x25B6;
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+
+  list.innerHTML += html;
+}
+
+async function playChannel(channelId, name) {
+  try {
+    const data = await apiPost('/play', { channel_id: channelId });
+    if (data.error) {
+      alert(data.message || data.error);
+      return;
+    }
+    if (data.success) {
+      playingChannelId = channelId;
+      const np = document.getElementById('nowPlaying');
+      document.getElementById('npTitle').textContent = data.playing || name;
+      np.classList.add('visible');
+
+      // Highlight playing channel
+      document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('playing'));
+      const el = document.getElementById(`ch-${channelId}`);
+      if (el) el.classList.add('playing');
+    }
+  } catch (e) {
+    alert('Failed to play: ' + e.message);
+  }
+}
+
+async function toggleFav(channelId, btn) {
+  const isFav = favoriteIds.has(channelId);
+  try {
+    if (isFav) {
+      await apiPost('/favorites/remove', { channel_id: channelId });
+      favoriteIds.delete(channelId);
+      btn.classList.remove('active');
+      btn.innerHTML = '&#x2606;';
+    } else {
+      await apiPost('/favorites/add', { channel_id: channelId });
+      favoriteIds.add(channelId);
+      btn.classList.add('active');
+      btn.innerHTML = '&#x2605;';
+    }
+  } catch (e) {
+    console.error('Fav toggle failed:', e);
+  }
+}
+
+function stopPlayback() {
+  playingChannelId = null;
+  document.getElementById('nowPlaying').classList.remove('visible');
+  document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('playing'));
+}
+
+// === Settings ===
+async function showSettings() {
+  const list = document.getElementById('channelList');
+  list.innerHTML = '<div class="loading"><div class="spinner"></div>Loading settings...</div>';
+
+  try {
+    const settings = await api('/settings');
+    const statusData = await api('/status');
+    const vpnOn = statusData.vpn_active;
+
+    list.innerHTML = `
+      <div style="padding: 0 16px;">
+        <div class="channel-item" style="flex-direction:column; align-items:stretch; gap:8px;">
+          <div style="font-size:16px; font-weight:700; color:var(--accent2);">VPN</div>
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <div>
+              <div class="channel-name">WireGuard VPN</div>
+              <div class="channel-meta">Status: <span style="color:${vpnOn ? 'var(--success)' : 'var(--danger)'}">${vpnOn ? 'Connected' : 'Disconnected'}</span></div>
+              <div class="channel-meta" style="margin-top:4px; color:var(--danger); font-weight:500;">Required — streams blocked without VPN</div>
+            </div>
+            <button class="btn-icon btn-play" style="width:auto; padding:8px 16px; border-radius:8px; font-size:13px;"
+                    onclick="${vpnOn ? 'vpnOff()' : 'vpnOn()'}">${vpnOn ? 'Disconnect' : 'Connect'}</button>
+          </div>
+        </div>
+
+        <div class="channel-item" style="flex-direction:column; align-items:stretch; gap:8px;" onclick="window.open('${settings.qr_url}','_blank')">
+          <div style="font-size:16px; font-weight:700; color:var(--accent2);">Mobile Remote</div>
+          <div class="channel-name">Show QR Code on TV</div>
+          <div class="channel-meta">Scan to connect another phone to this TV</div>
+          <div class="channel-meta" style="font-family:monospace; color:var(--accent2);">${settings.companion_url}</div>
+        </div>
+
+        <div class="channel-item" style="flex-direction:column; align-items:stretch; gap:8px;">
+          <div style="font-size:16px; font-weight:700; color:var(--accent2);">Provider</div>
+          <div class="channel-name">${settings.provider ? settings.provider.name : 'Not configured'}</div>
+          <div class="channel-meta">Channels: ${settings.channel_count} | Favorites: ${settings.favorite_count}</div>
+          <div class="channel-meta">Server: ${settings.provider ? settings.provider.server_url : 'N/A'}</div>
+          <div class="channel-meta">Status: ${settings.provider ? settings.provider.status : 'N/A'}</div>
+        </div>
+
+        <div class="channel-item" style="flex-direction:column; align-items:stretch; gap:8px;">
+          <div style="font-size:16px; font-weight:700; color:var(--accent2);">AI Assistant</div>
+          <div class="channel-name">Gemini Flash Lite</div>
+          <div class="channel-meta">Status: ${settings.ai_configured ? 'Configured' : 'Not configured'}</div>
+        </div>
+
+        <div class="channel-item" onclick="showQrOnTv()" style="cursor:pointer;">
+          <div class="channel-info">
+            <div class="channel-name">Display QR on TV Screen</div>
+            <div class="channel-meta">Show QR code on the TV for other devices</div>
+          </div>
+        </div>
+
+        <div class="channel-item" onclick="launchApp()" style="cursor:pointer;">
+          <div class="channel-info">
+            <div class="channel-name">Launch StreamVault on TV</div>
+            <div class="channel-meta">Bring StreamVault to foreground</div>
+          </div>
+        </div>
+      </div>`;
+  } catch (e) {
+    list.innerHTML = `<div class="empty"><div class="emoji">&#x26A0;</div>Cannot reach TV<br><small>${e.message}</small></div>`;
+  }
+}
+
+async function vpnOn() {
+  await apiPost('/vpn/on', {});
+  setTimeout(() => showSettings(), 2000);
+}
+
+async function vpnOff() {
+  await apiPost('/vpn/off', {});
+  setTimeout(() => showSettings(), 2000);
+}
+
+async function showQrOnTv() {
+  await apiPost('/show_qr', {});
+}
+
+async function launchApp() {
+  await apiPost('/launch', {});
+}
+
+// === AI Chat ===
+let aiMessages = [];
+let aiConfigured = false;
+
+async function checkAiStatus() {
+  try {
+    const data = await api('/ai/status');
+    aiConfigured = data.configured;
+    const tab = document.getElementById('aiTab');
+    if (tab) tab.style.display = aiConfigured ? '' : 'none';
+  } catch { aiConfigured = false; }
+}
+checkAiStatus();
+
+function showAiChat() {
+  const list = document.getElementById('channelList');
+  list.innerHTML = `
+    <div class="ai-chat">
+      <div class="ai-messages" id="aiMessages">
+        ${aiMessages.length === 0 ? '<div class="empty"><div class="emoji">&#x1F916;</div>Ask me anything!<br><small>"Find the Raptors game" or "What NBA games are on?"</small></div>' : ''}
+        ${aiMessages.map(m => `<div class="ai-msg ${m.role}">${m.html || esc(m.text)}</div>`).join('')}
+      </div>
+    </div>
+    <div class="ai-input-bar">
+      <input type="text" id="aiInput" placeholder="Ask AI..." autocomplete="off"
+             onkeydown="if(event.key==='Enter')sendAiMessage()">
+      <button onclick="sendAiMessage()">Send</button>
+    </div>`;
+  const msgs = document.getElementById('aiMessages');
+  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+  setTimeout(() => document.getElementById('aiInput')?.focus(), 100);
+}
+
+async function sendAiMessage() {
+  const input = document.getElementById('aiInput');
+  const query = input.value.trim();
+  if (!query) return;
+  input.value = '';
+
+  aiMessages.push({ role: 'user', text: query });
+  showAiChat();
+
+  // Show typing indicator
+  const msgs = document.getElementById('aiMessages');
+  msgs.innerHTML += '<div class="ai-typing" id="aiTyping">Thinking...</div>';
+  msgs.scrollTop = msgs.scrollHeight;
+
+  try {
+    const data = await apiPost('/ai', { query, mode: 'chat' });
+    const typing = document.getElementById('aiTyping');
+    if (typing) typing.remove();
+
+    let html = '';
+    const resp = data.ai_response;
+    if (typeof resp === 'object' && resp.message) {
+      html = esc(resp.message);
+      if (resp.channels && resp.channels.length > 0) {
+        html += '<div style="margin-top:8px">';
+        for (const ch of resp.channels) {
+          html += `<button class="play-btn" onclick="playChannel(${ch.id}, '${esc(ch.name)}')">${esc(ch.name)}</button> `;
+        }
+        html += '</div>';
+      }
+    } else if (typeof resp === 'string') {
+      // Parse [play:123] tags
+      html = esc(resp).replace(/\[play:(\d+)\]/g, (_, id) =>
+        `<button class="play-btn" onclick="playChannel(${id}, 'Channel ${id}')">Play ${id}</button>`
+      );
+    } else {
+      html = esc(JSON.stringify(resp));
+    }
+
+    aiMessages.push({ role: 'assistant', html });
+  } catch (e) {
+    aiMessages.push({ role: 'assistant', text: 'Error: ' + e.message });
+  }
+  showAiChat();
+}
+
+function esc(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+</script>
+</body>
+</html>

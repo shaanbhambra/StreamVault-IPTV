@@ -13,6 +13,10 @@ plugins {
     alias(libs.plugins.kover)
 }
 
+composeCompiler {
+    stabilityConfigurationFiles.add(project.layout.projectDirectory.file("compose-stability-config.txt"))
+}
+
 val keystorePropertiesFile = rootProject.file("keystore.properties")
 val keystoreProperties = Properties()
 if (keystorePropertiesFile.exists()) {
@@ -98,6 +102,7 @@ android {
             buildConfigField("String", "XTREAM_DEV_NAME", "\"${localProp("xtream.dev.name")}\"")
             buildConfigField("String", "M3U_DEV_URL", "\"${localProp("m3u.dev.url")}\"")
             buildConfigField("String", "M3U_DEV_NAME", "\"${localProp("m3u.dev.name")}\"")
+            buildConfigField("String", "GEMINI_API_KEY", "\"${localProp("gemini.api.key")}\"")
         }
         create("beta") {
             initWith(getByName("release"))
@@ -226,6 +231,9 @@ dependencies {
     implementation(libs.appcompat)
     implementation(libs.mediarouter)
     implementation(libs.play.services.cast.framework)
+
+    // Debug HTTP API (NanoHTTPD — lightweight embeddable server)
+    debugImplementation("org.nanohttpd:nanohttpd:2.3.1")
 
     // Test
     testImplementation(libs.junit)
