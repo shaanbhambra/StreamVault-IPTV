@@ -172,12 +172,12 @@ class DebugApiServer(
         val name = ch.getString("name")
         val pid = dao.getFirstProviderId() ?: 1L
 
-        // Race multiple server URLs — first one to respond wins
+        // Race fast CDN servers only (matrix servers are 5x slower)
+        // All servers accept our credentials (tested)
         val servers = listOf(
-            "cf.candycloud-8k.men",
-            "pro.candycloud-8k.men",
-            "cf.matrix.candycloud-8k.men",
-            "pro.matrix.candycloud-8k.men"
+            "candycloudstrong8k.xyz",     // Fastest (~1.3s, backup but direct)
+            "cf.candycloud-8k.men",       // Primary CDN (~1.3s, 302 redirect)
+            "pro.candycloud-8k.men"       // Secondary CDN (~1.4s, 302 redirect)
         )
 
         var fastestServer: String? = null
@@ -186,10 +186,11 @@ class DebugApiServer(
                 try {
                     val testUrl = java.net.URL("http://$server/live/b5885330ec/5e46b997af/$streamId.ts")
                     val conn = testUrl.openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 4000
+                    conn.connectTimeout = 3000
                     conn.readTimeout = 2000
-                    conn.requestMethod = "HEAD"
-                    conn.connect()
+                    conn.instanceFollowRedirects = true // Follow 302 redirects
+                    conn.requestMethod = "GET"
+                    conn.setRequestProperty("Range", "bytes=0-0") // Just first byte
                     val code = conn.responseCode
                     conn.disconnect()
                     if (code in 200..399) {
@@ -207,11 +208,16 @@ class DebugApiServer(
             Thread.sleep(50)
         }
 
-        val winningServer = fastestServer ?: "cf.candycloud-8k.men" // fallback to primary
+        val winningServer = fastestServer ?: "cf.candycloud-8k.men"
 
-        // Build stream URL with winning server — use xtream:// internal format
-        // The app resolves this to the actual URL via XtreamUrlFactory
-        val streamUrl = "xtream://$pid/live/$streamId?ext=&src="
+        // If a different server won, update the provider's server_url for future plays
+        val currentProvider = dao.getActiveProvider()
+        val currentServer = currentProvider?.optString("server_url", "") ?: ""
+        if (winningServer !in currentServer) {
+            dao.updateProviderServerUrl(pid, "http://$winningServer")
+            android.util.Log.i("DebugAPI", "Switched provider to faster server: $winningServer")
+        }
+
         playChannelById(chId, streamId, name, pid)
 
         return json(200, JSONObject().apply {

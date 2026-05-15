@@ -191,6 +191,10 @@ class DebugDao(private val db: SQLiteDatabase) {
         return result
     }
 
+    fun updateProviderServerUrl(providerId: Long, newUrl: String) {
+        db.execSQL("UPDATE providers SET server_url = ? WHERE id = ?", arrayOf(newUrl, providerId))
+    }
+
     fun getEpgForChannel(providerId: Long, channelEpgId: String, nowSecs: Long): JSONArray {
         return db.rawQuery(
             "SELECT p.title, p.description, p.start_time, p.end_time, p.genre, p.category " +
