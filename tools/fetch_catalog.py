@@ -11,7 +11,7 @@ import os
 import time
 import urllib.request
 
-SERVER = "http://cf.candycloud-8k.men"
+SERVER = "http://candycloudstrong8k.xyz"
 USERNAME = "b5885330ec"
 PASSWORD = "5e46b997af"
 

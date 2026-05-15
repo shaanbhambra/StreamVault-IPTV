@@ -18,7 +18,7 @@ import time
 import sys
 import os
 
-SERVER = "http://cf.candycloud-8k.men"
+SERVER = "http://candycloudstrong8k.xyz"
 USERNAME = "b5885330ec"
 PASSWORD = "5e46b997af"
 PROVIDER_NAME = "G2G Family"

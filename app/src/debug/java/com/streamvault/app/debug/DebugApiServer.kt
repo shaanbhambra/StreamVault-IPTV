@@ -59,7 +59,8 @@ class DebugApiServer(
         uri == "/favorites/add" && method == Method.POST -> handleAddFav(session)
         uri == "/favorites/remove" && method == Method.POST -> handleRemoveFav(session)
         uri == "/play" && method == Method.POST -> handlePlay(session)
-                uri == "/play_fast" && method == Method.POST -> handlePlayFast(session)
+                // play_fast disabled — multi-connection racing risks account ban
+                // uri == "/play_fast" && method == Method.POST -> handlePlayFast(session)
                 uri == "/quick_switch" && method == Method.POST -> handleQuickSwitch(session)
         uri == "/epg" -> handleEpg(params)
                 uri == "/epg/now" && method == Method.POST -> handleEpgNow(session)
