@@ -68,10 +68,19 @@ class PlaybackCodecSelector(
                 if (info.name.lowercase(Locale.ROOT) in knownBad) 1 else 0
             }.thenBy { info ->
                 when (policy) {
-                    ActiveDecoderPolicy.AUTO -> 0
+                    ActiveDecoderPolicy.AUTO,
                     ActiveDecoderPolicy.HARDWARE_PREFERRED -> if (isSoftwareCodec(info.name)) 1 else 0
                     ActiveDecoderPolicy.SOFTWARE_PREFERRED,
                     ActiveDecoderPolicy.COMPATIBILITY -> if (isSoftwareCodec(info.name)) 0 else 1
+                }
+            }.thenBy { info ->
+                // Prioritize platform-native HW decoders (MediaTek, Qualcomm) over generic OMX
+                val n = info.name.lowercase(Locale.ROOT)
+                when {
+                    n.startsWith("omx.mtk.") || n.startsWith("c2.mtk.") -> 0  // MediaTek HW — best
+                    n.startsWith("omx.qcom.") || n.startsWith("c2.qti.") -> 0 // Qualcomm HW
+                    n.startsWith("omx.google.") || n.startsWith("c2.android.") -> 2 // Software
+                    else -> 1 // Other HW
                 }
             }
         ).toMutableList()

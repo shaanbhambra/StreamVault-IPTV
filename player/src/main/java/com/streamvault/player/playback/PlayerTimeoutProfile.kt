@@ -9,9 +9,9 @@ enum class PlayerTimeoutProfile(
     val writeTimeoutMs: Long
 ) {
     LIVE(
-        connectTimeoutMs = 12_000L,
-        readTimeoutMs = 20_000L,
-        writeTimeoutMs = 20_000L
+        connectTimeoutMs = 8_000L,     // Was 12000 — fail fast, retry fast
+        readTimeoutMs = 12_000L,       // Was 20000
+        writeTimeoutMs = 12_000L       // Was 20000
     ),
     VOD(
         connectTimeoutMs = 15_000L,

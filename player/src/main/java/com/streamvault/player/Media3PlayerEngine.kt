@@ -101,8 +101,8 @@ class Media3PlayerEngine @Inject constructor(
     companion object {
         private const val TAG = "Media3PlayerEngine"
         private const val AUDIO_RENDERER_RECOVERY_COOLDOWN_MS = 15_000L
-        private const val TEXTURE_VIEW_STARTUP_TIMEOUT_MS = 9_000L
-        private const val TEXTURE_VIEW_BUFFERED_STARTUP_THRESHOLD_MS = 4_000L
+        private const val TEXTURE_VIEW_STARTUP_TIMEOUT_MS = 5_000L    // Was 9000 — faster SurfaceView fallback
+        private const val TEXTURE_VIEW_BUFFERED_STARTUP_THRESHOLD_MS = 2_000L  // Was 4000
         private const val KNOWN_BAD_FAILURE_THRESHOLD = 3
         private const val MEDIA_SESSION_ID_PREFIX = "streamvault"
         private val nextMediaSessionInstanceId = AtomicLong(1L)
