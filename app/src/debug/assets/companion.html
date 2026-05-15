@@ -321,9 +321,16 @@ body {
       <span class="status-text" id="statusText">connecting...</span>
     </div>
   </div>
-  <div class="search-bar">
-    <span class="icon">&#x1F50D;</span>
-    <input type="search" id="searchInput" placeholder="Search channels..." autocomplete="off">
+  <div class="search-bar" style="display:flex; gap:8px; align-items:center;">
+    <div style="position:relative; flex:1;">
+      <span class="icon">&#x1F50D;</span>
+      <input type="search" id="searchInput" placeholder="Search channels..." autocomplete="off">
+    </div>
+    <button id="voiceBtn" onclick="startVoiceSearch()" style="
+      width:40px; height:40px; border-radius:50%; border:1px solid var(--border);
+      background:var(--surface); color:var(--text2); font-size:18px; cursor:pointer;
+      display:flex; align-items:center; justify-content:center; flex-shrink:0;
+    ">&#x1F3A4;</button>
   </div>
 </div>
 
@@ -338,6 +345,7 @@ body {
   <div class="tab" data-tab="categories">Categories</div>
   <div class="tab" data-tab="ai" id="aiTab">AI</div>
   <div class="tab" data-tab="settings">Settings</div>
+  <div class="tab" id="zapToggle" onclick="toggleZapMode(event)" style="margin-left:auto; border-color:var(--text2);">Zap: OFF</div>
 </div>
 
 <div class="channel-list" id="channelList">
@@ -367,9 +375,9 @@ if ('serviceWorker' in navigator) {
 
 // Init — on PWA open, wake TV and launch StreamVault
 document.addEventListener('DOMContentLoaded', async () => {
-  // Try to launch StreamVault on the TV when PWA opens
+  // Wake TV and launch StreamVault when PWA opens
   try {
-    await fetch(API + '/launch', { method: 'POST', signal: AbortSignal.timeout(3000) });
+    await fetch(API + '/wake', { method: 'POST', signal: AbortSignal.timeout(3000) });
   } catch { /* TV might be off or unreachable */ }
 
   await loadStatus();
@@ -516,9 +524,23 @@ async function loadTab(tab) {
     }
 
     renderChannels(channels);
+    // Fetch EPG "now playing" for visible channels
+    fetchNowPlaying(channels.map(c => c.id));
   } catch (e) {
     list.innerHTML = `<div class="empty"><div class="emoji">&#x26A0;</div>Error loading channels<br><small>${e.message}</small></div>`;
   }
+}
+
+async function fetchNowPlaying(channelIds) {
+  if (!channelIds.length) return;
+  try {
+    const data = await apiPost('/epg/now', { channel_ids: channelIds.slice(0, 50) });
+    const nowPlaying = data.now_playing || {};
+    for (const [chId, title] of Object.entries(nowPlaying)) {
+      const meta = document.querySelector(`#ch-${chId} .channel-meta`);
+      if (meta) meta.innerHTML = `<span style="color:var(--success);">Now:</span> ${esc(title)}`;
+    }
+  } catch { /* EPG not available */ }
 }
 
 async function loadCategories() {
@@ -589,7 +611,7 @@ function renderChannels(channels, append = false) {
     return `
     <div class="channel-item ${isPlaying ? 'playing' : ''}" id="ch-${ch.id}">
       ${logo}
-      <div class="channel-info" onclick="playChannel(${ch.id}, '${esc(ch.name)}')">
+      <div class="channel-info" onclick="if(zapMode) playChannel(${ch.id}, '${esc(ch.name)}')">
         <div class="channel-name">${esc(ch.name)}</div>
         <div class="channel-meta">${esc(ch.category_name || '')} ${ch.stream_id ? '| #' + ch.stream_id : ''}</div>
       </div>
@@ -815,6 +837,111 @@ async function sendAiMessage() {
     aiMessages.push({ role: 'assistant', text: 'Error: ' + e.message });
   }
   showAiChat();
+}
+
+// === Zap Mode (instant channel switch on tap) ===
+let zapMode = false;
+function toggleZapMode(e) {
+  e?.stopPropagation();
+  zapMode = !zapMode;
+  const btn = document.getElementById('zapToggle');
+  btn.textContent = zapMode ? 'Zap: ON' : 'Zap: OFF';
+  btn.style.background = zapMode ? 'var(--success)' : 'var(--surface)';
+  btn.style.borderColor = zapMode ? 'var(--success)' : 'var(--text2)';
+  btn.style.color = zapMode ? 'white' : 'var(--text2)';
+}
+
+// === Voice Search ===
+let recognition = null;
+let isListening = false;
+
+function startVoiceSearch() {
+  const btn = document.getElementById('voiceBtn');
+
+  if (isListening) {
+    recognition?.stop();
+    isListening = false;
+    btn.style.background = 'var(--surface)';
+    btn.style.color = 'var(--text2)';
+    return;
+  }
+
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    // Fallback: prompt for text input
+    const query = prompt('Voice search not supported. Type your search:');
+    if (query) {
+      document.getElementById('searchInput').value = query;
+      // Send to AI if on AI tab, otherwise regular search
+      if (currentTab === 'ai') {
+        document.getElementById('aiInput').value = query;
+        sendAiMessage();
+      } else {
+        searchChannels(query);
+      }
+    }
+    return;
+  }
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-CA';
+  recognition.continuous = false;
+  recognition.interimResults = false;
+
+  recognition.onstart = () => {
+    isListening = true;
+    btn.style.background = 'var(--danger)';
+    btn.style.color = 'white';
+    btn.innerHTML = '&#x23F9;';
+  };
+
+  recognition.onresult = (event) => {
+    const transcript = event.results[0][0].transcript;
+    document.getElementById('searchInput').value = transcript;
+
+    // Smart routing: if it sounds like a question, use AI
+    const isQuestion = /find|show|what|play|switch|put on|turn on|i want/i.test(transcript);
+    if (isQuestion) {
+      // Switch to AI tab and search
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelector('[data-tab="ai"]')?.classList.add('active');
+      currentTab = 'ai';
+      showAiChat();
+      setTimeout(() => {
+        document.getElementById('aiInput').value = transcript;
+        sendAiMessage();
+      }, 200);
+    } else {
+      searchChannels(transcript);
+    }
+  };
+
+  recognition.onend = () => {
+    isListening = false;
+    btn.style.background = 'var(--surface)';
+    btn.style.color = 'var(--text2)';
+    btn.innerHTML = '&#x1F3A4;';
+  };
+
+  recognition.onerror = (event) => {
+    console.error('Speech error:', event.error);
+    isListening = false;
+    btn.style.background = 'var(--surface)';
+    btn.style.color = 'var(--text2)';
+    btn.innerHTML = '&#x1F3A4;';
+  };
+
+  recognition.start();
+}
+
+// === Wake on LAN ===
+// WoL needs to be sent via the debug API since browsers can't send UDP
+// The TV handles WoL from the API server side
+async function wakeTV() {
+  try {
+    const resp = await apiPost('/wake', {});
+    return resp.success;
+  } catch { return false; }
 }
 
 function esc(s) {

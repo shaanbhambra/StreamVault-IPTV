@@ -147,6 +147,50 @@ class DebugDao(private val db: SQLiteDatabase) {
         return true
     }
 
+    /**
+     * Get currently airing program for multiple channels at once (batch EPG lookup).
+     * Returns a map of channel_id → program title.
+     */
+    fun getNowPlayingBatch(providerId: Long, channelIds: List<Long>, nowSecs: Long): JSONObject {
+        if (channelIds.isEmpty()) return JSONObject()
+        // Get epg_channel_id for the requested channels
+        val placeholders = channelIds.joinToString(",") { "?" }
+        val args = mutableListOf(providerId.toString())
+        args.addAll(channelIds.map { it.toString() })
+        val channelEpgMap = db.rawQuery(
+            "SELECT id, epg_channel_id FROM channels WHERE provider_id = ? AND id IN ($placeholders)",
+            args.toTypedArray()
+        ).use {
+            val map = mutableMapOf<String, Long>() // epg_id → channel_db_id
+            while (it.moveToNext()) {
+                val chId = it.getLong(0)
+                val epgId = it.getString(1) ?: continue
+                if (epgId.isNotBlank()) map[epgId] = chId
+            }
+            map
+        }
+        if (channelEpgMap.isEmpty()) return JSONObject()
+
+        val result = JSONObject()
+        val epgPlaceholders = channelEpgMap.keys.joinToString(",") { "?" }
+        val epgArgs = mutableListOf(providerId.toString(), nowSecs.toString(), nowSecs.toString())
+        epgArgs.addAll(channelEpgMap.keys)
+        db.rawQuery(
+            "SELECT channel_id, title FROM programs WHERE provider_id = ? AND start_time <= ? AND end_time > ? AND channel_id IN ($epgPlaceholders) ORDER BY start_time",
+            epgArgs.toTypedArray()
+        ).use {
+            while (it.moveToNext()) {
+                val epgId = it.getString(0)
+                val title = it.getString(1)
+                val chId = channelEpgMap[epgId] ?: continue
+                if (!result.has(chId.toString())) {
+                    result.put(chId.toString(), title)
+                }
+            }
+        }
+        return result
+    }
+
     fun getEpgForChannel(providerId: Long, channelEpgId: String, nowSecs: Long): JSONArray {
         return db.rawQuery(
             "SELECT p.title, p.description, p.start_time, p.end_time, p.genre, p.category " +

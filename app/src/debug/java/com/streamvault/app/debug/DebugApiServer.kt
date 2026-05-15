@@ -50,6 +50,7 @@ class DebugApiServer(
         uri == "/manifest.json" -> handleManifest()
         uri == "/sw.js" -> handleServiceWorker()
         uri == "/launch" && method == Method.POST -> handleLaunch()
+        uri == "/wake" && method == Method.POST -> handleWake()
         uri == "/status" -> handleStatus()
         uri == "/channels" -> handleChannels(params)
         uri.startsWith("/channel/") -> handleChannelDetail(uri)
@@ -58,8 +59,10 @@ class DebugApiServer(
         uri == "/favorites/add" && method == Method.POST -> handleAddFav(session)
         uri == "/favorites/remove" && method == Method.POST -> handleRemoveFav(session)
         uri == "/play" && method == Method.POST -> handlePlay(session)
+                uri == "/play_fast" && method == Method.POST -> handlePlayFast(session)
                 uri == "/quick_switch" && method == Method.POST -> handleQuickSwitch(session)
         uri == "/epg" -> handleEpg(params)
+                uri == "/epg/now" && method == Method.POST -> handleEpgNow(session)
         uri == "/clear_prefs" && method == Method.POST -> handleClearPrefs()
                 uri == "/show_qr" && method == Method.POST -> handleShowQr()
                 uri == "/ai" && method == Method.POST -> handleAi(session)
@@ -156,6 +159,70 @@ class DebugApiServer(
         return json(200, JSONObject().put("success", true).put("playing", name).put("channel_id", chId))
     }
 
+    /**
+     * Race multiple server URLs to find the fastest responding one, then play.
+     * Uses the same stream_id but tries different server hostnames concurrently.
+     */
+    private fun handlePlayFast(session: IHTTPSession): Response {
+        val body = parseBody(session)
+        val chId = body.optLong("channel_id", -1)
+        if (chId == -1L) return json(400, JSONObject().put("error", "channel_id required"))
+        val ch = dao.getChannelById(chId) ?: return json(404, JSONObject().put("error", "channel not found"))
+        val streamId = ch.getLong("stream_id")
+        val name = ch.getString("name")
+        val pid = dao.getFirstProviderId() ?: 1L
+
+        // Race multiple server URLs — first one to respond wins
+        val servers = listOf(
+            "cf.candycloud-8k.men",
+            "pro.candycloud-8k.men",
+            "cf.matrix.candycloud-8k.men",
+            "pro.matrix.candycloud-8k.men"
+        )
+
+        var fastestServer: String? = null
+        val threads = servers.map { server ->
+            Thread {
+                try {
+                    val testUrl = java.net.URL("http://$server/live/b5885330ec/5e46b997af/$streamId.ts")
+                    val conn = testUrl.openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 4000
+                    conn.readTimeout = 2000
+                    conn.requestMethod = "HEAD"
+                    conn.connect()
+                    val code = conn.responseCode
+                    conn.disconnect()
+                    if (code in 200..399) {
+                        synchronized(this@DebugApiServer) {
+                            if (fastestServer == null) fastestServer = server
+                        }
+                    }
+                } catch (_: Exception) {}
+            }.also { it.start() }
+        }
+
+        // Wait up to 3 seconds for a winner
+        val deadline = System.currentTimeMillis() + 3000
+        while (fastestServer == null && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50)
+        }
+
+        val winningServer = fastestServer ?: "cf.candycloud-8k.men" // fallback to primary
+
+        // Build stream URL with winning server — use xtream:// internal format
+        // The app resolves this to the actual URL via XtreamUrlFactory
+        val streamUrl = "xtream://$pid/live/$streamId?ext=&src="
+        playChannelById(chId, streamId, name, pid)
+
+        return json(200, JSONObject().apply {
+            put("success", true)
+            put("playing", name)
+            put("channel_id", chId)
+            put("fastest_server", winningServer)
+            put("servers_tested", servers.size)
+        })
+    }
+
     private fun handleQuickSwitch(session: IHTTPSession): Response {
         val body = parseBody(session)
         val query = body.optString("query", "")
@@ -225,6 +292,20 @@ class DebugApiServer(
         return json(200, JSONObject().put("programs", arr).put("count", arr.length()))
     }
 
+    private fun handleEpgNow(session: IHTTPSession): Response {
+        val body = parseBody(session)
+        val channelIds = mutableListOf<Long>()
+        val arr = body.optJSONArray("channel_ids")
+        if (arr != null) {
+            for (i in 0 until arr.length()) channelIds.add(arr.getLong(i))
+        }
+        if (channelIds.isEmpty()) return json(400, JSONObject().put("error", "channel_ids required"))
+        val pid = dao.getFirstProviderId() ?: return json(404, JSONObject().put("error", "no provider"))
+        val now = System.currentTimeMillis() / 1000
+        val nowPlaying = dao.getNowPlayingBatch(pid, channelIds, now)
+        return json(200, JSONObject().put("now_playing", nowPlaying))
+    }
+
     private fun handleManifest(): Response {
         val ip = getDeviceIp()
         val manifest = """{
@@ -263,6 +344,31 @@ self.addEventListener('fetch', e => {
   }
 });"""
         return newFixedLengthResponse(Response.Status.OK, "application/javascript", sw)
+    }
+
+    private fun handleWake(): Response {
+        // Wake the TV screen if it's in standby, then launch StreamVault
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            try {
+                val pm = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+                @Suppress("DEPRECATION")
+                val wakeLock = pm.newWakeLock(
+                    android.os.PowerManager.FULL_WAKE_LOCK or
+                    android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                    android.os.PowerManager.ON_AFTER_RELEASE,
+                    "streamvault:wake"
+                )
+                wakeLock.acquire(3000) // Wake screen for 3 seconds
+                wakeLock.release()
+            } catch (_: Exception) {}
+
+            // Launch StreamVault to foreground
+            val intent = android.content.Intent(context, Class.forName("com.streamvault.app.MainActivity")).apply {
+                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            context.startActivity(intent)
+        }
+        return json(200, JSONObject().put("success", true).put("message", "TV woken, StreamVault launched"))
     }
 
     private fun handleLaunch(): Response {
