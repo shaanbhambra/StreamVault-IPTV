@@ -427,33 +427,38 @@ p{color:#8888a0;font-size:16px;margin-bottom:30px}#qr{background:white;padding:2
     }
 
     private fun handleVpnOn(): Response {
-        try {
-            // Try WireGuard SET_TUNNEL_UP broadcast
-            val intent = android.content.Intent("com.wireguard.android.action.SET_TUNNEL_UP").apply {
-                setClassName("com.wireguard.android", "com.wireguard.android.model.TunnelManager\$IntentReceiver")
+        return try {
+            // Run on main thread to avoid cross-thread issues
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                try {
+                    val intent = android.content.Intent("com.wireguard.android.action.SET_TUNNEL_UP").apply {
+                        setClassName("com.wireguard.android", "com.wireguard.android.model.TunnelManager\$IntentReceiver")
+                    }
+                    context.sendBroadcast(intent)
+                } catch (_: Exception) {
+                    // Fallback: launch Mullvad app
+                    val mullvadIntent = context.packageManager.getLaunchIntentForPackage("net.mullvad.mullvadvpn")
+                    if (mullvadIntent != null) {
+                        mullvadIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                        context.startActivity(mullvadIntent)
+                    }
+                }
             }
-            context.sendBroadcast(intent)
-
-            // Also try launching Mullvad as fallback
-            val mullvadIntent = context.packageManager.getLaunchIntentForPackage("net.mullvad.mullvadvpn")
-            if (mullvadIntent != null) {
-                mullvadIntent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                context.startActivity(mullvadIntent)
-            }
-
-            return json(200, JSONObject().put("success", true).put("message", "VPN connect requested"))
+            json(200, JSONObject().put("success", true).put("message", "VPN connect requested"))
         } catch (e: Exception) {
-            return json(500, JSONObject().put("error", e.message))
+            json(500, JSONObject().put("error", e.message ?: "unknown"))
         }
     }
 
     private fun handleVpnOff(): Response {
-        try {
-            val intent = android.content.Intent("com.wireguard.android.action.SET_TUNNEL_DOWN").apply {
-                setClassName("com.wireguard.android", "com.wireguard.android.model.TunnelManager\$IntentReceiver")
+        return try {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                val intent = android.content.Intent("com.wireguard.android.action.SET_TUNNEL_DOWN").apply {
+                    setClassName("com.wireguard.android", "com.wireguard.android.model.TunnelManager\$IntentReceiver")
+                }
+                context.sendBroadcast(intent)
             }
-            context.sendBroadcast(intent)
-            return json(200, JSONObject().put("success", true).put("message", "VPN disconnect requested"))
+            json(200, JSONObject().put("success", true).put("message", "VPN disconnect requested"))
         } catch (e: Exception) {
             return json(500, JSONObject().put("error", e.message))
         }

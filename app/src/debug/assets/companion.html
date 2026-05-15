@@ -410,7 +410,9 @@ async function apiPost(path, data) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(data)
   });
-  return res.json();
+  const text = await res.text();
+  try { return JSON.parse(text); }
+  catch { return { error: 'Invalid response', raw: text.substring(0, 200) }; }
 }
 
 async function loadStatus() {
