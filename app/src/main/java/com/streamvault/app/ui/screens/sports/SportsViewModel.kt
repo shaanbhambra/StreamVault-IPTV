@@ -153,6 +153,39 @@ class SportsViewModel @Inject constructor() : ViewModel() {
 
     fun clearBoxScore() { _uiState.update { it.copy(boxScore = null) } }
 
+    fun findAndWatchGame(game: SportsGame) {
+        // This triggers a search via the debug API to find and play the IPTV stream
+        // The debug API's quick_switch handles searching channel names for team names
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val query = "${game.awayAbbr} ${game.homeAbbr}"
+                val url = java.net.URL("http://127.0.0.1:8585/quick_switch")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+                conn.connectTimeout = 3000
+                conn.readTimeout = 5000
+                conn.outputStream.write("{\"query\":\"$query\"}".toByteArray())
+                val code = conn.responseCode
+                conn.disconnect()
+                if (code != 200) {
+                    // Fallback: try team names
+                    val url2 = java.net.URL("http://127.0.0.1:8585/quick_switch")
+                    val conn2 = url2.openConnection() as java.net.HttpURLConnection
+                    conn2.requestMethod = "POST"
+                    conn2.setRequestProperty("Content-Type", "application/json")
+                    conn2.doOutput = true
+                    conn2.connectTimeout = 3000
+                    conn2.readTimeout = 5000
+                    conn2.outputStream.write("{\"query\":\"${game.homeTeam.split(" ").last()}\"}".toByteArray())
+                    conn2.responseCode
+                    conn2.disconnect()
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
     private fun loadScores(league: String) {
         _uiState.update { it.copy(isLoading = true, error = null) }
         viewModelScope.launch(Dispatchers.IO) {

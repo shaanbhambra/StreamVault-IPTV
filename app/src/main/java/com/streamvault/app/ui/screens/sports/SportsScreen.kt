@@ -257,86 +257,149 @@ private fun GameCard(game: SportsGame, viewModel: SportsViewModel) {
                 Text(game.seriesNote, modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                     textAlign = TextAlign.Center, fontSize = 11.sp, color = Color(0xFFA29BFE))
             }
+
+            // Action buttons
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (game.state != "post") {
+                    Surface(
+                        onClick = { viewModel.findAndWatchGame(game) },
+                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                        colors = ClickableSurfaceDefaults.colors(
+                            containerColor = Color(0xFF6C5CE7), contentColor = Color.White),
+                        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Watch", modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                }
+                Surface(
+                    onClick = { viewModel.loadBoxScore(game.eventId) },
+                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text("Box Score", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                }
+                if (game.state == "post") {
+                    Spacer(Modifier.width(8.dp))
+                    val gameDate = try {
+                        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).let { sdf ->
+                            val d = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm", java.util.Locale.US).parse(game.date.take(16))
+                            if (d != null) java.text.SimpleDateFormat("MMM d yyyy", java.util.Locale.US).format(d) else ""
+                        }
+                    } catch (_: Exception) { "" }
+                    val ytQuery = java.net.URLEncoder.encode("${game.awayTeam} vs ${game.homeTeam} highlights $gameDate", "UTF-8")
+                    Surface(
+                        onClick = { /* Open YouTube - needs UriHandler */ },
+                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                        colors = ClickableSurfaceDefaults.colors(
+                            containerColor = Color(0xFFE74C3C), contentColor = Color.White),
+                        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Highlights", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
 private fun StandingsView(uiState: SportsUiState) {
+    if (uiState.conferences.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("No standings data", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        return
+    }
+
+    // Flatten into a single scrollable list
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         for (conf in uiState.conferences) {
-            item {
-                Text(conf.name, modifier = Modifier.padding(start = 16.dp, top = 12.dp),
-                    fontSize = 16.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+            // Conference header
+            item(key = "conf_${conf.name}") {
+                Text(conf.name, modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
+                    fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
             }
 
-            item {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-                        .padding(8.dp)
+            // Table header
+            item(key = "header_${conf.name}") {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
+                        .padding(vertical = 8.dp, horizontal = 8.dp)
                 ) {
-                    // Header
-                    Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-                        Text("#", Modifier.width(28.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                        Text("Team", Modifier.weight(1f), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("W", Modifier.width(32.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                        Text("L", Modifier.width(32.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                        Text("PCT", Modifier.width(44.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                        Text("STRK", Modifier.width(40.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                        Text("L10", Modifier.width(40.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                    }
-
-                    for ((index, team) in conf.teams.withIndex()) {
-                        if (index > 0) {
-                            Spacer(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)))
-                        }
-                        Row(
-                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(team.seed.ifBlank { "${index + 1}" }, Modifier.width(28.dp),
-                                fontSize = 12.sp, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                                if (team.logo.isNotBlank()) {
-                                    AsyncImage(model = team.logo, contentDescription = null,
-                                        modifier = Modifier.size(20.dp).clip(CircleShape))
-                                    Spacer(Modifier.width(6.dp))
-                                }
-                                Text(team.abbr, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface)
-                            }
-                            Text(team.wins, Modifier.width(32.dp), fontSize = 12.sp, textAlign = TextAlign.Center,
-                                color = MaterialTheme.colorScheme.onSurface)
-                            Text(team.losses, Modifier.width(32.dp), fontSize = 12.sp, textAlign = TextAlign.Center,
-                                color = MaterialTheme.colorScheme.onSurface)
-                            Text(team.pct, Modifier.width(44.dp), fontSize = 12.sp, textAlign = TextAlign.Center,
-                                color = MaterialTheme.colorScheme.onSurface)
-                            Text(team.streak, Modifier.width(40.dp), fontSize = 12.sp, textAlign = TextAlign.Center,
-                                color = if (team.streak.startsWith("W")) Color(0xFF00B894) else Color(0xFFE74C3C))
-                            Text(team.last10, Modifier.width(40.dp), fontSize = 11.sp, textAlign = TextAlign.Center,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
+                    Text("#", Modifier.width(30.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center)
+                    Text("Team", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.6f))
+                    Text("W", Modifier.width(36.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center)
+                    Text("L", Modifier.width(36.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center)
+                    Text("PCT", Modifier.width(48.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center)
+                    Text("STRK", Modifier.width(44.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center)
+                    Text("L10", Modifier.width(44.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center)
                 }
             }
-        }
 
-        if (uiState.conferences.isEmpty()) {
-            item {
-                Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                    Text("No standings data", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Team rows
+            items(conf.teams.size, key = { "team_${conf.name}_$it" }) { index ->
+                val team = conf.teams[index]
+                val isLast = index == conf.teams.size - 1
+                val bgShape = if (isLast) RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp) else RoundedCornerShape(0.dp)
+                val isPlayoffTeam = (team.seed.toIntOrNull() ?: 99) <= 8
+
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(
+                            if (index % 2 == 0) Color.White.copy(alpha = 0.04f) else Color.White.copy(alpha = 0.02f),
+                            bgShape
+                        )
+                        .padding(vertical = 6.dp, horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        team.seed.ifBlank { "${index + 1}" }, Modifier.width(30.dp),
+                        fontSize = 13.sp, textAlign = TextAlign.Center,
+                        fontWeight = if (isPlayoffTeam) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isPlayoffTeam) Color(0xFF6C5CE7) else Color.White.copy(alpha = 0.5f)
+                    )
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        if (team.logo.isNotBlank()) {
+                            AsyncImage(model = team.logo, contentDescription = null,
+                                modifier = Modifier.size(22.dp).clip(CircleShape))
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(team.abbr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                    }
+                    Text(team.wins, Modifier.width(36.dp), fontSize = 13.sp, textAlign = TextAlign.Center, color = Color.White)
+                    Text(team.losses, Modifier.width(36.dp), fontSize = 13.sp, textAlign = TextAlign.Center, color = Color.White)
+                    Text(team.pct, Modifier.width(48.dp), fontSize = 13.sp, textAlign = TextAlign.Center, color = Color.White)
+                    Text(team.streak, Modifier.width(44.dp), fontSize = 13.sp, textAlign = TextAlign.Center,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (team.streak.startsWith("W")) Color(0xFF00B894) else Color(0xFFE74C3C))
+                    Text(team.last10, Modifier.width(44.dp), fontSize = 12.sp, textAlign = TextAlign.Center,
+                        color = Color.White.copy(alpha = 0.7f))
                 }
             }
         }
