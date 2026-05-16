@@ -364,7 +364,7 @@ private fun ConferenceColumn(conf: StandingsConference, modifier: Modifier) {
     }
 }
 
-// ── Playoffs View (full bracket with game results) ─────────────────────────
+// ── Playoffs Bracket (horizontal tree: West ← Championship → East) ─────────
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -376,112 +376,145 @@ private fun PlayoffsView(uiState: SportsUiState, viewModel: SportsViewModel) {
         return
     }
 
-    // Group series by round
-    val rounds = remember(uiState.playoffBracket) {
-        uiState.playoffBracket.groupBy { it.roundLabel }.entries.toList()
-    }
+    // Split by conference
+    val west = remember(uiState.playoffBracket) { uiState.playoffBracket.filter { it.roundLabel.contains("West", true) } }
+    val east = remember(uiState.playoffBracket) { uiState.playoffBracket.filter { it.roundLabel.contains("East", true) } }
+    val westR1 = west.filter { it.roundLabel.contains("1st", true) || it.roundLabel.contains("First", true) }
+    val westR2 = west.filter { it.roundLabel.contains("Semi", true) }
+    val westFinal = west.filter { it.roundLabel.contains("Final", true) && !it.roundLabel.contains("Semi", true) }
+    val eastR1 = east.filter { it.roundLabel.contains("1st", true) || it.roundLabel.contains("First", true) }
+    val eastR2 = east.filter { it.roundLabel.contains("Semi", true) }
+    val eastFinal = east.filter { it.roundLabel.contains("Final", true) && !it.roundLabel.contains("Semi", true) }
+    val finals = uiState.playoffBracket.filter { !it.roundLabel.contains("West", true) && !it.roundLabel.contains("East", true) && (it.roundLabel.contains("Final", true) || it.roundLabel.contains("Champion", true)) }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item {
-            Text("${uiState.league.uppercase()} PLAYOFFS", Modifier.padding(start = 16.dp, top = 8.dp),
-                fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+    // Horizontal scrollable bracket
+    Row(
+        modifier = Modifier.fillMaxSize().horizontalScroll(rememberScrollState()).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Spacer(Modifier.width(12.dp))
+
+        // West 1st Round
+        BracketRound("WEST 1ST ROUND", westR1)
+        Spacer(Modifier.width(12.dp))
+
+        // West Semis
+        BracketRound("WEST SEMIS", westR2)
+        Spacer(Modifier.width(12.dp))
+
+        // West Finals
+        BracketRound("WEST FINALS", westFinal)
+        Spacer(Modifier.width(16.dp))
+
+        // Championship
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("CHAMPIONSHIP", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFD700), letterSpacing = 1.sp)
+            Spacer(Modifier.height(8.dp))
+            if (finals.isNotEmpty()) {
+                BracketCard(finals.first())
+            } else {
+                Box(Modifier.width(220.dp).background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp)).padding(16.dp),
+                    contentAlignment = Alignment.Center) {
+                    Text("TBD", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = DimText)
+                }
+            }
         }
 
-        for ((roundName, seriesList) in rounds) {
-            // Round header
-            item(key = "round_$roundName") {
-                Text(roundName.uppercase(), Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
-                    fontSize = 13.sp, fontWeight = FontWeight.Bold, color = LightPurple, letterSpacing = 1.sp)
+        Spacer(Modifier.width(16.dp))
+
+        // East Finals
+        BracketRound("EAST FINALS", eastFinal)
+        Spacer(Modifier.width(12.dp))
+
+        // East Semis
+        BracketRound("EAST SEMIS", eastR2)
+        Spacer(Modifier.width(12.dp))
+
+        // East 1st Round
+        BracketRound("EAST 1ST ROUND", eastR1)
+        Spacer(Modifier.width(12.dp))
+    }
+}
+
+@Composable
+private fun BracketRound(title: String, seriesList: List<PlayoffSeries>) {
+    Column(
+        modifier = Modifier.width(220.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(title, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = LightPurple, letterSpacing = 1.sp)
+        if (seriesList.isEmpty()) {
+            Box(Modifier.fillMaxWidth().background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(8.dp)).padding(12.dp),
+                contentAlignment = Alignment.Center) {
+                Text("TBD", fontSize = 13.sp, color = DimText)
+            }
+        } else {
+            for (series in seriesList) {
+                BracketCard(series)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun BracketCard(series: PlayoffSeries) {
+    val winner1 = series.isComplete && series.team1Wins > series.team2Wins
+    val winner2 = series.isComplete && series.team2Wins > series.team1Wins
+
+    Surface(
+        onClick = { /* Could expand for game details */ },
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = Color.White.copy(alpha = 0.06f),
+            focusedContainerColor = Color.White.copy(alpha = 0.12f)),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+        border = ClickableSurfaceDefaults.border(
+            border = Border(BorderStroke(if (!series.isComplete) 1.dp else 0.dp,
+                if (!series.isComplete) LightPurple.copy(alpha = 0.4f) else Color.Transparent)),
+            focusedBorder = Border(BorderStroke(2.dp, Purple))),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(8.dp)) {
+            // Series note header
+            Text(series.seriesNote.ifBlank { "Best of 7" }, fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
+                color = if (series.isComplete) Green else LightPurple)
+
+            Spacer(Modifier.height(4.dp))
+
+            // Team 1
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (series.team1Logo.isNotBlank()) {
+                    AsyncImage(model = series.team1Logo, contentDescription = null,
+                        modifier = Modifier.size(18.dp).clip(CircleShape))
+                    Spacer(Modifier.width(4.dp))
+                }
+                Text(series.team1Name, Modifier.weight(1f), fontSize = 12.sp,
+                    fontWeight = if (winner1) FontWeight.Bold else FontWeight.Normal,
+                    color = if (winner1) Color.White else Color.White.copy(alpha = 0.7f),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${series.team1Wins}", fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    color = if (winner1) Color.White else Color.White.copy(alpha = 0.6f))
+                if (winner1) Text(" ◄", fontSize = 10.sp, color = Green)
             }
 
-            items(seriesList, key = { "${it.team1Abbr}-${it.team2Abbr}" }) { series ->
-                var expanded by remember { mutableStateOf(false) }
+            Spacer(Modifier.height(2.dp))
 
-                Surface(
-                    onClick = { expanded = !expanded },
-                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
-                    colors = ClickableSurfaceDefaults.colors(
-                        containerColor = Color.White.copy(alpha = 0.05f),
-                        focusedContainerColor = Color.White.copy(alpha = 0.1f)),
-                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
-                    border = ClickableSurfaceDefaults.border(
-                        border = Border(BorderStroke(if (!series.isComplete) 1.dp else 0.dp,
-                            if (!series.isComplete) LightPurple.copy(alpha = 0.5f) else Color.Transparent)),
-                        focusedBorder = Border(BorderStroke(2.dp, Purple))),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        // Teams + series score
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            // Team 1
-                            if (series.team1Logo.isNotBlank()) {
-                                AsyncImage(model = series.team1Logo, contentDescription = null,
-                                    modifier = Modifier.size(30.dp).clip(CircleShape))
-                                Spacer(Modifier.width(6.dp))
-                            }
-                            Text(series.team1Abbr, fontSize = 15.sp, fontWeight = FontWeight.Bold,
-                                color = if (series.isComplete && series.team1Wins > series.team2Wins) Color.White else Color.White.copy(alpha = 0.7f))
-
-                            Spacer(Modifier.weight(1f))
-                            Text("${series.team1Wins} - ${series.team2Wins}",
-                                fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
-                            Spacer(Modifier.weight(1f))
-
-                            // Team 2
-                            Text(series.team2Abbr, fontSize = 15.sp, fontWeight = FontWeight.Bold,
-                                color = if (series.isComplete && series.team2Wins > series.team1Wins) Color.White else Color.White.copy(alpha = 0.7f))
-                            if (series.team2Logo.isNotBlank()) {
-                                Spacer(Modifier.width(6.dp))
-                                AsyncImage(model = series.team2Logo, contentDescription = null,
-                                    modifier = Modifier.size(30.dp).clip(CircleShape))
-                            }
-                        }
-
-                        // Progress bar
-                        val t1Pct = if (series.team1Wins + series.team2Wins > 0) series.team1Wins / 7f else 0f
-                        val t2Pct = if (series.team1Wins + series.team2Wins > 0) series.team2Wins / 7f else 0f
-                        Row(Modifier.fillMaxWidth().padding(top = 6.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.08f))) {
-                            if (t1Pct > 0) Box(Modifier.weight(t1Pct).fillMaxHeight().background(Purple))
-                            Box(Modifier.weight(maxOf(1f - t1Pct - t2Pct, 0.01f)).fillMaxHeight())
-                            if (t2Pct > 0) Box(Modifier.weight(t2Pct).fillMaxHeight().background(Red))
-                        }
-
-                        // Series note
-                        Text(series.seriesNote.ifBlank { "Best of 7" }, Modifier.fillMaxWidth().padding(top = 3.dp),
-                            textAlign = TextAlign.Center, fontSize = 10.sp, color = DimText)
-
-                        // Expanded: show individual game results
-                        if (expanded && series.games.isNotEmpty()) {
-                            Spacer(Modifier.height(6.dp))
-                            Spacer(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.08f)))
-                            Spacer(Modifier.height(4.dp))
-                            Text("Game Results", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = DimText)
-                            for ((gIdx, game) in series.games.withIndex()) {
-                                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                    Text("G${gIdx + 1}", Modifier.width(24.dp), fontSize = 11.sp, color = DimText)
-                                    Text(game.awayAbbr, Modifier.width(36.dp), fontSize = 11.sp,
-                                        fontWeight = if (game.awayScore.toIntOrNull() ?: 0 > game.homeScore.toIntOrNull() ?: 0) FontWeight.Bold else FontWeight.Normal,
-                                        color = Color.White)
-                                    Text(game.awayScore, Modifier.width(30.dp), fontSize = 11.sp, textAlign = TextAlign.Center,
-                                        fontWeight = FontWeight.Bold, color = Color.White)
-                                    Text("@", Modifier.width(16.dp), fontSize = 10.sp, textAlign = TextAlign.Center, color = DimText)
-                                    Text(game.homeScore, Modifier.width(30.dp), fontSize = 11.sp, textAlign = TextAlign.Center,
-                                        fontWeight = FontWeight.Bold, color = Color.White)
-                                    Text(game.homeAbbr, Modifier.width(36.dp), fontSize = 11.sp,
-                                        fontWeight = if (game.homeScore.toIntOrNull() ?: 0 > game.awayScore.toIntOrNull() ?: 0) FontWeight.Bold else FontWeight.Normal,
-                                        color = Color.White)
-                                    Spacer(Modifier.weight(1f))
-                                    Text(game.status, fontSize = 10.sp, color = DimText)
-                                }
-                            }
-                        }
-
-                        // Hint
-                        Text("Press to ${if (expanded) "collapse" else "expand game results"}",
-                            Modifier.fillMaxWidth().padding(top = 3.dp), textAlign = TextAlign.Center,
-                            fontSize = 9.sp, color = Color.White.copy(alpha = 0.25f))
-                    }
+            // Team 2
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (series.team2Logo.isNotBlank()) {
+                    AsyncImage(model = series.team2Logo, contentDescription = null,
+                        modifier = Modifier.size(18.dp).clip(CircleShape))
+                    Spacer(Modifier.width(4.dp))
                 }
+                Text(series.team2Name, Modifier.weight(1f), fontSize = 12.sp,
+                    fontWeight = if (winner2) FontWeight.Bold else FontWeight.Normal,
+                    color = if (winner2) Color.White else Color.White.copy(alpha = 0.7f),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${series.team2Wins}", fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    color = if (winner2) Color.White else Color.White.copy(alpha = 0.6f))
+                if (winner2) Text(" ◄", fontSize = 10.sp, color = Green)
             }
         }
     }
