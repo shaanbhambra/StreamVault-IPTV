@@ -374,22 +374,25 @@ private fun PlayoffsView(uiState: SportsUiState, viewModel: SportsViewModel) {
         items(seriesMap.entries.toList()) { (_, games) ->
             val g = games.first()
             val note = games.mapNotNull { it.seriesNote.takeIf { n -> n.isNotBlank() } }.lastOrNull() ?: ""
+            val gameLabel = games.mapNotNull { it.seriesGameLabel.takeIf { n -> n.isNotBlank() } }.lastOrNull() ?: ""
 
-            // Parse wins from note
+            // Parse wins from series summary (e.g., "Series tied 3-3", "SA wins series 4-2", "SA leads 3-2")
             var awayWins = 0; var homeWins = 0
             val leadMatch = Regex("(\\w+)\\s+leads?\\s+(\\d+)-(\\d+)", RegexOption.IGNORE_CASE).find(note)
             val tiedMatch = Regex("tied\\s+(\\d+)-(\\d+)", RegexOption.IGNORE_CASE).find(note)
-            val winsMatch = Regex("(\\w+)\\s+wins?\\s+(\\d+)-(\\d+)", RegexOption.IGNORE_CASE).find(note)
+            val winsMatch = Regex("(\\w+)\\s+wins\\s+series\\s+(\\d+)-(\\d+)", RegexOption.IGNORE_CASE).find(note)
             when {
+                winsMatch != null -> {
+                    val winner = winsMatch.groupValues[1].uppercase()
+                    if (winner == g.awayAbbr.uppercase()) { awayWins = winsMatch.groupValues[2].toInt(); homeWins = winsMatch.groupValues[3].toInt() }
+                    else { homeWins = winsMatch.groupValues[2].toInt(); awayWins = winsMatch.groupValues[3].toInt() }
+                }
                 leadMatch != null -> {
-                    if (leadMatch.groupValues[1] == g.awayAbbr) { awayWins = leadMatch.groupValues[2].toInt(); homeWins = leadMatch.groupValues[3].toInt() }
+                    val leader = leadMatch.groupValues[1].uppercase()
+                    if (leader == g.awayAbbr.uppercase()) { awayWins = leadMatch.groupValues[2].toInt(); homeWins = leadMatch.groupValues[3].toInt() }
                     else { homeWins = leadMatch.groupValues[2].toInt(); awayWins = leadMatch.groupValues[3].toInt() }
                 }
                 tiedMatch != null -> { awayWins = tiedMatch.groupValues[1].toInt(); homeWins = awayWins }
-                winsMatch != null -> {
-                    if (winsMatch.groupValues[1] == g.awayAbbr) { awayWins = winsMatch.groupValues[2].toInt(); homeWins = winsMatch.groupValues[3].toInt() }
-                    else { homeWins = winsMatch.groupValues[2].toInt(); awayWins = winsMatch.groupValues[3].toInt() }
-                }
             }
 
             Surface(
@@ -420,7 +423,11 @@ private fun PlayoffsView(uiState: SportsUiState, viewModel: SportsViewModel) {
                         Box(Modifier.weight(maxOf(homePct, 0.01f)).fillMaxHeight().background(Color(0xFFE17055)))
                     }
 
-                    Text(note.ifBlank { "Best of 7" }, Modifier.fillMaxWidth().padding(top = 4.dp),
+                    if (gameLabel.isNotBlank()) {
+                        Text(gameLabel, Modifier.fillMaxWidth().padding(top = 6.dp),
+                            textAlign = TextAlign.Center, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFA29BFE))
+                    }
+                    Text(note.ifBlank { "Best of 7" }, Modifier.fillMaxWidth().padding(top = 2.dp),
                         textAlign = TextAlign.Center, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }

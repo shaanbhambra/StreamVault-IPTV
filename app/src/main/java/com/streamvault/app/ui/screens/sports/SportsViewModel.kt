@@ -23,7 +23,8 @@ data class SportsGame(
     val awayTeam: String, val awayAbbr: String, val awayScore: String,
     val awayLogo: String, val awayColor: String, val awayRecord: String,
     val status: String, val state: String, // pre, in, post
-    val seriesNote: String,
+    val seriesNote: String, // "Series tied 3-3", "SA wins series 4-2", etc.
+    val seriesGameLabel: String = "", // "East Semifinals - Game 6"
     val homeQuarters: List<String> = emptyList(),
     val awayQuarters: List<String> = emptyList()
 )
@@ -179,12 +180,14 @@ class SportsViewModel @Inject constructor() : ViewModel() {
                     home.optJSONArray("linescores")?.let { ls -> for (q in 0 until ls.length()) hq.add(ls.getJSONObject(q).optString("displayValue", "0")) }
                     away.optJSONArray("linescores")?.let { ls -> for (q in 0 until ls.length()) aq.add(ls.getJSONObject(q).optString("displayValue", "0")) }
 
-                    val seriesNote = comp.optJSONArray("notes")?.let { notes ->
-                        for (n in 0 until notes.length()) {
-                            val h = notes.getJSONObject(n).optString("headline", "")
-                            if (h.contains("leads") || h.contains("tied") || h.contains("wins")) return@let h
-                        }; null
-                    } ?: ""
+                    // Get series info - try series.summary first, then notes
+                    val seriesNote = comp.optJSONObject("series")?.optString("summary", "")?.takeIf { it.isNotBlank() }
+                        ?: comp.optJSONArray("notes")?.let { notes ->
+                            for (n in 0 until notes.length()) {
+                                val h = notes.getJSONObject(n).optString("headline", "")
+                                if (h.isNotBlank()) return@let h
+                            }; null
+                        } ?: ""
 
                     games.add(SportsGame(
                         eventId = event.getString("id"), date = event.getString("date"),
@@ -197,7 +200,11 @@ class SportsViewModel @Inject constructor() : ViewModel() {
                         awayLogo = awayTeam.optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "",
                         awayColor = awayTeam.optString("color", "333"), awayRecord = away.optJSONArray("records")?.optJSONObject(0)?.optString("summary", "") ?: "",
                         status = status.getString("shortDetail"), state = status.getString("state"),
-                        seriesNote = seriesNote, homeQuarters = hq, awayQuarters = aq
+                        seriesNote = seriesNote,
+                        seriesGameLabel = comp.optJSONArray("notes")?.let { notes ->
+                            for (n in 0 until notes.length()) notes.getJSONObject(n).optString("headline", "").takeIf { it.isNotBlank() }?.let { return@let it }; null
+                        } ?: "",
+                        homeQuarters = hq, awayQuarters = aq
                     ))
                 }
 
@@ -251,7 +258,9 @@ class SportsViewModel @Inject constructor() : ViewModel() {
                             seed = sm["playoffSeed"] ?: "", last10 = sm["Last Ten Games"] ?: ""
                         ))
                     }
-                    conferences.add(StandingsConference(conf.getString("name"), teams))
+                    // Sort by playoff seed (numeric)
+                    val sortedTeams = teams.sortedBy { it.seed.toIntOrNull() ?: 99 }
+                    conferences.add(StandingsConference(conf.getString("name"), sortedTeams))
                 }
 
                 _uiState.update { it.copy(conferences = conferences, isLoading = false) }
