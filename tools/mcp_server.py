@@ -176,85 +176,137 @@ def play_channel(channel_id: int) -> str:
 
 @mcp.tool()
 def search_epg(query: str) -> str:
-    """Search the EPG (Electronic Program Guide) for currently/upcoming programs by title. Use this to find live games, shows, etc."""
+    """Search for live/upcoming games and programs. Checks both EPG data AND channel names
+    (since many IPTV channels encode game info in their name like 'NEXT | MIN - TIMBERWOLVES VS SAS - SPURS').
+    Use this to find what's currently on or upcoming."""
+
+    lines = []
+
+    # Check EPG database first
     data = api_get(f"/epg?search={urllib.parse.quote(query)}")
     programs = data.get("programs", [])
-    if not programs:
-        return f"No programs found matching '{query}'"
-    lines = [f"Found {len(programs)} programs for '{query}':"]
-    for p in programs:
-        import datetime
-        start = datetime.datetime.fromtimestamp(p['start_time']).strftime('%H:%M')
-        end = datetime.datetime.fromtimestamp(p['end_time']).strftime('%H:%M')
-        ch_name = p.get('channel_name', '?')
-        ch_id = p.get('channel_id', 0)
-        lines.append(f"  {start}-{end} | [{ch_id}] {ch_name}: {p['title']}")
-    return "\n".join(lines)
+    if programs:
+        lines.append(f"EPG matches for '{query}':")
+        for p in programs:
+            import datetime
+            start = datetime.datetime.fromtimestamp(p['start_time']).strftime('%H:%M')
+            end = datetime.datetime.fromtimestamp(p['end_time']).strftime('%H:%M')
+            ch_name = p.get('channel_name', '?')
+            ch_id = p.get('channel_id', 0)
+            lines.append(f"  {start}-{end} | [{ch_id}] {ch_name}: {p['title']}")
+
+    # Also search channel names — PPV channels often have game info in the name
+    words = query.split()
+    for word in words:
+        if len(word) < 3:
+            continue
+        ch_data = api_get(f"/channels?search={urllib.parse.quote(word)}&limit=30")
+        for ch in ch_data.get("channels", []):
+            name = ch.get("name", "")
+            # Look for game-like channel names
+            if any(kw in name.upper() for kw in ["NEXT |", " VS ", " @ ", "GAME "]):
+                lines.append(f"  LIVE/NEXT | [{ch['id']}] {name}")
+
+    if not lines:
+        return f"No games or programs found for '{query}'. EPG may not be loaded — try searching channels directly with search_channels()."
+
+    # Deduplicate
+    seen = set()
+    unique = []
+    for line in lines:
+        if line not in seen:
+            seen.add(line)
+            unique.append(line)
+
+    return "\n".join(unique)
 
 
 @mcp.tool()
 def whats_on_now(limit: int = 30) -> str:
-    """Show what's currently airing across all channels. Good for finding live games."""
+    """Show what's currently airing / upcoming games across all channels.
+    Checks EPG + scans PPV channel names for active game matchups."""
+    lines = []
+
+    # EPG data
     data = api_get(f"/epg?limit={limit}")
     programs = data.get("programs", [])
-    if not programs:
-        return "No EPG data available"
-    lines = [f"{len(programs)} currently airing:"]
-    for p in programs:
-        import datetime
-        end = datetime.datetime.fromtimestamp(p['end_time']).strftime('%H:%M')
-        ch_name = p.get('channel_name', '?')
-        ch_id = p.get('channel_id', 0)
-        lines.append(f"  until {end} | [{ch_id}] {ch_name}: {p['title']}")
-    return "\n".join(lines)
+    if programs:
+        for p in programs:
+            import datetime
+            end = datetime.datetime.fromtimestamp(p['end_time']).strftime('%H:%M')
+            ch_name = p.get('channel_name', '?')
+            ch_id = p.get('channel_id', 0)
+            lines.append(f"  until {end} | [{ch_id}] {ch_name}: {p['title']}")
+
+    # Scan PPV categories for live/next games
+    for cat_keyword in ["NBA PASS", "NBA PPV", "NFL PPV", "NHL PPV", "MLB PPV", "PPV EVENT"]:
+        try:
+            ch_data = api_get(f"/channels?search={urllib.parse.quote(cat_keyword)}&limit=10")
+            for ch in ch_data.get("channels", []):
+                name = ch.get("name", "")
+                if "NEXT |" in name:
+                    lines.append(f"  UPCOMING | [{ch['id']}] {name}")
+        except:
+            pass
+
+    if not lines:
+        return "No EPG data or live games found. EPG may not be synced yet."
+
+    return f"Currently on / upcoming:\n" + "\n".join(lines[:40])
 
 
 @mcp.tool()
 def find_and_play(query: str, prefer_4k: bool = True) -> str:
-    """Find a channel or program matching the query and play it. Prefers 4K/HD versions. Example: 'NBA playoff', 'CNN', 'Raptors game'."""
-    # First try EPG search for live programs
-    epg_data = api_get(f"/epg?search={urllib.parse.quote(query)}")
-    epg_programs = epg_data.get("programs", [])
+    """Find a channel or program matching the query and play it. Prefers 4K/HD versions.
+    Searches channel names for game matchups (e.g. 'Timberwolves vs Spurs'), team names, network names.
+    Example: 'NBA playoff', 'CNN', 'Raptors game', 'Timberwolves Spurs'."""
 
-    if epg_programs:
-        # Found in EPG — pick the best channel
-        best = None
-        for p in epg_programs:
-            ch_id = p.get("channel_id", 0)
-            if ch_id > 0:
-                ch_name = p.get("channel_name", "")
-                if prefer_4k and ("4K" in ch_name or "UHD" in ch_name or "4k" in ch_name):
-                    best = p
-                    break
-                if best is None:
-                    best = p
-        if best and best.get("channel_id", 0) > 0:
-            result = api_post("/play", {"channel_id": best["channel_id"]})
-            return f"Playing: {best['title']} on {best.get('channel_name', '?')} (channel {best['channel_id']})"
-
-    # Fallback: search channels by name
-    ch_data = api_get(f"/channels?search={urllib.parse.quote(query)}&limit=20")
+    # Search channels — this finds PPV game-specific channels with matchup names
+    ch_data = api_get(f"/channels?search={urllib.parse.quote(query)}&limit=50")
     channels = ch_data.get("channels", [])
+
+    # Also search with individual words for team matchups
+    words = query.split()
+    if len(words) >= 2:
+        for word in words:
+            if len(word) >= 4:  # Skip short words
+                extra = api_get(f"/channels?search={urllib.parse.quote(word)}&limit=30")
+                seen_ids = {c["id"] for c in channels}
+                for ch in extra.get("channels", []):
+                    if ch["id"] not in seen_ids:
+                        channels.append(ch)
+                        seen_ids.add(ch["id"])
+
     if not channels:
         return f"Nothing found for '{query}'"
 
-    # Prefer 4K/HD
-    best_ch = None
-    for ch in channels:
+    # Score channels — prefer: NEXT/live games > HD > 4K label > regular
+    def score(ch):
         name = ch.get("name", "")
-        if prefer_4k and ("4K" in name or "UHD" in name or "HD" in name):
-            best_ch = ch
-            break
-        if best_ch is None and "NO EVENT" not in name and "###" not in name:
-            best_ch = ch
+        s = 0
+        if "NEXT |" in name or "VS" in name.upper() or "vs" in name:
+            s += 100  # Active/upcoming game
+        if prefer_4k and ("4K" in name or "UHD" in name):
+            s += 50
+        if "HD" in name or "ᴴᴰ" in name:
+            s += 30
+        if "NO EVENT" in name or name.startswith("-") or name.startswith("#"):
+            s -= 200
+        if "SD" in name:
+            s -= 20
+        # Boost if multiple query words match
+        for word in words:
+            if word.upper() in name.upper():
+                s += 10
+        return s
 
-    if best_ch is None:
-        best_ch = channels[0]
+    channels.sort(key=score, reverse=True)
+    best = channels[0]
 
-    result = api_post("/play", {"channel_id": best_ch["id"]})
+    result = api_post("/play", {"channel_id": best["id"]})
     if result.get("success"):
-        return f"Playing: {best_ch['name']} (channel {best_ch['id']})"
-    return f"Found but failed to play: {best_ch['name']}"
+        return f"Playing: {best['name']} (channel {best['id']})"
+    return f"Found but failed to play: {best['name']}"
 
 
 @mcp.tool()
