@@ -723,6 +723,14 @@ async function showSettings() {
           <div class="channel-meta">Status: ${settings.ai_configured ? 'Configured' : 'Not configured'}</div>
         </div>
 
+        <div class="channel-item" onclick="toggleAllCategories()" style="cursor:pointer;" id="catToggleBtn">
+          <div class="channel-info">
+            <div class="channel-name">Show All Categories</div>
+            <div class="channel-meta">Enable Arabic, European, and other filtered categories</div>
+          </div>
+          <div style="color: var(--accent2); font-size: 20px;">&#x276F;</div>
+        </div>
+
         <div class="channel-item" onclick="showQrOnTv()" style="cursor:pointer;">
           <div class="channel-info">
             <div class="channel-name">Display QR on TV Screen</div>
@@ -750,6 +758,25 @@ async function vpnOn() {
 async function vpnOff() {
   await apiPost('/vpn/off', {});
   setTimeout(() => showSettings(), 2000);
+}
+
+async function toggleAllCategories() {
+  const btn = document.getElementById('catToggleBtn');
+  btn.querySelector('.channel-name').textContent = 'Loading all categories...';
+  try {
+    const data = await apiPost('/categories/toggle_all', {});
+    if (data.success) {
+      btn.querySelector('.channel-name').textContent = 'All Categories Enabled';
+      btn.querySelector('.channel-meta').textContent = `${data.total_categories} categories available. ${data.newly_added} newly added.`;
+      allCategories = []; // Reset cached categories
+    } else {
+      btn.querySelector('.channel-name').textContent = 'Failed';
+      btn.querySelector('.channel-meta').textContent = data.error || 'Unknown error';
+    }
+  } catch (e) {
+    btn.querySelector('.channel-name').textContent = 'Error';
+    btn.querySelector('.channel-meta').textContent = e.message;
+  }
 }
 
 async function showQrOnTv() {

@@ -4,7 +4,8 @@ Step 2: Build a Room-compatible SQLite DB from local catalog JSON.
 Schema is extracted directly from Room's exported 52.json — guaranteed match.
 
 Usage:
-    python3 tools/build_db.py
+    python3 tools/build_db.py            # Filtered (US/CA/India/4K/Sports)
+    python3 tools/build_db.py --all      # All 882 categories
     # Then push:
     adb -s 192.168.2.21:5555 shell am force-stop com.streamvault.app
     adb -s 192.168.2.21:5555 shell "run-as com.streamvault.app sh -c 'cat > databases/streamvault.db'" < tools/output/streamvault_seed.db
@@ -158,10 +159,14 @@ def main():
     provider_id = cur.lastrowid
     print(f"  Provider ID: {provider_id}")
 
-    # Categories
-    print("\nInserting categories...")
+    # Categories — use --all flag to include all 882 live categories
+    # Channels are only pre-loaded for filtered categories; app lazy-loads the rest
+    use_all = "--all" in sys.argv
+    live_cat_file = "live_categories_all.json" if use_all else "live_categories_filtered.json"
+    mode_label = f"ALL ({live_cat_file})" if use_all else f"FILTERED ({live_cat_file})"
+    print(f"\nInserting categories ({mode_label})...")
     for cat_file, cat_type in [
-        ("live_categories_filtered.json", "LIVE"),
+        (live_cat_file, "LIVE"),
         ("vod_categories.json", "MOVIE"),
         ("series_categories.json", "SERIES"),
     ]:

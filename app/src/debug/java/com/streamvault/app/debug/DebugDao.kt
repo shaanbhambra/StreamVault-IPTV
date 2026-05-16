@@ -8,7 +8,7 @@ import org.json.JSONObject
 /**
  * Debug-only DAO using raw SQLiteDatabase. Avoids Room dependency conflicts.
  */
-class DebugDao(private val db: SQLiteDatabase) {
+class DebugDao(internal val db: SQLiteDatabase) {
 
     fun getActiveProvider(): JSONObject? {
         return db.rawQuery(

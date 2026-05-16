@@ -69,6 +69,7 @@ class DebugApiServer(
                 uri == "/ai" && method == Method.POST -> handleAi(session)
                 uri == "/ai/status" -> handleAiStatus()
                 uri == "/settings" -> handleSettings()
+                uri == "/categories/toggle_all" && method == Method.POST -> handleToggleAllCategories()
                 uri == "/vpn/on" && method == Method.POST -> handleVpnOn()
                 uri == "/vpn/off" && method == Method.POST -> handleVpnOff()
                 uri == "/benchmark" -> handleBenchmark()
@@ -537,6 +538,51 @@ p{color:#8888a0;font-size:16px;margin-bottom:30px}#qr{background:white;padding:2
             put("favorite_count", pid?.let { dao.getCount("favorites", it) } ?: 0)
             put("ai_configured", GeminiClient.isConfigured())
         })
+    }
+
+    private fun handleToggleAllCategories(): Response {
+        // Insert all categories from the Xtream API that aren't already in the DB
+        val pid = dao.getFirstProviderId() ?: return json(404, JSONObject().put("error", "no provider"))
+        val provider = dao.getActiveProvider() ?: return json(404, JSONObject().put("error", "no provider"))
+        val serverUrl = provider.getString("server_url")
+
+        // Fetch all categories from the Xtream API
+        return try {
+            val apiUrl = "$serverUrl/player_api.php?username=b5885330ec&password=5e46b997af&action=get_live_categories"
+            val conn = java.net.URL(apiUrl).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 8000
+            conn.readTimeout = 10000
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+            val response = conn.inputStream.bufferedReader().readText()
+            conn.disconnect()
+
+            val categories = org.json.JSONArray(response)
+            var added = 0
+            for (i in 0 until categories.length()) {
+                val cat = categories.getJSONObject(i)
+                val catId = cat.getLong("category_id")
+                val name = cat.getString("category_name")
+                val fp = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest("LIVE:$catId:$name".toByteArray()).take(8)
+                    .joinToString("") { "%02x".format(it) }
+                try {
+                    dao.db.execSQL(
+                        "INSERT OR IGNORE INTO categories (category_id, name, parent_id, type, provider_id, is_adult, is_user_protected, sync_fingerprint) VALUES (?, ?, NULL, 'LIVE', ?, 0, 0, ?)",
+                        arrayOf(catId, name, pid, fp)
+                    )
+                    added++
+                } catch (_: Exception) {}
+            }
+
+            json(200, JSONObject().apply {
+                put("success", true)
+                put("total_categories", categories.length())
+                put("newly_added", added)
+                put("message", "All categories now visible. Navigate to them in the app — channels will load on demand.")
+            })
+        } catch (e: Exception) {
+            json(500, JSONObject().put("error", "Failed to fetch categories: ${e.message}"))
+        }
     }
 
     private fun handleVpnOn(): Response {

@@ -267,6 +267,15 @@ def quick_switch(query: str, prefer_4k: bool = True) -> str:
 
 
 @mcp.tool()
+def enable_all_categories() -> str:
+    """Enable all IPTV categories (Arabic, European, etc.) that were previously filtered out."""
+    data = api_post("/categories/toggle_all", {})
+    if data.get("success"):
+        return f"Enabled {data.get('total_categories')} categories ({data.get('newly_added')} newly added). Navigate to Categories tab to browse."
+    return f"Failed: {data.get('error', 'unknown')}"
+
+
+@mcp.tool()
 def show_qr_on_tv() -> str:
     """Display the QR code on the TV screen so the user can scan it with their phone."""
     data = api_post("/show_qr", {})
