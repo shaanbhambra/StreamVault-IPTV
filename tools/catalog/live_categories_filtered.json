@@ -1,0 +1,787 @@
+[
+  {
+    "category_id": "662",
+    "category_name": "4K| \u1d41\u1d34\u1d30 \u00b3\u2078\u2074\u2070\u1d3e",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1689",
+    "category_name": "US| PRIME \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2017",
+    "category_name": "US| TUBI \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2056",
+    "category_name": "US| NETFLIX ON AIR \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "613",
+    "category_name": "US| PEACOCK \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2049",
+    "category_name": "US| DIREC TV \u1d9c\u1da6\u1d57\u02b8 \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2036",
+    "category_name": "US| DIREC TV \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "58",
+    "category_name": "US| ENTERTAINMENT \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1383",
+    "category_name": "US| SPECTRUM NETWORK \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1387",
+    "category_name": "US| TELEMUNDO NETWORK \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "491",
+    "category_name": "US| NEWS \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "493",
+    "category_name": "US| MOVIES \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1940",
+    "category_name": "US| 24/7 ONEPLAY \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "612",
+    "category_name": "US| PARAMOUNT+ ORIGINAL \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1056",
+    "category_name": "US| \ufe0fHULU NETWORK \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1884",
+    "category_name": "US| DISNEY+ NETWORK \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1885",
+    "category_name": "US| PEACOCK NETWORK \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1886",
+    "category_name": "US| HBO MAX NETWORK \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1109",
+    "category_name": "US| CINEMANIA HOLLYWOOD \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1110",
+    "category_name": "US| CINEMA TV SHOWS \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1888",
+    "category_name": "US| ROKU \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2213",
+    "category_name": "US| 24/7 PRIME VIDEO \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2214",
+    "category_name": "US| 24/7 DISNEY+ \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "619",
+    "category_name": "US| 24/7 PPV \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2057",
+    "category_name": "US| 24/7 MOVIES/ACTORS \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2058",
+    "category_name": "US| 24/7 ACTION/ADVENTURE \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2059",
+    "category_name": "US| 24/7 CLASSIC SHOWS \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2060",
+    "category_name": "US| 24/7 REALITY \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2061",
+    "category_name": "US| 24/7 COMEDY \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2062",
+    "category_name": "US| 24/7 CRIME \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2063",
+    "category_name": "US| 24/7 CARTOON \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2064",
+    "category_name": "US| 24/7 KIDS/FAMILY \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "490",
+    "category_name": "US| KIDS \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "600",
+    "category_name": "US| NBC \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "598",
+    "category_name": "US| FOX \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1033",
+    "category_name": "US| MIAMI \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "599",
+    "category_name": "US| CW \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "601",
+    "category_name": "US| CBS \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "602",
+    "category_name": "US| ABC \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "492",
+    "category_name": "US| SPORT \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1206",
+    "category_name": "US| THE MASTERS PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "903",
+    "category_name": "US| PPV EVENT",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2222",
+    "category_name": "US| PPV EVENT \u207d\u1d2e\u1d37\u207e",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1139",
+    "category_name": "US| UFC PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1513",
+    "category_name": "US| SOCCER PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "573",
+    "category_name": "US| DAZN PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1648",
+    "category_name": "US| NETFLIX PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "603",
+    "category_name": "US| BALLY SPORTS PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1882",
+    "category_name": "US| FIFA+ PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1497",
+    "category_name": "US| UEFA PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2253",
+    "category_name": "US| APPLE TV F1 PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1151",
+    "category_name": "US| MLS PPV VIP",
+    "parent_id": 0
+  },
+  {
+    "category_id": "607",
+    "category_name": "US| MLS PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2301",
+    "category_name": "US| MLS PPV \u207d\u1d2e\u1d37\u207e",
+    "parent_id": 0
+  },
+  {
+    "category_id": "597",
+    "category_name": "US| NFL PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1501",
+    "category_name": "US| NFL REPLAY",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2096",
+    "category_name": "US| NFHS PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1591",
+    "category_name": "US| VIAPLAY NHL PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "604",
+    "category_name": "US| NHL PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1021",
+    "category_name": "US| NHL TEAM PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1503",
+    "category_name": "US| NHL REPLAY",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1192",
+    "category_name": "US| MILB PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2302",
+    "category_name": "US| MILB PPV \u207d\u1d2e\u1d37\u207e",
+    "parent_id": 0
+  },
+  {
+    "category_id": "606",
+    "category_name": "US| MLB PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1185",
+    "category_name": "US| MLB TEAM PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1243",
+    "category_name": "US| WNBA PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2303",
+    "category_name": "US| WNBA PPV \u207d\u1d2e\u1d37\u207e",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2304",
+    "category_name": "US| WNBA TEAM PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2094",
+    "category_name": "US| NBA PASS PPV \u2078\u1d37",
+    "parent_id": 0
+  },
+  {
+    "category_id": "605",
+    "category_name": "US| NBA PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1016",
+    "category_name": "US| NBA TEAM PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1394",
+    "category_name": "US| PEACOCK PPV \u2c7d\u1d35\u1d3e",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2196",
+    "category_name": "US| PEACOCK PPV \u207d\u1d2e\u1d37\u207e",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1257",
+    "category_name": "US| B/R MAX SPORTS PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "688",
+    "category_name": "US| NCAAF PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1014",
+    "category_name": "US| NCAAB PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "927",
+    "category_name": "US| RUGBY PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1393",
+    "category_name": "US| MAX PPV \u2c7d\u1d35\u1d3e",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1996",
+    "category_name": "US| MAX PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1983",
+    "category_name": "US| STAN PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1960",
+    "category_name": "US| ESPN+ PPV \u2c7d\u1d35\u1d3e",
+    "parent_id": 0
+  },
+  {
+    "category_id": "911",
+    "category_name": "US| ESPN+ PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "931",
+    "category_name": "US| MATCHROOM PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2014",
+    "category_name": "US| FLO \u2c7d\u1d35\u1d3e PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1928",
+    "category_name": "US| FLO COLLEGE PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1926",
+    "category_name": "US| FLO RACING PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "960",
+    "category_name": "US| FLO SPORTS PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1112",
+    "category_name": "US| SUPERCROSS PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "925",
+    "category_name": "US| DIRTVISION PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1927",
+    "category_name": "US| TENNIS PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1038",
+    "category_name": "US| PARAMOUNT+ PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1992",
+    "category_name": "US| GOLF PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "961",
+    "category_name": "US| BTN+ PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2032",
+    "category_name": "8K| SPORT ON AIR \u2078\u1d37",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1210",
+    "category_name": "4K| RELAX \u1d41\u1d34\u1d30 \u00b3\u2078\u2074\u2070\u1d3e \u263c",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1988",
+    "category_name": "CA| PRIME \u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "62",
+    "category_name": "CA| CANADA \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "576",
+    "category_name": "CA| GENERAL FR",
+    "parent_id": 0
+  },
+  {
+    "category_id": "579",
+    "category_name": "CA| CINEMA FR",
+    "parent_id": 0
+  },
+  {
+    "category_id": "577",
+    "category_name": "CA| KIDS FR",
+    "parent_id": 0
+  },
+  {
+    "category_id": "580",
+    "category_name": "CA| SPORTS FR",
+    "parent_id": 0
+  },
+  {
+    "category_id": "581",
+    "category_name": "CA| MUSIC FR",
+    "parent_id": 0
+  },
+  {
+    "category_id": "578",
+    "category_name": "CA| DOCUMENTARY FR",
+    "parent_id": 0
+  },
+  {
+    "category_id": "689",
+    "category_name": "CA| NEWS EN",
+    "parent_id": 0
+  },
+  {
+    "category_id": "583",
+    "category_name": "CA| GENERAL EN",
+    "parent_id": 0
+  },
+  {
+    "category_id": "584",
+    "category_name": "CA| CINEMA EN",
+    "parent_id": 0
+  },
+  {
+    "category_id": "585",
+    "category_name": "CA| SPORTS EN",
+    "parent_id": 0
+  },
+  {
+    "category_id": "586",
+    "category_name": "CA| KIDS EN",
+    "parent_id": 0
+  },
+  {
+    "category_id": "588",
+    "category_name": "CA| DOCUMENTARY EN",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1451",
+    "category_name": "CA| ROGERS SUPER SPORTS PACK EN",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1773",
+    "category_name": "CA| SOCCER PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1799",
+    "category_name": "CA| FUBO PPV \u1d3f\u1d2c\u1d42",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1930",
+    "category_name": "CA| TSN+ PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1966",
+    "category_name": "CA| DAZN PPV \u2c7d\u1d35\u1d3e",
+    "parent_id": 0
+  },
+  {
+    "category_id": "574",
+    "category_name": "CA| DAZN PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2012",
+    "category_name": "CA| VICTORY+ PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1015",
+    "category_name": "CA| CBC PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1094",
+    "category_name": "CA| TSN SPORT \u1d34\u1d30/\u1d3f\u1d2c\u1d42 \u2076\u2070\u1da0\u1d56\u02e2",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1920",
+    "category_name": "CA| SPORTSNET PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1091",
+    "category_name": "CA| SPORTSNET+ PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "922",
+    "category_name": "CA| WHL PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "919",
+    "category_name": "CA| CFL PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1594",
+    "category_name": "CA| CANADA WEST PPV",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1310",
+    "category_name": "WT| WORLD CRICKET",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1765",
+    "category_name": "ASIA| YUPP TV EXCLUSIVE \u1d34\u1d30",
+    "parent_id": 0
+  },
+  {
+    "category_id": "179",
+    "category_name": "ASIA| UK",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1144",
+    "category_name": "ASIA| UK HEVC",
+    "parent_id": 0
+  },
+  {
+    "category_id": "256",
+    "category_name": "ASIA| GUJARATI/ASSAM",
+    "parent_id": 0
+  },
+  {
+    "category_id": "258",
+    "category_name": "ASIA| BHOJPURI/ODISHA",
+    "parent_id": 0
+  },
+  {
+    "category_id": "199",
+    "category_name": "ASIA| SINHALA",
+    "parent_id": 0
+  },
+  {
+    "category_id": "255",
+    "category_name": "ASIA| MALAYALAM",
+    "parent_id": 0
+  },
+  {
+    "category_id": "259",
+    "category_name": "ASIA| MARATHI",
+    "parent_id": 0
+  },
+  {
+    "category_id": "253",
+    "category_name": "ASIA| KANNADA",
+    "parent_id": 0
+  },
+  {
+    "category_id": "177",
+    "category_name": "ASIA| ENGLISH",
+    "parent_id": 0
+  },
+  {
+    "category_id": "178",
+    "category_name": "ASIA| SPORTS",
+    "parent_id": 0
+  },
+  {
+    "category_id": "175",
+    "category_name": "ASIA| BENGALI",
+    "parent_id": 0
+  },
+  {
+    "category_id": "182",
+    "category_name": "ASIA| TELUGU",
+    "parent_id": 0
+  },
+  {
+    "category_id": "176",
+    "category_name": "ASIA| TAMIL",
+    "parent_id": 0
+  },
+  {
+    "category_id": "67",
+    "category_name": "ASIA| HINDI",
+    "parent_id": 0
+  },
+  {
+    "category_id": "174",
+    "category_name": "ASIA| PUNJABI",
+    "parent_id": 0
+  },
+  {
+    "category_id": "686",
+    "category_name": "ASIA| NEPAL",
+    "parent_id": 0
+  },
+  {
+    "category_id": "254",
+    "category_name": "ASIA| BANGLADESH",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2080",
+    "category_name": "ASIA| 24/7 INDIA",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2081",
+    "category_name": "ASIA| 24/7 SINGER",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2083",
+    "category_name": "ASIA| 24/7 INDIAN ACTORS",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2082",
+    "category_name": "ASIA| 24/7 INDIAN SERIES",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2084",
+    "category_name": "ASIA| 24/7 BOLLYWOOD",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2085",
+    "category_name": "ASIA| 24/7 KANNADA",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2086",
+    "category_name": "ASIA| 24/7 TAMIL",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2087",
+    "category_name": "ASIA| 24/7 TELEGU",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2088",
+    "category_name": "ASIA| 24/7 BANGAL/BANGAL",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2089",
+    "category_name": "ASIA| 24/7 PUNJABI",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2090",
+    "category_name": "ASIA| 24/7 MALAYALAM",
+    "parent_id": 0
+  },
+  {
+    "category_id": "7",
+    "category_name": "ASIA| PAKISTAN",
+    "parent_id": 0
+  },
+  {
+    "category_id": "2091",
+    "category_name": "ASIA| 24/7 PAKISTAN",
+    "parent_id": 0
+  },
+  {
+    "category_id": "1216",
+    "category_name": "RX| RELAX 4K \u263c",
+    "parent_id": 0
+  },
+  {
+    "category_id": "661",
+    "category_name": "4K| 24/7 \u1d41\u1d34\u1d30 \u00b3\u2078\u2074\u2070\u1d3e",
+    "parent_id": 0
+  }
+]

@@ -160,8 +160,9 @@ class SportsViewModel @Inject constructor() : ViewModel() {
                 val raw = fetchUrl("https://site.api.espn.com/apis/site/v2/sports/$sportPath/scoreboard")
                 val data = JSONObject(raw)
                 val events = data.optJSONArray("events") ?: JSONArray()
-                val seasonType = data.optJSONArray("leagues")?.optJSONObject(0)
-                    ?.optJSONObject("season")?.optInt("type", 2) ?: 2
+                val seasonObj = data.optJSONArray("leagues")?.optJSONObject(0)?.optJSONObject("season")
+                val seasonTypeObj = seasonObj?.optJSONObject("type")
+                val seasonType = seasonTypeObj?.optInt("type", 2) ?: seasonObj?.optInt("type", 2) ?: 2
 
                 val games = mutableListOf<SportsGame>()
                 for (i in 0 until events.length()) {

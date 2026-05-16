@@ -79,8 +79,8 @@ fun SportsScreen(
                         onClick = { viewModel.selectView(view) },
                         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(20.dp)),
                         colors = ClickableSurfaceDefaults.colors(
-                            containerColor = if (selected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.surface,
-                            contentColor = if (selected) MaterialTheme.colorScheme.onTertiary else MaterialTheme.colorScheme.onSurface
+                            containerColor = if (selected) Color(0xFF6C5CE7) else MaterialTheme.colorScheme.surface,
+                            contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurface
                         ),
                         modifier = Modifier.height(36.dp)
                     ) {
@@ -193,6 +193,7 @@ private fun GameCard(game: SportsGame, viewModel: SportsViewModel) {
             border = Border(BorderStroke(if (isLive) 2.dp else 1.dp,
                 if (isLive) Color(0xFFE74C3C) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)))
         ),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f), // Don't scale up on focus
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
     ) {
         Column(Modifier.padding(14.dp)) {
@@ -395,6 +396,7 @@ private fun PlayoffsView(uiState: SportsUiState, viewModel: SportsViewModel) {
                 onClick = { viewModel.loadBoxScore(g.eventId) },
                 shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
                 colors = ClickableSurfaceDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
             ) {
                 Column(Modifier.padding(14.dp)) {
@@ -434,15 +436,21 @@ private fun BoxScoreView(boxScore: BoxScoreData, onBack: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-                    .clickable { onBack() }.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(16.dp)
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                    .padding(14.dp)
             ) {
-                Text("<- Back", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.weight(1f))
-                Text("${boxScore.awayAbbr} ${boxScore.awayTotal} - ${boxScore.homeTotal} ${boxScore.homeAbbr}",
-                    fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+                Row(
+                    Modifier.fillMaxWidth().clickable { onBack() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("< Back to Scores", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF6C5CE7))
+                }
+                Spacer(Modifier.height(8.dp))
+                Text("${boxScore.awayAbbr}  ${boxScore.awayTotal}  —  ${boxScore.homeTotal}  ${boxScore.homeAbbr}",
+                    fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = Color.White,
+                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
             }
         }
 
@@ -487,19 +495,19 @@ private fun BoxScoreView(boxScore: BoxScoreData, onBack: () -> Unit) {
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp)).padding(12.dp)
             ) {
                 Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-                    Text("Stat", Modifier.weight(1f), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Stat", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = Color.White)
                     Text(boxScore.homeAbbr, Modifier.width(60.dp), textAlign = TextAlign.Center,
-                        fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     Text(boxScore.awayAbbr, Modifier.width(60.dp), textAlign = TextAlign.Center,
-                        fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+}
                 for (stat in boxScore.stats) {
                     Spacer(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)))
                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Text(stat.name, Modifier.weight(1f), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                        Text(stat.homeValue, Modifier.width(60.dp), textAlign = TextAlign.Center, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        Text(stat.awayValue, Modifier.width(60.dp), textAlign = TextAlign.Center, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(stat.name, Modifier.weight(1f), fontSize = 13.sp, color = Color.White.copy(alpha = 0.9f))
+                        Text(stat.homeValue, Modifier.width(60.dp), textAlign = TextAlign.Center, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text(stat.awayValue, Modifier.width(60.dp), textAlign = TextAlign.Center, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
             }
