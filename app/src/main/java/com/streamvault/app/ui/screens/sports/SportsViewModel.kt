@@ -51,12 +51,29 @@ data class BoxScoreData(
     val stats: List<BoxScoreStat>
 )
 
+data class PlayoffSeries(
+    val roundLabel: String, // "East 1st Round", "West Semifinals", etc.
+    val team1Abbr: String, val team1Name: String, val team1Logo: String,
+    val team2Abbr: String, val team2Name: String, val team2Logo: String,
+    val team1Wins: Int, val team2Wins: Int,
+    val seriesNote: String, // "DET wins series 4-3"
+    val isComplete: Boolean,
+    val games: List<PlayoffGame>
+)
+
+data class PlayoffGame(
+    val awayAbbr: String, val awayScore: String,
+    val homeAbbr: String, val homeScore: String,
+    val status: String
+)
+
 data class SportsUiState(
     val league: String = "nba",
-    val view: String = "today", // today, standings, playoffs
+    val view: String = "today",
     val games: List<SportsGame> = emptyList(),
     val conferences: List<StandingsConference> = emptyList(),
     val news: List<NewsArticle> = emptyList(),
+    val playoffBracket: List<PlayoffSeries> = emptyList(),
     val boxScore: BoxScoreData? = null,
     val isLoading: Boolean = false,
     val isPostseason: Boolean = false,
@@ -87,7 +104,7 @@ class SportsViewModel @Inject constructor() : ViewModel() {
         when (view) {
             "today" -> loadScores(_uiState.value.league)
             "standings" -> loadStandings(_uiState.value.league)
-            "playoffs" -> loadScores(_uiState.value.league)
+            "playoffs" -> loadPlayoffBracket(_uiState.value.league)
         }
     }
 
@@ -256,6 +273,107 @@ class SportsViewModel @Inject constructor() : ViewModel() {
                 _uiState.update { it.copy(games = games, news = newsList, isLoading = false, isPostseason = seasonType == 3) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(isLoading = false, error = e.message) }
+            }
+        }
+    }
+
+    private fun loadPlayoffBracket(league: String) {
+        _uiState.update { it.copy(isLoading = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val sportPath = mapLeague(league)
+                // Fetch last 30 days of playoff games
+                val cal = java.util.Calendar.getInstance()
+                val endDate = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(cal.time)
+                cal.add(java.util.Calendar.DAY_OF_YEAR, -45)
+                val startDate = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(cal.time)
+
+                val raw = fetchUrl("https://site.api.espn.com/apis/site/v2/sports/$sportPath/scoreboard?dates=$startDate-$endDate&limit=200")
+                val data = JSONObject(raw)
+                val events = data.optJSONArray("events") ?: JSONArray()
+
+                // Group games by series matchup
+                data class RawGame(val awayAbbr: String, val awayName: String, val awayLogo: String, val awayScore: String,
+                                   val homeAbbr: String, val homeName: String, val homeLogo: String, val homeScore: String,
+                                   val status: String, val roundLabel: String, val seriesNote: String)
+
+                val seriesMap = mutableMapOf<String, MutableList<RawGame>>()
+
+                for (i in 0 until events.length()) {
+                    val event = events.getJSONObject(i)
+                    val comp = event.getJSONArray("competitions").getJSONObject(0)
+                    val competitors = comp.getJSONArray("competitors")
+                    val statusType = comp.getJSONObject("status").getJSONObject("type")
+
+                    // Only playoff games
+                    val seriesType = comp.optJSONObject("series")?.optString("type", "") ?: ""
+                    if (seriesType != "playoff") continue
+
+                    val home = competitors.getJSONObject(0)
+                    val away = competitors.getJSONObject(1)
+                    val homeTeam = home.getJSONObject("team")
+                    val awayTeam = away.getJSONObject("team")
+
+                    val roundLabel = comp.optJSONArray("notes")?.let { notes ->
+                        for (n in 0 until notes.length()) notes.getJSONObject(n).optString("headline", "").takeIf { it.isNotBlank() }?.let { return@let it }; null
+                    } ?: ""
+                    val seriesNote = comp.optJSONObject("series")?.optString("summary", "") ?: ""
+
+                    val key = listOf(awayTeam.getString("abbreviation"), homeTeam.getString("abbreviation")).sorted().joinToString("-")
+
+                    seriesMap.getOrPut(key) { mutableListOf() }.add(RawGame(
+                        awayAbbr = awayTeam.getString("abbreviation"), awayName = awayTeam.getString("displayName"),
+                        awayLogo = awayTeam.optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "",
+                        awayScore = away.optString("score", "0"),
+                        homeAbbr = homeTeam.getString("abbreviation"), homeName = homeTeam.getString("displayName"),
+                        homeLogo = homeTeam.optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "",
+                        homeScore = home.optString("score", "0"),
+                        status = statusType.getString("shortDetail"),
+                        roundLabel = roundLabel, seriesNote = seriesNote
+                    ))
+                }
+
+                // Build PlayoffSeries list
+                val bracket = seriesMap.map { (_, games) ->
+                    val lastGame = games.last()
+                    val note = games.mapNotNull { it.seriesNote.takeIf { n -> n.isNotBlank() } }.lastOrNull() ?: ""
+                    val label = games.mapNotNull { it.roundLabel.takeIf { n -> n.isNotBlank() } }.lastOrNull() ?: ""
+                    // Extract round name (e.g., "East Semifinals" from "East Semifinals - Game 6")
+                    val roundName = label.replace(Regex("\\s*-\\s*Game\\s*\\d+"), "").trim()
+
+                    // Parse wins
+                    var t1Wins = 0; var t2Wins = 0
+                    val t1 = lastGame.awayAbbr; val t2 = lastGame.homeAbbr
+                    val wm = Regex("(\\w+)\\s+wins?\\s+series\\s+(\\d+)-(\\d+)", RegexOption.IGNORE_CASE).find(note)
+                    val lm = Regex("(\\w+)\\s+leads?\\s+(\\d+)-(\\d+)", RegexOption.IGNORE_CASE).find(note)
+                    val tm = Regex("tied\\s+(\\d+)-(\\d+)", RegexOption.IGNORE_CASE).find(note)
+                    when {
+                        wm != null -> { if (wm.groupValues[1].uppercase() == t1.uppercase()) { t1Wins = wm.groupValues[2].toInt(); t2Wins = wm.groupValues[3].toInt() } else { t2Wins = wm.groupValues[2].toInt(); t1Wins = wm.groupValues[3].toInt() } }
+                        lm != null -> { if (lm.groupValues[1].uppercase() == t1.uppercase()) { t1Wins = lm.groupValues[2].toInt(); t2Wins = lm.groupValues[3].toInt() } else { t2Wins = lm.groupValues[2].toInt(); t1Wins = lm.groupValues[3].toInt() } }
+                        tm != null -> { t1Wins = tm.groupValues[1].toInt(); t2Wins = t1Wins }
+                    }
+
+                    PlayoffSeries(
+                        roundLabel = roundName.ifBlank { "Playoffs" },
+                        team1Abbr = t1, team1Name = lastGame.awayName, team1Logo = lastGame.awayLogo,
+                        team2Abbr = t2, team2Name = lastGame.homeName, team2Logo = lastGame.homeLogo,
+                        team1Wins = t1Wins, team2Wins = t2Wins,
+                        seriesNote = note, isComplete = note.contains("wins"),
+                        games = games.map { PlayoffGame(it.awayAbbr, it.awayScore, it.homeAbbr, it.homeScore, it.status) }
+                    )
+                }.sortedBy { s ->
+                    // Sort: Finals > Conf Finals > Semifinals > 1st Round
+                    when {
+                        s.roundLabel.contains("Final", true) && !s.roundLabel.contains("Semi", true) -> 0
+                        s.roundLabel.contains("Semi", true) -> 1
+                        s.roundLabel.contains("1st", true) || s.roundLabel.contains("First", true) -> 2
+                        else -> 3
+                    }
+                }
+
+                _uiState.update { it.copy(playoffBracket = bracket, isLoading = false, isPostseason = bracket.isNotEmpty()) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoading = false, error = "Playoffs: ${e.message}") }
             }
         }
     }
