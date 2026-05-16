@@ -69,6 +69,7 @@ class DebugApiServer(
                 uri == "/ai" && method == Method.POST -> handleAi(session)
                 uri == "/ai/status" -> handleAiStatus()
                 uri == "/settings" -> handleSettings()
+                uri == "/sports" -> handleSports(params)
                 uri == "/categories/toggle_all" && method == Method.POST -> handleToggleAllCategories()
                 uri == "/vpn/on" && method == Method.POST -> handleVpnOn()
                 uri == "/vpn/off" && method == Method.POST -> handleVpnOff()
@@ -519,6 +520,65 @@ p{color:#8888a0;font-size:16px;margin-bottom:30px}#qr{background:white;padding:2
             }
         } else {
             json(500, JSONObject().put("error", "Gemini API call failed"))
+        }
+    }
+
+    private fun handleSports(params: Map<String, String>): Response {
+        val league = params["league"] ?: "nba"
+        val sportPath = when (league.lowercase()) {
+            "nba" -> "basketball/nba"
+            "nhl" -> "hockey/nhl"
+            "mlb" -> "baseball/mlb"
+            "nfl" -> "football/nfl"
+            "mls" -> "soccer/usa.1"
+            "epl" -> "soccer/eng.1"
+            else -> "basketball/nba"
+        }
+
+        return try {
+            val url = java.net.URL("https://site.api.espn.com/apis/site/v2/sports/$sportPath/scoreboard")
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            val response = conn.inputStream.bufferedReader().readText()
+            conn.disconnect()
+
+            val data = JSONObject(response)
+            val events = data.optJSONArray("events") ?: JSONArray()
+            val games = JSONArray()
+
+            for (i in 0 until events.length()) {
+                val event = events.getJSONObject(i)
+                val comp = event.getJSONArray("competitions").getJSONObject(0)
+                val competitors = comp.getJSONArray("competitors")
+                val status = comp.getJSONObject("status").getJSONObject("type")
+
+                val home = competitors.getJSONObject(0)
+                val away = competitors.getJSONObject(1)
+
+                games.put(JSONObject().apply {
+                    put("home_team", home.getJSONObject("team").getString("displayName"))
+                    put("home_abbr", home.getJSONObject("team").getString("abbreviation"))
+                    put("home_score", home.optString("score", "0"))
+                    put("home_logo", home.getJSONObject("team").optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "")
+                    put("away_team", away.getJSONObject("team").getString("displayName"))
+                    put("away_abbr", away.getJSONObject("team").getString("abbreviation"))
+                    put("away_score", away.optString("score", "0"))
+                    put("away_logo", away.getJSONObject("team").optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "")
+                    put("status", status.getString("shortDetail"))
+                    put("state", status.getString("state")) // pre, in, post
+                    put("name", event.getString("shortName"))
+                    put("headline", comp.optJSONArray("headlines")?.optJSONObject(0)?.optString("shortLinkText", "") ?: "")
+                })
+            }
+
+            json(200, JSONObject().apply {
+                put("league", league.uppercase())
+                put("games", games)
+                put("count", games.length())
+            })
+        } catch (e: Exception) {
+            json(500, JSONObject().put("error", "Failed to fetch sports data: ${e.message}"))
         }
     }
 

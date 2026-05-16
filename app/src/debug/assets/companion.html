@@ -302,6 +302,64 @@ body {
 }
 .ai-typing { color: var(--text2); font-style: italic; font-size: 13px; padding: 8px 14px; }
 
+/* Sports Dashboard */
+.sports-leagues {
+  display: flex; gap: 6px; padding: 8px 16px; overflow-x: auto;
+  scrollbar-width: none;
+}
+.sports-leagues::-webkit-scrollbar { display: none; }
+.league-btn {
+  flex-shrink: 0; padding: 6px 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 20px; color: var(--text2); font-size: 13px; font-weight: 600;
+  cursor: pointer;
+}
+.league-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+.game-card {
+  margin: 8px 16px; padding: 14px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); cursor: pointer;
+  transition: all 0.15s;
+}
+.game-card:active { transform: scale(0.98); border-color: var(--accent); }
+.game-card.live { border-left: 3px solid var(--danger); }
+.game-card.final { opacity: 0.7; }
+
+.game-teams {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.game-team {
+  display: flex; align-items: center; gap: 8px; flex: 1;
+}
+.game-team.away { justify-content: flex-start; }
+.game-team.home { justify-content: flex-end; text-align: right; }
+.game-team-name { font-size: 14px; font-weight: 600; }
+.game-team-abbr { font-size: 11px; color: var(--text2); }
+.game-score {
+  font-size: 22px; font-weight: 800; min-width: 50px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.game-score.live-score { color: var(--success); }
+.game-vs { font-size: 12px; color: var(--text2); font-weight: 500; }
+
+.game-status {
+  text-align: center; margin-top: 8px; font-size: 11px; font-weight: 600;
+}
+.game-status.live { color: var(--danger); }
+.game-status.pre { color: var(--accent2); }
+.game-status.post { color: var(--text2); }
+
+.game-actions {
+  display: flex; gap: 6px; margin-top: 10px; justify-content: center;
+}
+.game-watch-btn {
+  padding: 6px 14px; background: var(--accent); color: white;
+  border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.game-watch-btn:active { background: var(--accent2); }
+.game-watch-btn.secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+
 /* Empty state */
 .empty {
   text-align: center;
@@ -337,7 +395,7 @@ body {
 <div class="tabs" id="tabs">
   <div class="tab active" data-tab="favorites">Favorites</div>
   <div class="tab" data-tab="all">All Channels</div>
-  <div class="tab" data-tab="sports">Sports</div>
+  <div class="tab" data-tab="sports_live">Live Sports</div>
   <div class="tab" data-tab="news">News</div>
   <div class="tab" data-tab="4k">4K</div>
   <div class="tab" data-tab="canada">Canada</div>
@@ -466,16 +524,9 @@ async function loadTab(tab) {
         channels = data.channels;
         break;
       }
-      case 'sports': {
-        const data = await api('/channels?search=sport&limit=80');
-        const data2 = await api('/channels?search=ESPN&limit=30');
-        const data3 = await api('/channels?search=NBA&limit=30');
-        const data4 = await api('/channels?search=TSN&limit=30');
-        const seen = new Set();
-        channels = [...data.channels, ...data2.channels, ...data3.channels, ...data4.channels]
-          .filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; })
-          .filter(c => !c.name.includes('NO EVENT'));
-        break;
+      case 'sports_live': {
+        await showSportsLive();
+        return;
       }
       case 'news': {
         const data = await api('/channels?search=NEWS&limit=50');
@@ -865,6 +916,118 @@ async function sendAiMessage() {
   }
   showAiChat();
 }
+
+// === Sports Dashboard ===
+let currentLeague = 'nba';
+
+async function showSportsLive() {
+  const list = document.getElementById('channelList');
+  list.innerHTML = `
+    <div class="sports-leagues">
+      ${['NBA','NHL','MLB','NFL','MLS','EPL'].map(l =>
+        `<div class="league-btn ${l.toLowerCase()===currentLeague?'active':''}"
+              onclick="currentLeague='${l.toLowerCase()}'; showSportsLive()">${l}</div>`
+      ).join('')}
+    </div>
+    <div class="loading"><div class="spinner"></div>Loading ${currentLeague.toUpperCase()} scores...</div>`;
+
+  try {
+    const data = await api(`/sports?league=${currentLeague}`);
+    const games = data.games || [];
+
+    if (games.length === 0) {
+      list.innerHTML = list.innerHTML.split('<div class="loading">')[0] +
+        `<div class="empty"><div class="emoji">&#x1F3C0;</div>No ${data.league} games today</div>`;
+      return;
+    }
+
+    const leagueBar = list.querySelector('.sports-leagues').outerHTML;
+    list.innerHTML = leagueBar + games.map(g => {
+      const isLive = g.state === 'in';
+      const isFinal = g.state === 'post';
+      const isPre = g.state === 'pre';
+
+      return `
+      <div class="game-card ${isLive?'live':''} ${isFinal?'final':''}">
+        <div class="game-teams">
+          <div class="game-team away">
+            <div>
+              <div class="game-team-name">${esc(g.away_team)}</div>
+              <div class="game-team-abbr">${esc(g.away_abbr)}</div>
+            </div>
+          </div>
+          ${isPre ?
+            `<div class="game-vs">VS</div>` :
+            `<div class="game-score ${isLive?'live-score':''}">${g.away_score} - ${g.home_score}</div>`
+          }
+          <div class="game-team home">
+            <div>
+              <div class="game-team-name">${esc(g.home_team)}</div>
+              <div class="game-team-abbr">${esc(g.home_abbr)}</div>
+            </div>
+          </div>
+        </div>
+        <div class="game-status ${g.state}">${esc(g.status)}</div>
+        ${!isFinal ? `
+        <div class="game-actions">
+          <button class="game-watch-btn" onclick="findGameStream('${esc(g.away_abbr)}','${esc(g.home_abbr)}','${esc(g.away_team)}','${esc(g.home_team)}')">
+            &#x25B6; Watch
+          </button>
+          <button class="game-watch-btn secondary" onclick="findGameStream('${esc(g.away_team)}','${esc(g.home_team)}','${esc(g.away_team)}','${esc(g.home_team)}')">
+            Find Best Stream
+          </button>
+        </div>` : ''}
+      </div>`;
+    }).join('');
+
+    // Re-attach league buttons
+    list.querySelectorAll('.league-btn').forEach(btn => {
+      btn.onclick = () => {
+        currentLeague = btn.textContent.toLowerCase();
+        showSportsLive();
+      };
+    });
+  } catch (e) {
+    list.innerHTML = list.innerHTML.split('<div class="loading">')[0] +
+      `<div class="empty"><div class="emoji">&#x26A0;</div>Failed to load scores<br><small>${e.message}</small></div>`;
+  }
+}
+
+async function findGameStream(team1, team2, fullName1, fullName2) {
+  // Search for PPV game channels with team names
+  const searches = [team1, team2, fullName1.split(' ').pop(), fullName2.split(' ').pop()];
+  let bestChannel = null;
+  let bestScore = -1;
+
+  for (const q of searches) {
+    try {
+      const data = await api(`/channels?search=${encodeURIComponent(q)}&limit=20`);
+      for (const ch of data.channels) {
+        const n = ch.name.toUpperCase();
+        let score = 0;
+        if (n.includes('NEXT')) score += 100;
+        if (n.includes('VS') || n.includes('@')) score += 80;
+        if (n.includes(team1.toUpperCase()) || n.includes(team2.toUpperCase())) score += 50;
+        if (n.includes('HD') || n.includes('ᴴᴰ')) score += 30;
+        if (n.includes('4K') || n.includes('UHD')) score += 40;
+        if (n.includes('1080')) score += 35;
+        if (n.includes('NO EVENT') || n.includes('SD') || n.startsWith('-')) score -= 200;
+        if (score > bestScore) { bestScore = score; bestChannel = ch; }
+      }
+    } catch {}
+  }
+
+  if (bestChannel && bestScore > 0) {
+    playChannel(bestChannel.id, bestChannel.name);
+  } else {
+    alert(`No stream found for ${fullName1} vs ${fullName2}. Try searching manually.`);
+  }
+}
+
+// Auto-refresh live scores every 30 seconds
+setInterval(() => {
+  if (currentTab === 'sports_live') showSportsLive();
+}, 30000);
 
 // === Zap Mode (instant channel switch on tap) ===
 let zapMode = false;
