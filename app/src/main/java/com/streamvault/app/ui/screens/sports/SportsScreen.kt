@@ -1,6 +1,7 @@
 package com.streamvault.app.ui.screens.sports
 
 import androidx.compose.foundation.*
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -341,7 +342,7 @@ private fun StandingsView(uiState: SportsUiState) {
             // Table header
             item(key = "header_${conf.name}") {
                 Row(
-                    Modifier.fillMaxWidth()
+                    Modifier.fillMaxWidth().focusable()
                         .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
                         .padding(vertical = 8.dp, horizontal = 8.dp)
                 ) {
@@ -362,44 +363,50 @@ private fun StandingsView(uiState: SportsUiState) {
                 }
             }
 
-            // Team rows
+            // Team rows — each wrapped in Surface for d-pad focus
             items(conf.teams.size, key = { "team_${conf.name}_$it" }) { index ->
                 val team = conf.teams[index]
                 val isLast = index == conf.teams.size - 1
                 val bgShape = if (isLast) RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp) else RoundedCornerShape(0.dp)
                 val isPlayoffTeam = (team.seed.toIntOrNull() ?: 99) <= 8
 
-                Row(
-                    Modifier.fillMaxWidth()
-                        .background(
-                            if (index % 2 == 0) Color.White.copy(alpha = 0.04f) else Color.White.copy(alpha = 0.02f),
-                            bgShape
-                        )
-                        .padding(vertical = 6.dp, horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Surface(
+                    onClick = { /* Could show team details in future */ },
+                    shape = ClickableSurfaceDefaults.shape(bgShape),
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = if (index % 2 == 0) Color.White.copy(alpha = 0.04f) else Color.White.copy(alpha = 0.02f),
+                        focusedContainerColor = Color.White.copy(alpha = 0.12f)
+                    ),
+                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        team.seed.ifBlank { "${index + 1}" }, Modifier.width(30.dp),
-                        fontSize = 13.sp, textAlign = TextAlign.Center,
-                        fontWeight = if (isPlayoffTeam) FontWeight.Bold else FontWeight.Normal,
-                        color = if (isPlayoffTeam) Color(0xFF6C5CE7) else Color.White.copy(alpha = 0.5f)
-                    )
-                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                        if (team.logo.isNotBlank()) {
-                            AsyncImage(model = team.logo, contentDescription = null,
-                                modifier = Modifier.size(22.dp).clip(CircleShape))
-                            Spacer(Modifier.width(8.dp))
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            team.seed.ifBlank { "${index + 1}" }, Modifier.width(30.dp),
+                            fontSize = 13.sp, textAlign = TextAlign.Center,
+                            fontWeight = if (isPlayoffTeam) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isPlayoffTeam) Color(0xFF6C5CE7) else Color.White.copy(alpha = 0.5f)
+                        )
+                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            if (team.logo.isNotBlank()) {
+                                AsyncImage(model = team.logo, contentDescription = null,
+                                    modifier = Modifier.size(22.dp).clip(CircleShape))
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text(team.abbr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
                         }
-                        Text(team.abbr, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                        Text(team.wins, Modifier.width(36.dp), fontSize = 13.sp, textAlign = TextAlign.Center, color = Color.White)
+                        Text(team.losses, Modifier.width(36.dp), fontSize = 13.sp, textAlign = TextAlign.Center, color = Color.White)
+                        Text(team.pct, Modifier.width(48.dp), fontSize = 13.sp, textAlign = TextAlign.Center, color = Color.White)
+                        Text(team.streak, Modifier.width(44.dp), fontSize = 13.sp, textAlign = TextAlign.Center,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (team.streak.startsWith("W")) Color(0xFF00B894) else Color(0xFFE74C3C))
+                        Text(team.last10, Modifier.width(44.dp), fontSize = 12.sp, textAlign = TextAlign.Center,
+                            color = Color.White.copy(alpha = 0.7f))
                     }
-                    Text(team.wins, Modifier.width(36.dp), fontSize = 13.sp, textAlign = TextAlign.Center, color = Color.White)
-                    Text(team.losses, Modifier.width(36.dp), fontSize = 13.sp, textAlign = TextAlign.Center, color = Color.White)
-                    Text(team.pct, Modifier.width(48.dp), fontSize = 13.sp, textAlign = TextAlign.Center, color = Color.White)
-                    Text(team.streak, Modifier.width(44.dp), fontSize = 13.sp, textAlign = TextAlign.Center,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (team.streak.startsWith("W")) Color(0xFF00B894) else Color(0xFFE74C3C))
-                    Text(team.last10, Modifier.width(44.dp), fontSize = 12.sp, textAlign = TextAlign.Center,
-                        color = Color.White.copy(alpha = 0.7f))
                 }
             }
         }
