@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -26,12 +27,10 @@ import coil3.compose.AsyncImage
 import com.streamvault.app.R
 import com.streamvault.app.ui.components.shell.AppNavigationChrome
 import com.streamvault.app.ui.components.shell.AppScreenScaffold
-
-private val Purple = Color(0xFF6C5CE7)
-private val Green = Color(0xFF00B894)
-private val Red = Color(0xFFE74C3C)
-private val LightPurple = Color(0xFFA29BFE)
-private val DimText = Color.White.copy(alpha = 0.5f)
+import android.content.Intent
+import android.net.Uri
+import com.streamvault.app.ui.design.AppColors
+import com.streamvault.app.ui.design.FocusSpec
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -42,6 +41,7 @@ fun SportsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
 
     AppScreenScaffold(
         currentRoute = currentRoute,
@@ -64,8 +64,9 @@ fun SportsScreen(
                     Pill(
                         text = league,
                         selected = league.lowercase() == uiState.league,
-                        selectedColor = Purple,
-                        onClick = { viewModel.selectLeague(league.lowercase()) }
+                        selectedColor = AppColors.Brand,
+                        onClick = { viewModel.selectLeague(league.lowercase()) },
+                        iconUrl = "https://a.espncdn.com/i/teamlogos/leagues/500/${league.lowercase()}.png"
                     )
                 }
                 item { Spacer(Modifier.width(4.dp)) }
@@ -74,7 +75,7 @@ fun SportsScreen(
                     Pill(
                         text = label,
                         selected = view == uiState.view,
-                        selectedColor = LightPurple,
+                        selectedColor = AppColors.Brand,
                         onClick = { viewModel.selectView(view) }
                     )
                 }
@@ -84,11 +85,11 @@ fun SportsScreen(
             when {
                 uiState.isLoading -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Loading...", color = DimText, fontSize = 16.sp)
+                        Text("Loading...", color = AppColors.TextTertiary, fontSize = 18.sp)
                     }
                 }
                 uiState.boxScore != null -> BoxScoreView(uiState.boxScore!!, onBack = { viewModel.clearBoxScore() })
-                uiState.view == "today" -> TodayView(uiState, viewModel, uriHandler)
+                uiState.view == "today" -> TodayView(uiState, viewModel, uriHandler, context)
                 uiState.view == "standings" -> StandingsView(uiState)
                 uiState.view == "playoffs" -> PlayoffsView(uiState, viewModel)
             }
@@ -100,21 +101,24 @@ fun SportsScreen(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun Pill(text: String, selected: Boolean, selectedColor: Color, onClick: () -> Unit) {
+private fun Pill(text: String, selected: Boolean, selectedColor: Color, onClick: () -> Unit, iconUrl: String? = null) {
     Surface(
         onClick = onClick,
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(20.dp)),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(999.dp)),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (selected) selectedColor else MaterialTheme.colorScheme.surfaceVariant,
-            contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-            focusedContainerColor = if (selected) selectedColor else Color.White.copy(alpha = 0.15f)
+            containerColor = if (selected) selectedColor else AppColors.SurfaceElevated,
+            contentColor = if (selected) AppColors.TextPrimary else AppColors.TextSecondary,
+            focusedContainerColor = if (selected) selectedColor else AppColors.SurfaceEmphasis
         ),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = FocusSpec.FocusedScale),
         modifier = Modifier.height(36.dp)
     ) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text, modifier = Modifier.padding(horizontal = 18.dp),
-                fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+            if (iconUrl != null) {
+                AsyncImage(model = iconUrl, contentDescription = null, modifier = Modifier.size(18.dp).clip(CircleShape))
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -123,50 +127,50 @@ private fun Pill(text: String, selected: Boolean, selectedColor: Color, onClick:
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TodayView(uiState: SportsUiState, viewModel: SportsViewModel, uriHandler: androidx.compose.ui.platform.UriHandler) {
+private fun TodayView(uiState: SportsUiState, viewModel: SportsViewModel, uriHandler: androidx.compose.ui.platform.UriHandler, context: android.content.Context) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         val live = uiState.games.filter { it.state == "in" }
         val pre = uiState.games.filter { it.state == "pre" }
         val post = uiState.games.filter { it.state == "post" }
 
-        if (live.isNotEmpty()) { item { SectionLabel("LIVE", Red) } }
-        items(live, key = { "l_${it.eventId}" }) { game -> GameCard(game, viewModel, uriHandler) }
-        if (pre.isNotEmpty()) { item { SectionLabel("UPCOMING", LightPurple) } }
-        items(pre, key = { "p_${it.eventId}" }) { game -> GameCard(game, viewModel, uriHandler) }
-        if (post.isNotEmpty()) { item { SectionLabel("FINAL", DimText) } }
-        items(post, key = { "f_${it.eventId}" }) { game -> GameCard(game, viewModel, uriHandler) }
+        if (live.isNotEmpty()) { item { SectionLabel("LIVE", AppColors.Live) } }
+        items(live, key = { "l_${it.eventId}" }) { game -> GameCard(game, viewModel, context) }
+        if (pre.isNotEmpty()) { item { SectionLabel("UPCOMING", AppColors.Brand) } }
+        items(pre, key = { "p_${it.eventId}" }) { game -> GameCard(game, viewModel, context) }
+        if (post.isNotEmpty()) { item { SectionLabel("FINAL", AppColors.TextTertiary) } }
+        items(post, key = { "f_${it.eventId}" }) { game -> GameCard(game, viewModel, context) }
 
         if (uiState.games.isEmpty()) {
             item { Box(Modifier.fillMaxWidth().padding(60.dp), contentAlignment = Alignment.Center) {
-                Text("No games today", color = DimText, fontSize = 16.sp)
+                Text("No games today", color = AppColors.TextTertiary, fontSize = 18.sp)
             }}
         }
 
         // News
         if (uiState.news.isNotEmpty()) {
-            item { SectionLabel("HEADLINES", Purple) }
+            item { SectionLabel("HEADLINES", AppColors.Brand) }
             items(uiState.news, key = { it.headline.hashCode() }) { article ->
                 Surface(
                     onClick = { if (article.link.isNotBlank()) uriHandler.openUri(article.link) },
-                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
                     colors = ClickableSurfaceDefaults.colors(
-                        containerColor = Color.White.copy(alpha = 0.04f),
-                        focusedContainerColor = Color.White.copy(alpha = 0.1f)),
-                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+                        containerColor = AppColors.Surface,
+                        focusedContainerColor = AppColors.SurfaceEmphasis),
+                    scale = ClickableSurfaceDefaults.scale(focusedScale = FocusSpec.FocusedScale),
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
                 ) {
-                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (article.imageUrl.isNotBlank()) {
                             AsyncImage(model = article.imageUrl, contentDescription = null,
                                 modifier = Modifier.size(56.dp, 38.dp).clip(RoundedCornerShape(6.dp)))
                         }
                         Column(Modifier.weight(1f)) {
-                            Text(article.headline, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                                maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.White)
+                            Text(article.headline, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis, color = AppColors.TextPrimary)
                         }
                     }
                 }
@@ -178,14 +182,14 @@ private fun TodayView(uiState: SportsUiState, viewModel: SportsViewModel, uriHan
 @Composable
 private fun SectionLabel(text: String, color: Color) {
     Text(text, modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 2.dp),
-        fontSize = 12.sp, fontWeight = FontWeight.Bold, color = color, letterSpacing = 1.sp)
+        fontSize = 13.sp, fontWeight = FontWeight.Bold, color = color, letterSpacing = 1.sp)
 }
 
 // ── Game Card (single focusable, click=watch/boxscore, long-press=options) ──
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun GameCard(game: SportsGame, viewModel: SportsViewModel, uriHandler: androidx.compose.ui.platform.UriHandler) {
+private fun GameCard(game: SportsGame, viewModel: SportsViewModel, context: android.content.Context) {
     val isLive = game.state == "in"
     val isFinal = game.state == "post"
     var showMenu by remember { mutableStateOf(false) }
@@ -207,17 +211,17 @@ private fun GameCard(game: SportsGame, viewModel: SportsViewModel, uriHandler: a
         onLongClick = { showMenu = !showMenu },
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.White.copy(alpha = 0.05f),
-            focusedContainerColor = Color.White.copy(alpha = 0.1f)
+            containerColor = AppColors.SurfaceElevated,
+            focusedContainerColor = AppColors.SurfaceEmphasis
         ),
         border = ClickableSurfaceDefaults.border(
-            border = Border(BorderStroke(if (isLive) 2.dp else 0.dp, if (isLive) Red else Color.Transparent)),
-            focusedBorder = Border(BorderStroke(2.dp, Purple))
+            border = Border(BorderStroke(if (isLive) 2.dp else 0.dp, if (isLive) AppColors.Live else Color.Transparent)),
+            focusedBorder = Border(BorderStroke(FocusSpec.BorderWidth, AppColors.Brand))
         ),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = FocusSpec.FocusedScale),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
     ) {
-        Column(Modifier.padding(12.dp)) {
+        Column(Modifier.padding(14.dp)) {
             // Teams + Score
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 // Away
@@ -226,26 +230,26 @@ private fun GameCard(game: SportsGame, viewModel: SportsViewModel, uriHandler: a
                     Spacer(Modifier.width(8.dp))
                 }
                 Column(Modifier.weight(1f)) {
-                    Text(game.awayTeam, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White,
+                    Text(game.awayTeam, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (game.awayRecord.isNotBlank()) Text(game.awayRecord, fontSize = 10.sp, color = DimText)
+                    if (game.awayRecord.isNotBlank()) Text(game.awayRecord, fontSize = 11.sp, color = AppColors.TextTertiary)
                 }
 
                 // Score or VS
                 if (game.state != "pre") {
                     Text("${game.awayScore} - ${game.homeScore}",
-                        fontSize = 20.sp, fontWeight = FontWeight.ExtraBold,
-                        color = if (isLive) Green else Color.White,
+                        fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
+                        color = if (isLive) AppColors.Success else AppColors.TextPrimary,
                         modifier = Modifier.padding(horizontal = 10.dp))
                 } else {
-                    Text("VS", fontSize = 13.sp, color = DimText, modifier = Modifier.padding(horizontal = 10.dp))
+                    Text("VS", fontSize = 14.sp, color = AppColors.TextTertiary, modifier = Modifier.padding(horizontal = 10.dp))
                 }
 
                 // Home
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                    Text(game.homeTeam, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White,
+                    Text(game.homeTeam, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End)
-                    if (game.homeRecord.isNotBlank()) Text(game.homeRecord, fontSize = 10.sp, color = DimText)
+                    if (game.homeRecord.isNotBlank()) Text(game.homeRecord, fontSize = 11.sp, color = AppColors.TextTertiary)
                 }
                 if (game.homeLogo.isNotBlank()) {
                     Spacer(Modifier.width(8.dp))
@@ -255,29 +259,35 @@ private fun GameCard(game: SportsGame, viewModel: SportsViewModel, uriHandler: a
 
             // Status + Series
             Text(game.status, Modifier.fillMaxWidth().padding(top = 4.dp),
-                textAlign = TextAlign.Center, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                color = when (game.state) { "in" -> Red; "pre" -> LightPurple; else -> DimText })
+                textAlign = TextAlign.Center, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                color = when (game.state) { "in" -> AppColors.Live; "pre" -> AppColors.Brand; else -> AppColors.TextTertiary })
             if (game.seriesNote.isNotBlank()) {
                 Text(game.seriesNote, Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
-                    fontSize = 10.sp, color = LightPurple)
+                    fontSize = 11.sp, color = AppColors.Brand)
             }
 
             // Hint
             Text(
                 if (isFinal) "Press for box score · Hold for highlights" else "Press to watch · Hold for options",
                 Modifier.fillMaxWidth().padding(top = 4.dp), textAlign = TextAlign.Center,
-                fontSize = 9.sp, color = Color.White.copy(alpha = 0.3f)
+                fontSize = 11.sp, color = AppColors.TextDisabled
             )
 
             // Long-press menu
             if (showMenu) {
                 Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.Center) {
-                    Pill("Watch", false, Purple) { viewModel.findAndWatchGame(game); showMenu = false }
+                    Pill("Watch", false, AppColors.Brand, onClick = {
+                        viewModel.findAndWatchGame(game)
+                        showMenu = false
+                    })
                     Spacer(Modifier.width(6.dp))
-                    Pill("Box Score", false, MaterialTheme.colorScheme.surfaceVariant) { viewModel.loadBoxScore(game.eventId); showMenu = false }
+                    Pill("Box Score", false, AppColors.SurfaceAccent, onClick = { viewModel.loadBoxScore(game.eventId); showMenu = false })
                     if (isFinal) {
                         Spacer(Modifier.width(6.dp))
-                        Pill("Highlights", false, Red) { uriHandler.openUri(ytUrl); showMenu = false }
+                        Pill("Highlights", false, AppColors.Live, onClick = {
+                            try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ytUrl))) } catch (_: Exception) {}
+                            showMenu = false
+                        })
                     }
                 }
             }
@@ -292,7 +302,7 @@ private fun GameCard(game: SportsGame, viewModel: SportsViewModel, uriHandler: a
 private fun StandingsView(uiState: SportsUiState) {
     if (uiState.conferences.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No standings data", color = DimText)
+            Text("No standings data", color = AppColors.TextTertiary)
         }
         return
     }
@@ -313,20 +323,20 @@ private fun StandingsView(uiState: SportsUiState) {
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun ConferenceColumn(conf: StandingsConference, modifier: Modifier) {
-    LazyColumn(modifier = modifier, verticalArrangement = Arrangement.spacedBy(1.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
         // Header
         item(key = "hdr_${conf.name}") {
             Text(conf.name, modifier = Modifier.padding(bottom = 6.dp),
-                fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
         }
         // Column labels
         item(key = "cols_${conf.name}") {
-            Row(Modifier.fillMaxWidth().background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp)).padding(vertical = 6.dp, horizontal = 6.dp)) {
-                Text("#", Modifier.width(24.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = DimText, textAlign = TextAlign.Center)
-                Text("Team", Modifier.weight(1f), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = DimText)
-                Text("W", Modifier.width(28.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = DimText, textAlign = TextAlign.Center)
-                Text("L", Modifier.width(28.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = DimText, textAlign = TextAlign.Center)
-                Text("STR", Modifier.width(32.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = DimText, textAlign = TextAlign.Center)
+            Row(Modifier.fillMaxWidth().background(AppColors.SurfaceElevated, RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp)).padding(vertical = 6.dp, horizontal = 6.dp)) {
+                Text("#", Modifier.width(24.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.TextTertiary, textAlign = TextAlign.Center)
+                Text("Team", Modifier.weight(1f), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.TextTertiary)
+                Text("W", Modifier.width(28.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.TextTertiary, textAlign = TextAlign.Center)
+                Text("L", Modifier.width(28.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.TextTertiary, textAlign = TextAlign.Center)
+                Text("STR", Modifier.width(32.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.TextTertiary, textAlign = TextAlign.Center)
             }
         }
         // Team rows
@@ -338,185 +348,47 @@ private fun ConferenceColumn(conf: StandingsConference, modifier: Modifier) {
                 onClick = {},
                 shape = ClickableSurfaceDefaults.shape(if (isLast) RoundedCornerShape(bottomStart = 6.dp, bottomEnd = 6.dp) else RoundedCornerShape(0.dp)),
                 colors = ClickableSurfaceDefaults.colors(
-                    containerColor = if (idx % 2 == 0) Color.White.copy(alpha = 0.03f) else Color.Transparent,
-                    focusedContainerColor = Color.White.copy(alpha = 0.12f)
+                    containerColor = if (idx % 2 == 0) AppColors.Surface else Color.Transparent,
+                    focusedContainerColor = AppColors.SurfaceEmphasis
                 ),
-                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+                scale = ClickableSurfaceDefaults.scale(focusedScale = FocusSpec.FocusedScale),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(Modifier.padding(vertical = 5.dp, horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(team.seed.ifBlank { "${idx + 1}" }, Modifier.width(24.dp), fontSize = 12.sp, textAlign = TextAlign.Center,
                         fontWeight = if (isPlayoff) FontWeight.Bold else FontWeight.Normal,
-                        color = if (isPlayoff) Purple else DimText)
+                        color = if (isPlayoff) AppColors.Brand else AppColors.TextTertiary)
                     if (team.logo.isNotBlank()) {
                         AsyncImage(model = team.logo, contentDescription = null, modifier = Modifier.size(18.dp).clip(CircleShape))
                         Spacer(Modifier.width(4.dp))
                     }
-                    Text(team.abbr, Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                    Text(team.wins, Modifier.width(28.dp), fontSize = 12.sp, textAlign = TextAlign.Center, color = Color.White)
-                    Text(team.losses, Modifier.width(28.dp), fontSize = 12.sp, textAlign = TextAlign.Center, color = Color.White)
+                    Text(team.abbr, Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary)
+                    Text(team.wins, Modifier.width(28.dp), fontSize = 12.sp, textAlign = TextAlign.Center, color = AppColors.TextPrimary)
+                    Text(team.losses, Modifier.width(28.dp), fontSize = 12.sp, textAlign = TextAlign.Center, color = AppColors.TextPrimary)
                     Text(team.streak, Modifier.width(32.dp), fontSize = 11.sp, textAlign = TextAlign.Center,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (team.streak.startsWith("W")) Green else Red)
+                        color = if (team.streak.startsWith("W")) AppColors.Success else AppColors.Live)
                 }
             }
         }
     }
 }
 
-// ── Playoffs Bracket (horizontal tree: West ← Championship → East) ─────────
+// ── Playoffs View (delegates to PlayoffBracketView) ─────────────────────
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun PlayoffsView(uiState: SportsUiState, viewModel: SportsViewModel) {
-    if (uiState.playoffBracket.isEmpty() && !uiState.isLoading) {
+    val bracket = uiState.bracketData
+
+    if (bracket == null && uiState.playoffBracket.isEmpty() && !uiState.isLoading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("${uiState.league.uppercase()} playoff data not available", color = DimText, fontSize = 16.sp)
+            Text("${uiState.league.uppercase()} playoff data not available", color = AppColors.TextTertiary, fontSize = 18.sp)
         }
         return
     }
 
-    // Split by conference
-    val west = remember(uiState.playoffBracket) { uiState.playoffBracket.filter { it.roundLabel.contains("West", true) } }
-    val east = remember(uiState.playoffBracket) { uiState.playoffBracket.filter { it.roundLabel.contains("East", true) } }
-    val westR1 = west.filter { it.roundLabel.contains("1st", true) || it.roundLabel.contains("First", true) }
-    val westR2 = west.filter { it.roundLabel.contains("Semi", true) }
-    val westFinal = west.filter { it.roundLabel.contains("Final", true) && !it.roundLabel.contains("Semi", true) }
-    val eastR1 = east.filter { it.roundLabel.contains("1st", true) || it.roundLabel.contains("First", true) }
-    val eastR2 = east.filter { it.roundLabel.contains("Semi", true) }
-    val eastFinal = east.filter { it.roundLabel.contains("Final", true) && !it.roundLabel.contains("Semi", true) }
-    val finals = uiState.playoffBracket.filter { !it.roundLabel.contains("West", true) && !it.roundLabel.contains("East", true) && (it.roundLabel.contains("Final", true) || it.roundLabel.contains("Champion", true)) }
-
-    // Horizontal scrollable bracket
-    Row(
-        modifier = Modifier.fillMaxSize().horizontalScroll(rememberScrollState()).padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Spacer(Modifier.width(12.dp))
-
-        // West 1st Round
-        BracketRound("WEST 1ST ROUND", westR1)
-        Spacer(Modifier.width(12.dp))
-
-        // West Semis
-        BracketRound("WEST SEMIS", westR2)
-        Spacer(Modifier.width(12.dp))
-
-        // West Finals
-        BracketRound("WEST FINALS", westFinal)
-        Spacer(Modifier.width(16.dp))
-
-        // Championship
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("CHAMPIONSHIP", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFD700), letterSpacing = 1.sp)
-            Spacer(Modifier.height(8.dp))
-            if (finals.isNotEmpty()) {
-                BracketCard(finals.first())
-            } else {
-                Box(Modifier.width(220.dp).background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp)).padding(16.dp),
-                    contentAlignment = Alignment.Center) {
-                    Text("TBD", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = DimText)
-                }
-            }
-        }
-
-        Spacer(Modifier.width(16.dp))
-
-        // East Finals
-        BracketRound("EAST FINALS", eastFinal)
-        Spacer(Modifier.width(12.dp))
-
-        // East Semis
-        BracketRound("EAST SEMIS", eastR2)
-        Spacer(Modifier.width(12.dp))
-
-        // East 1st Round
-        BracketRound("EAST 1ST ROUND", eastR1)
-        Spacer(Modifier.width(12.dp))
-    }
-}
-
-@Composable
-private fun BracketRound(title: String, seriesList: List<PlayoffSeries>) {
-    Column(
-        modifier = Modifier.width(220.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(title, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = LightPurple, letterSpacing = 1.sp)
-        if (seriesList.isEmpty()) {
-            Box(Modifier.fillMaxWidth().background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(8.dp)).padding(12.dp),
-                contentAlignment = Alignment.Center) {
-                Text("TBD", fontSize = 13.sp, color = DimText)
-            }
-        } else {
-            for (series in seriesList) {
-                BracketCard(series)
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun BracketCard(series: PlayoffSeries) {
-    val winner1 = series.isComplete && series.team1Wins > series.team2Wins
-    val winner2 = series.isComplete && series.team2Wins > series.team1Wins
-
-    Surface(
-        onClick = { /* Could expand for game details */ },
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-        colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.White.copy(alpha = 0.06f),
-            focusedContainerColor = Color.White.copy(alpha = 0.12f)),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
-        border = ClickableSurfaceDefaults.border(
-            border = Border(BorderStroke(if (!series.isComplete) 1.dp else 0.dp,
-                if (!series.isComplete) LightPurple.copy(alpha = 0.4f) else Color.Transparent)),
-            focusedBorder = Border(BorderStroke(2.dp, Purple))),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(Modifier.padding(8.dp)) {
-            // Series note header
-            Text(series.seriesNote.ifBlank { "Best of 7" }, fontSize = 9.sp, fontWeight = FontWeight.SemiBold,
-                color = if (series.isComplete) Green else LightPurple)
-
-            Spacer(Modifier.height(4.dp))
-
-            // Team 1
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                if (series.team1Logo.isNotBlank()) {
-                    AsyncImage(model = series.team1Logo, contentDescription = null,
-                        modifier = Modifier.size(18.dp).clip(CircleShape))
-                    Spacer(Modifier.width(4.dp))
-                }
-                Text(series.team1Name, Modifier.weight(1f), fontSize = 12.sp,
-                    fontWeight = if (winner1) FontWeight.Bold else FontWeight.Normal,
-                    color = if (winner1) Color.White else Color.White.copy(alpha = 0.7f),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${series.team1Wins}", fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                    color = if (winner1) Color.White else Color.White.copy(alpha = 0.6f))
-                if (winner1) Text(" ◄", fontSize = 10.sp, color = Green)
-            }
-
-            Spacer(Modifier.height(2.dp))
-
-            // Team 2
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                if (series.team2Logo.isNotBlank()) {
-                    AsyncImage(model = series.team2Logo, contentDescription = null,
-                        modifier = Modifier.size(18.dp).clip(CircleShape))
-                    Spacer(Modifier.width(4.dp))
-                }
-                Text(series.team2Name, Modifier.weight(1f), fontSize = 12.sp,
-                    fontWeight = if (winner2) FontWeight.Bold else FontWeight.Normal,
-                    color = if (winner2) Color.White else Color.White.copy(alpha = 0.7f),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${series.team2Wins}", fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                    color = if (winner2) Color.White else Color.White.copy(alpha = 0.6f))
-                if (winner2) Text(" ◄", fontSize = 10.sp, color = Green)
-            }
-        }
+    if (bracket != null) {
+        PlayoffBracketView(bracket)
     }
 }
 
@@ -525,24 +397,38 @@ private fun BracketCard(series: PlayoffSeries) {
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun BoxScoreView(boxScore: BoxScoreData, onBack: () -> Unit) {
+    // Show key stat columns: PTS, REB, AST, FG, 3PT, +/-
+    val showCols = listOf("PTS", "REB", "AST", "FG", "3PT", "+/-")
+    val colIndices = showCols.mapNotNull { col -> boxScore.statLabels.indexOf(col).takeIf { it >= 0 } }
+
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Header with back + score
+        // Header with back + score + team logos
         item {
             Surface(
                 onClick = onBack,
-                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
                 colors = ClickableSurfaceDefaults.colors(
-                    containerColor = Color.White.copy(alpha = 0.05f),
-                    focusedContainerColor = Color.White.copy(alpha = 0.1f)),
-                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+                    containerColor = AppColors.SurfaceElevated,
+                    focusedContainerColor = AppColors.SurfaceEmphasis),
+                scale = ClickableSurfaceDefaults.scale(focusedScale = FocusSpec.FocusedScale),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("< Back to Scores", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Purple)
-                    Spacer(Modifier.height(6.dp))
-                    Text("${boxScore.awayAbbr}  ${boxScore.awayTotal}  —  ${boxScore.homeTotal}  ${boxScore.homeAbbr}",
-                        fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White,
-                        modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                Column(Modifier.padding(14.dp)) {
+                    Text("< Back to Scores", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AppColors.Brand)
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                        if (boxScore.awayLogo.isNotBlank()) {
+                            AsyncImage(model = boxScore.awayLogo, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape))
+                            Spacer(Modifier.width(10.dp))
+                        }
+                        Text("${boxScore.awayAbbr}  ${boxScore.awayTotal}", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = AppColors.TextPrimary)
+                        Text("  —  ", fontSize = 20.sp, color = AppColors.TextTertiary)
+                        Text("${boxScore.homeTotal}  ${boxScore.homeAbbr}", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = AppColors.TextPrimary)
+                        if (boxScore.homeLogo.isNotBlank()) {
+                            Spacer(Modifier.width(10.dp))
+                            AsyncImage(model = boxScore.homeLogo, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape))
+                        }
+                    }
                 }
             }
         }
@@ -550,45 +436,170 @@ private fun BoxScoreView(boxScore: BoxScoreData, onBack: () -> Unit) {
         // Quarter scores
         if (boxScore.homeQuarters.isNotEmpty()) {
             item {
-                Column(Modifier.fillMaxWidth().background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp)).padding(10.dp)) {
-                    Row(Modifier.fillMaxWidth()) {
-                        Text("", Modifier.weight(1f))
-                        for (q in boxScore.homeQuarters.indices) {
-                            Text(if (q < 4) "Q${q+1}" else "OT${q-3}", Modifier.width(32.dp), textAlign = TextAlign.Center,
-                                fontSize = 11.sp, fontWeight = FontWeight.Bold, color = DimText)
+                Surface(
+                    onClick = {},
+                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+                    colors = ClickableSurfaceDefaults.colors(containerColor = AppColors.SurfaceElevated, focusedContainerColor = AppColors.SurfaceEmphasis),
+                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Row(Modifier.fillMaxWidth()) {
+                            Text("", Modifier.weight(1f))
+                            for (q in boxScore.homeQuarters.indices) {
+                                Text(if (q < 4) "Q${q+1}" else "OT${q-3}", Modifier.width(32.dp), textAlign = TextAlign.Center,
+                                    fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AppColors.TextTertiary)
+                            }
+                            Text("T", Modifier.width(36.dp), textAlign = TextAlign.Center, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
                         }
-                        Text("T", Modifier.width(36.dp), textAlign = TextAlign.Center, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    }
-                    for ((abbr, quarters, total) in listOf(
-                        Triple(boxScore.awayAbbr, boxScore.awayQuarters, boxScore.awayTotal),
-                        Triple(boxScore.homeAbbr, boxScore.homeQuarters, boxScore.homeTotal)
-                    )) {
-                        Row(Modifier.fillMaxWidth().padding(top = 3.dp)) {
-                            Text(abbr, Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                            for (s in quarters) Text(s, Modifier.width(32.dp), textAlign = TextAlign.Center, fontSize = 12.sp, color = Color.White)
-                            Text(total, Modifier.width(36.dp), textAlign = TextAlign.Center, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                        for ((abbr, quarters, total) in listOf(
+                            Triple(boxScore.awayAbbr, boxScore.awayQuarters, boxScore.awayTotal),
+                            Triple(boxScore.homeAbbr, boxScore.homeQuarters, boxScore.homeTotal)
+                        )) {
+                            Row(Modifier.fillMaxWidth().padding(top = 3.dp)) {
+                                Text(abbr, Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary)
+                                for (s in quarters) Text(s, Modifier.width(32.dp), textAlign = TextAlign.Center, fontSize = 13.sp, color = AppColors.TextPrimary)
+                                Text(total, Modifier.width(36.dp), textAlign = TextAlign.Center, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = AppColors.TextPrimary)
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Stats table
+        // Team stats comparison
         item {
-            Column(Modifier.fillMaxWidth().background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp)).padding(10.dp)) {
-                Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                    Text("Stat", Modifier.weight(1f), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    Text(boxScore.homeAbbr, Modifier.width(56.dp), textAlign = TextAlign.Center, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    Text(boxScore.awayAbbr, Modifier.width(56.dp), textAlign = TextAlign.Center, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                }
-                for (stat in boxScore.stats) {
-                    Spacer(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.06f)))
-                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-                        Text(stat.name, Modifier.weight(1f), fontSize = 12.sp, color = Color.White.copy(alpha = 0.8f))
-                        Text(stat.homeValue, Modifier.width(56.dp), textAlign = TextAlign.Center, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        Text(stat.awayValue, Modifier.width(56.dp), textAlign = TextAlign.Center, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Surface(
+                onClick = {},
+                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+                colors = ClickableSurfaceDefaults.colors(containerColor = AppColors.SurfaceElevated, focusedContainerColor = AppColors.SurfaceEmphasis),
+                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                        Text("Stat", Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
+                        Text(boxScore.homeAbbr, Modifier.width(56.dp), textAlign = TextAlign.Center, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
+                        Text(boxScore.awayAbbr, Modifier.width(56.dp), textAlign = TextAlign.Center, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
+                    }
+                    for (stat in boxScore.stats) {
+                        Spacer(Modifier.fillMaxWidth().height(1.dp).background(AppColors.Divider))
+                        Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                            Text(stat.name, Modifier.weight(1f), fontSize = 13.sp, color = AppColors.TextSecondary)
+                            Text(stat.homeValue, Modifier.width(56.dp), textAlign = TextAlign.Center, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
+                            Text(stat.awayValue, Modifier.width(56.dp), textAlign = TextAlign.Center, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
+                        }
                     }
                 }
+            }
+        }
+
+        // Player stats — each player as its own focusable row for d-pad scrolling
+        val teamData = listOf(
+            BoxScoreTeamData(boxScore.homeAbbr, boxScore.homePlayers, boxScore.homeTotals, boxScore.homeLogo),
+            BoxScoreTeamData(boxScore.awayAbbr, boxScore.awayPlayers, boxScore.awayTotals, boxScore.awayLogo)
+        )
+        for (td in teamData) {
+            if (td.players.isEmpty()) continue
+            val starters = td.players.filter { it.isStarter && !it.didNotPlay }
+            val bench = td.players.filter { !it.isStarter && !it.didNotPlay }
+
+            // Team header + column labels
+            item(key = "hdr_${td.abbr}") {
+                Column(Modifier.fillMaxWidth().background(AppColors.SurfaceElevated, RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)).padding(12.dp)) {
+                    Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (td.logo.isNotBlank()) {
+                            AsyncImage(model = td.logo, contentDescription = null, modifier = Modifier.size(24.dp).clip(CircleShape))
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(td.abbr, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
+                        Text("  STARTERS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.TextTertiary, letterSpacing = 1.sp)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Player", Modifier.weight(1f), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.TextTertiary)
+                        for (i in colIndices) {
+                            Text(boxScore.statLabels[i], Modifier.width(40.dp), textAlign = TextAlign.Center,
+                                fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppColors.TextTertiary)
+                        }
+                    }
+                }
+            }
+
+            // Starter rows
+            items(starters.size, key = { "s_${td.abbr}_$it" }) { idx ->
+                PlayerStatRowFocusable(starters[idx], colIndices)
+            }
+
+            // Bench header
+            if (bench.isNotEmpty()) {
+                item(key = "bench_${td.abbr}") {
+                    Column(Modifier.fillMaxWidth().background(AppColors.SurfaceElevated).padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        Spacer(Modifier.fillMaxWidth().height(1.dp).background(AppColors.Divider))
+                        Text("BENCH", Modifier.padding(top = 6.dp, bottom = 2.dp), fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold, color = AppColors.TextTertiary, letterSpacing = 1.sp)
+                    }
+                }
+
+                // Bench rows
+                items(bench.size, key = { "b_${td.abbr}_$it" }) { idx ->
+                    PlayerStatRowFocusable(bench[idx], colIndices)
+                }
+            }
+
+            // Totals row
+            if (td.totals.isNotEmpty()) {
+                item(key = "tot_${td.abbr}") {
+                    Column(Modifier.fillMaxWidth().background(AppColors.SurfaceElevated, RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)).padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        Spacer(Modifier.fillMaxWidth().height(1.dp).background(AppColors.Brand.copy(alpha = 0.3f)))
+                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                            Text("TOTAL", Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
+                            for (i in colIndices) {
+                                Text(td.totals.getOrElse(i) { "" }, Modifier.width(40.dp), textAlign = TextAlign.Center,
+                                    fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AppColors.TextPrimary)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Spacer between teams
+            item { Spacer(Modifier.height(4.dp)) }
+        }
+    }
+}
+
+private data class BoxScoreTeamData(val abbr: String, val players: List<PlayerBoxScore>, val totals: List<String>, val logo: String)
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun PlayerStatRowFocusable(player: PlayerBoxScore, colIndices: List<Int>) {
+    Surface(
+        onClick = {},
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(0.dp)),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = AppColors.SurfaceElevated,
+            focusedContainerColor = AppColors.SurfaceEmphasis
+        ),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Headshot
+            if (player.headshot.isNotBlank()) {
+                AsyncImage(model = player.headshot, contentDescription = null,
+                    modifier = Modifier.size(36.dp).clip(CircleShape))
+                Spacer(Modifier.width(8.dp))
+            }
+            // Name + position
+            Column(Modifier.weight(1f)) {
+                Text(player.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AppColors.TextPrimary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${player.position} #${player.jersey}", fontSize = 10.sp, color = AppColors.TextTertiary)
+            }
+            // Stats
+            for (i in colIndices) {
+                Text(player.stats.getOrElse(i) { "-" }, Modifier.width(40.dp), textAlign = TextAlign.Center,
+                    fontSize = 13.sp, color = AppColors.TextPrimary)
             }
         }
     }

@@ -10,6 +10,14 @@
 - Category filtering: only US, CA, India, Asia, 4K, Sports channels indexed
 - 30 curated favorites: NBA, ESPN, TSN, Sportsnet, CNN, CBC, Fox News
 
+### Sports Center
+- ESPN-style playoff bracket with Canvas connector lines and tree layout
+- Live scores, standings, box scores with player headshots and stats
+- League pill selector with logos (NBA, NHL, MLB, NFL, MLS)
+- SmartTube integration for game highlights
+- Design system migration (AppColors, FocusSpec, AppShapes)
+- ESPN API integration: scoreboard, standings, summary endpoints
+
 ## In Progress
 
 ### Smart Category Organization

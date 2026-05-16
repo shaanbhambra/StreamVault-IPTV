@@ -2,6 +2,31 @@
 
 All notable product changes are recorded in this document.
 
+## [1.0.12] - 2026-05-16
+
+### Added
+
+- ESPN-style playoff bracket with Canvas connector lines and proper tree layout (West/East conferences, 4 rounds).
+- Structured bracket data model with seed-based ordering and parallel standings/scoreboard fetching.
+- Enhanced box score with per-player stats, headshots (36dp), starters/bench separation, and team totals.
+- League logos in pill selector buttons (NBA, NHL, MLB, NFL, MLS) from ESPN CDN.
+- SmartTube integration for highlights — opens YouTube searches via Intent instead of browser.
+
+### Changed
+
+- Migrated entire Sports section to design system tokens (AppColors, FocusSpec, AppShapes).
+- Enabled TV focus scaling (1.06x) on all interactive elements — pills, game cards, standings rows, news cards.
+- Increased font sizes across Sports section for 10-foot TV readability.
+- Team logos now extracted from `team.logo` field (singular) with `team.logos[]` fallback.
+- Box score player rows are individually focusable for d-pad scrolling.
+
+### Fixed
+
+- Fixed playoff bracket showing all TBD — Kotlin lambda scoping bug in `return@let` caused round labels to always fall back to "Playoffs".
+- Fixed scoreboard date range starting too early (April 1 → April 12) and added `seasontype=3` parameter.
+- Fixed team logos not showing on Today game cards (API returns `logo` string, not `logos` array).
+- Added NHL "2nd Round" / "3rd Round" label matching alongside "Semifinals" / "Conference Finals".
+
 ## [1.0.11] - 2026-05-13
 
 ### Added
