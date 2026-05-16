@@ -64,3 +64,9 @@ tmp/gha-artifact-inspect/
 .tmp-inspect/
 translations/
 releases/*.apk
+
+# Generated catalog and DB files
+tools/catalog/
+tools/output/
+app/src/main/assets/databases/streamvault_seed*
+
