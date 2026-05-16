@@ -321,6 +321,12 @@ class SportsViewModel @Inject constructor() : ViewModel() {
 
                     val key = listOf(awayTeam.getString("abbreviation"), homeTeam.getString("abbreviation")).sorted().joinToString("-")
 
+                    // Store the round label from the FIRST game that has one (don't overwrite with empty)
+                    val existing = seriesMap[key]
+                    if (existing != null && existing.isNotEmpty() && roundLabel.isBlank()) {
+                        // Keep existing round label, don't overwrite
+                    }
+
                     seriesMap.getOrPut(key) { mutableListOf() }.add(RawGame(
                         awayAbbr = awayTeam.getString("abbreviation"), awayName = awayTeam.getString("displayName"),
                         awayLogo = awayTeam.optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "",
@@ -337,7 +343,7 @@ class SportsViewModel @Inject constructor() : ViewModel() {
                 val bracket = seriesMap.map { (_, games) ->
                     val lastGame = games.last()
                     val note = games.mapNotNull { it.seriesNote.takeIf { n -> n.isNotBlank() } }.lastOrNull() ?: ""
-                    val label = games.mapNotNull { it.roundLabel.takeIf { n -> n.isNotBlank() } }.lastOrNull() ?: ""
+                    val label = games.mapNotNull { it.roundLabel.takeIf { n -> n.isNotBlank() } }.firstOrNull() ?: ""
                     // Extract round name (e.g., "East Semifinals" from "East Semifinals - Game 6")
                     val roundName = label.replace(Regex("\\s*-\\s*Game\\s*\\d+"), "").trim()
 
