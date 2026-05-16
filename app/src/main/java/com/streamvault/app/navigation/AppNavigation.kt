@@ -69,6 +69,7 @@ object Routes {
     const val SERIES = "series"
     const val EPG = "epg"
     const val EPG_DESTINATION = "epg?categoryId={categoryId}&anchorTime={anchorTime}&favoritesOnly={favoritesOnly}"
+    const val SPORTS = "sports"
     const val SETTINGS = "settings"
     const val SETTINGS_DESTINATION = "settings?backupUri={backupUri}"
     const val PLUGINS = "plugins"
@@ -490,6 +491,13 @@ fun AppNavigation(mainActivity: MainActivity) {
                 },
                 onNavigate = { route -> tabNavigate(route) },
                 currentRoute = Routes.SERIES
+            )
+        }
+
+        composable(Routes.SPORTS) {
+            com.streamvault.app.ui.screens.sports.SportsScreen(
+                onNavigate = { route -> tabNavigate(route) },
+                currentRoute = Routes.SPORTS
             )
         }
 
