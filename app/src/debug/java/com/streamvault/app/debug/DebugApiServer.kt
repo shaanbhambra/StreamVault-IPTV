@@ -70,6 +70,9 @@ class DebugApiServer(
                 uri == "/ai/status" -> handleAiStatus()
                 uri == "/settings" -> handleSettings()
                 uri == "/sports" -> handleSports(params)
+                uri == "/sports/standings" -> handleSportsStandings(params)
+                uri == "/sports/boxscore" -> handleSportsBoxscore(params)
+                uri == "/sports/news" -> handleSportsNews(params)
                 uri == "/categories/toggle_all" && method == Method.POST -> handleToggleAllCategories()
                 uri == "/vpn/on" && method == Method.POST -> handleVpnOn()
                 uri == "/vpn/off" && method == Method.POST -> handleVpnOff()
@@ -525,49 +528,66 @@ p{color:#8888a0;font-size:16px;margin-bottom:30px}#qr{background:white;padding:2
 
     private fun handleSports(params: Map<String, String>): Response {
         val league = params["league"] ?: "nba"
-        val sportPath = when (league.lowercase()) {
-            "nba" -> "basketball/nba"
-            "nhl" -> "hockey/nhl"
-            "mlb" -> "baseball/mlb"
-            "nfl" -> "football/nfl"
-            "mls" -> "soccer/usa.1"
-            "epl" -> "soccer/eng.1"
-            else -> "basketball/nba"
-        }
+        val sportPath = mapLeague(league)
 
         return try {
-            val url = java.net.URL("https://site.api.espn.com/apis/site/v2/sports/$sportPath/scoreboard")
-            val conn = url.openConnection() as java.net.HttpURLConnection
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
-            val response = conn.inputStream.bufferedReader().readText()
-            conn.disconnect()
-
-            val data = JSONObject(response)
+            val raw = fetchUrl("https://site.api.espn.com/apis/site/v2/sports/$sportPath/scoreboard")
+            val data = JSONObject(raw)
             val events = data.optJSONArray("events") ?: JSONArray()
             val games = JSONArray()
+            val seasonType = data.optJSONArray("leagues")?.optJSONObject(0)
+                ?.optJSONObject("season")?.optInt("type", 2) ?: 2
 
             for (i in 0 until events.length()) {
                 val event = events.getJSONObject(i)
                 val comp = event.getJSONArray("competitions").getJSONObject(0)
                 val competitors = comp.getJSONArray("competitors")
                 val status = comp.getJSONObject("status").getJSONObject("type")
-
                 val home = competitors.getJSONObject(0)
                 val away = competitors.getJSONObject(1)
+                val homeTeam = home.getJSONObject("team")
+                val awayTeam = away.getJSONObject("team")
+
+                // Quarter/period scores
+                val homeQuarters = JSONArray()
+                val awayQuarters = JSONArray()
+                home.optJSONArray("linescores")?.let { ls ->
+                    for (q in 0 until ls.length()) homeQuarters.put(ls.getJSONObject(q).optString("displayValue", "0"))
+                }
+                away.optJSONArray("linescores")?.let { ls ->
+                    for (q in 0 until ls.length()) awayQuarters.put(ls.getJSONObject(q).optString("displayValue", "0"))
+                }
+
+                // Series info from notes
+                val seriesNote = comp.optJSONArray("notes")?.let { notes ->
+                    for (n in 0 until notes.length()) {
+                        val note = notes.getJSONObject(n).optString("headline", "")
+                        if (note.contains("leads") || note.contains("tied") || note.contains("wins")) return@let note
+                    }
+                    null
+                } ?: ""
 
                 games.put(JSONObject().apply {
-                    put("home_team", home.getJSONObject("team").getString("displayName"))
-                    put("home_abbr", home.getJSONObject("team").getString("abbreviation"))
+                    put("event_id", event.getString("id"))
+                    put("date", event.getString("date"))
+                    put("home_team", homeTeam.getString("displayName"))
+                    put("home_abbr", homeTeam.getString("abbreviation"))
                     put("home_score", home.optString("score", "0"))
-                    put("home_logo", home.getJSONObject("team").optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "")
-                    put("away_team", away.getJSONObject("team").getString("displayName"))
-                    put("away_abbr", away.getJSONObject("team").getString("abbreviation"))
+                    put("home_logo", homeTeam.optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "")
+                    put("home_color", homeTeam.optString("color", "333333"))
+                    put("home_record", home.optJSONArray("records")?.optJSONObject(0)?.optString("summary", "") ?: "")
+                    put("away_team", awayTeam.getString("displayName"))
+                    put("away_abbr", awayTeam.getString("abbreviation"))
                     put("away_score", away.optString("score", "0"))
-                    put("away_logo", away.getJSONObject("team").optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "")
+                    put("away_logo", awayTeam.optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "")
+                    put("away_color", awayTeam.optString("color", "333333"))
+                    put("away_record", away.optJSONArray("records")?.optJSONObject(0)?.optString("summary", "") ?: "")
                     put("status", status.getString("shortDetail"))
-                    put("state", status.getString("state")) // pre, in, post
+                    put("state", status.getString("state"))
                     put("name", event.getString("shortName"))
+                    put("home_quarters", homeQuarters)
+                    put("away_quarters", awayQuarters)
+                    put("series_note", seriesNote)
                     put("headline", comp.optJSONArray("headlines")?.optJSONObject(0)?.optString("shortLinkText", "") ?: "")
                 })
             }
@@ -576,10 +596,164 @@ p{color:#8888a0;font-size:16px;margin-bottom:30px}#qr{background:white;padding:2
                 put("league", league.uppercase())
                 put("games", games)
                 put("count", games.length())
+                put("is_postseason", seasonType == 3)
             })
         } catch (e: Exception) {
-            json(500, JSONObject().put("error", "Failed to fetch sports data: ${e.message}"))
+            json(500, JSONObject().put("error", "Failed to fetch: ${e.message}"))
         }
+    }
+
+    private fun handleSportsStandings(params: Map<String, String>): Response {
+        val league = params["league"] ?: "nba"
+        val sportPath = mapLeague(league)
+        return try {
+            val raw = fetchUrl("https://site.api.espn.com/apis/v2/sports/$sportPath/standings")
+            val data = JSONObject(raw)
+            val conferences = JSONArray()
+            for (i in 0 until (data.optJSONArray("children")?.length() ?: 0)) {
+                val conf = data.getJSONArray("children").getJSONObject(i)
+                val teams = JSONArray()
+                val entries = conf.optJSONObject("standings")?.optJSONArray("entries") ?: continue
+                for (j in 0 until entries.length()) {
+                    val entry = entries.getJSONObject(j)
+                    val team = entry.getJSONObject("team")
+                    val stats = entry.optJSONArray("stats") ?: JSONArray()
+                    val statsMap = mutableMapOf<String, String>()
+                    for (k in 0 until stats.length()) {
+                        val s = stats.getJSONObject(k)
+                        statsMap[s.getString("name")] = s.optString("displayValue", "")
+                    }
+                    teams.put(JSONObject().apply {
+                        put("name", team.getString("displayName"))
+                        put("abbr", team.getString("abbreviation"))
+                        put("logo", team.optJSONArray("logos")?.optJSONObject(0)?.optString("href", "") ?: "")
+                        put("wins", statsMap["wins"] ?: "0")
+                        put("losses", statsMap["losses"] ?: "0")
+                        put("pct", statsMap["winPercent"] ?: ".000")
+                        put("streak", statsMap["streak"] ?: "-")
+                        put("seed", statsMap["playoffSeed"] ?: "")
+                        put("diff", statsMap["differential"] ?: "0")
+                        put("home", statsMap["Home"] ?: "")
+                        put("away", statsMap["Road"] ?: "")
+                        put("last10", statsMap["Last Ten Games"] ?: "")
+                    })
+                }
+                conferences.put(JSONObject().apply {
+                    put("name", conf.getString("name"))
+                    put("abbr", conf.optString("abbreviation", ""))
+                    put("teams", teams)
+                })
+            }
+            json(200, JSONObject().put("league", league.uppercase()).put("conferences", conferences))
+        } catch (e: Exception) {
+            json(500, JSONObject().put("error", e.message))
+        }
+    }
+
+    private fun handleSportsBoxscore(params: Map<String, String>): Response {
+        val eventId = params["event"] ?: return json(400, JSONObject().put("error", "event required"))
+        val league = params["league"] ?: "nba"
+        val sportPath = mapLeague(league)
+        return try {
+            val raw = fetchUrl("https://site.api.espn.com/apis/site/v2/sports/$sportPath/summary?event=$eventId")
+            val data = JSONObject(raw)
+            val boxscore = data.optJSONObject("boxscore")
+            val result = JSONObject()
+
+            if (boxscore != null) {
+                val teams = boxscore.optJSONArray("teams") ?: JSONArray()
+                val teamStats = JSONArray()
+                for (i in 0 until teams.length()) {
+                    val t = teams.getJSONObject(i)
+                    val team = t.getJSONObject("team")
+                    val stats = t.optJSONArray("statistics") ?: JSONArray()
+                    val statsArr = JSONArray()
+                    for (j in 0 until stats.length()) {
+                        val s = stats.getJSONObject(j)
+                        statsArr.put(JSONObject().apply {
+                            put("name", s.optString("label", s.optString("name", "")))
+                            put("abbr", s.optString("abbreviation", ""))
+                            put("value", s.optString("displayValue", ""))
+                        })
+                    }
+                    teamStats.put(JSONObject().apply {
+                        put("name", team.getString("displayName"))
+                        put("abbr", team.getString("abbreviation"))
+                        put("logo", team.optString("logo", ""))
+                        put("stats", statsArr)
+                    })
+                }
+                result.put("teams", teamStats)
+            }
+
+            // Quarter scores from header
+            val header = data.optJSONObject("header")
+            if (header != null) {
+                val comps = header.optJSONArray("competitions")
+                if (comps != null && comps.length() > 0) {
+                    val comp = comps.getJSONObject(0)
+                    val competitors = comp.optJSONArray("competitors") ?: JSONArray()
+                    val quarters = JSONArray()
+                    for (i in 0 until competitors.length()) {
+                        val c = competitors.getJSONObject(i)
+                        val ls = c.optJSONArray("linescores") ?: JSONArray()
+                        val scores = JSONArray()
+                        for (j in 0 until ls.length()) scores.put(ls.getJSONObject(j).optString("displayValue", "0"))
+                        quarters.put(JSONObject().apply {
+                            put("team", c.optJSONObject("team")?.optString("abbreviation", "?") ?: "?")
+                            put("scores", scores)
+                            put("total", c.optString("score", "0"))
+                        })
+                    }
+                    result.put("quarters", quarters)
+                }
+            }
+
+            json(200, result)
+        } catch (e: Exception) {
+            json(500, JSONObject().put("error", e.message))
+        }
+    }
+
+    private fun handleSportsNews(params: Map<String, String>): Response {
+        val league = params["league"] ?: "nba"
+        val sportPath = mapLeague(league)
+        return try {
+            val raw = fetchUrl("https://site.api.espn.com/apis/site/v2/sports/$sportPath/news")
+            val data = JSONObject(raw)
+            val articles = data.optJSONArray("articles") ?: JSONArray()
+            val news = JSONArray()
+            for (i in 0 until minOf(articles.length(), 8)) {
+                val a = articles.getJSONObject(i)
+                val imgs = a.optJSONArray("images")
+                val imgUrl = if (imgs != null && imgs.length() > 0) imgs.getJSONObject(0).optString("url", "") else ""
+                news.put(JSONObject().apply {
+                    put("headline", a.getString("headline"))
+                    put("description", a.optString("description", ""))
+                    put("image", imgUrl)
+                    put("published", a.optString("published", ""))
+                    put("link", a.optJSONObject("links")?.optJSONObject("web")?.optString("href", "") ?: "")
+                })
+            }
+            json(200, JSONObject().put("league", league.uppercase()).put("articles", news))
+        } catch (e: Exception) {
+            json(500, JSONObject().put("error", e.message))
+        }
+    }
+
+    private fun mapLeague(league: String): String = when (league.lowercase()) {
+        "nba" -> "basketball/nba"; "nhl" -> "hockey/nhl"; "mlb" -> "baseball/mlb"
+        "nfl" -> "football/nfl"; "mls" -> "soccer/usa.1"; "epl" -> "soccer/eng.1"
+        else -> "basketball/nba"
+    }
+
+    private fun fetchUrl(url: String): String {
+        val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 5000; conn.readTimeout = 8000
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        val text = conn.inputStream.bufferedReader().readText()
+        conn.disconnect()
+        return text
     }
 
     private fun handleSettings(): Response {

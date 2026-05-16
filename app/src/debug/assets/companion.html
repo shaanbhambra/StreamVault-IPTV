@@ -917,88 +917,293 @@ async function sendAiMessage() {
   showAiChat();
 }
 
-// === Sports Dashboard ===
+// === Sports Center ===
 let currentLeague = 'nba';
+let sportsView = 'today'; // today, standings, playoffs
 
 async function showSportsLive() {
   const list = document.getElementById('channelList');
-  list.innerHTML = `
-    <div class="sports-leagues">
-      ${['NBA','NHL','MLB','NFL','MLS','EPL'].map(l =>
-        `<div class="league-btn ${l.toLowerCase()===currentLeague?'active':''}"
-              onclick="currentLeague='${l.toLowerCase()}'; showSportsLive()">${l}</div>`
-      ).join('')}
-    </div>
-    <div class="loading"><div class="spinner"></div>Loading ${currentLeague.toUpperCase()} scores...</div>`;
+  const leagueBar = `<div class="sports-leagues">
+    ${['NBA','NHL','MLB','NFL','MLS'].map(l =>
+      `<div class="league-btn ${l.toLowerCase()===currentLeague?'active':''}"
+            onclick="currentLeague='${l.toLowerCase()}'; showSportsLive()">${l}</div>`
+    ).join('')}
+    <div style="width:1px; background:var(--border); margin:0 4px;"></div>
+    ${['today','standings','playoffs'].map(v =>
+      `<div class="league-btn ${v===sportsView?'active':''}" style="font-size:11px;"
+            onclick="sportsView='${v}'; showSportsLive()">${v.charAt(0).toUpperCase()+v.slice(1)}</div>`
+    ).join('')}
+  </div>`;
+
+  list.innerHTML = leagueBar + `<div class="loading"><div class="spinner"></div>Loading...</div>`;
 
   try {
-    const data = await api(`/sports?league=${currentLeague}`);
-    const games = data.games || [];
+    if (sportsView === 'standings') { await renderStandings(list, leagueBar); return; }
+    if (sportsView === 'playoffs') { await renderPlayoffs(list, leagueBar); return; }
+    await renderToday(list, leagueBar);
+  } catch (e) {
+    list.innerHTML = leagueBar + `<div class="empty"><div class="emoji">&#x26A0;</div>${e.message}</div>`;
+  }
+}
 
-    if (games.length === 0) {
-      list.innerHTML = list.innerHTML.split('<div class="loading">')[0] +
-        `<div class="empty"><div class="emoji">&#x1F3C0;</div>No ${data.league} games today</div>`;
-      return;
+async function renderToday(list, leagueBar) {
+  const [scores, news] = await Promise.all([
+    api(`/sports?league=${currentLeague}`),
+    api(`/sports/news?league=${currentLeague}`).catch(() => ({articles:[]}))
+  ]);
+  const games = scores.games || [];
+
+  let html = leagueBar;
+
+  if (games.length === 0) {
+    html += `<div class="empty"><div class="emoji">&#x1F3C0;</div>No ${scores.league} games today</div>`;
+  } else {
+    // Group: live first, then upcoming, then final
+    const live = games.filter(g => g.state === 'in');
+    const pre = games.filter(g => g.state === 'pre');
+    const post = games.filter(g => g.state === 'post');
+
+    if (live.length) html += `<div style="padding:8px 16px;font-size:12px;font-weight:700;color:var(--danger);">LIVE</div>`;
+    html += live.map(g => renderGameCard(g)).join('');
+    if (pre.length) html += `<div style="padding:8px 16px;font-size:12px;font-weight:700;color:var(--accent2);">UPCOMING</div>`;
+    html += pre.map(g => renderGameCard(g)).join('');
+    if (post.length) html += `<div style="padding:8px 16px;font-size:12px;font-weight:700;color:var(--text2);">FINAL</div>`;
+    html += post.map(g => renderGameCard(g)).join('');
+  }
+
+  // News
+  const articles = news.articles || [];
+  if (articles.length) {
+    html += `<div style="padding:12px 16px 4px;font-size:14px;font-weight:700;">Headlines</div>`;
+    html += articles.slice(0,4).map(a => `
+      <div class="channel-item" onclick="window.open('${a.link}','_blank')" style="gap:10px;">
+        ${a.image ? `<img src="${a.image}" style="width:60px;height:40px;border-radius:6px;object-fit:cover;">` : ''}
+        <div class="channel-info">
+          <div class="channel-name" style="font-size:13px;">${esc(a.headline)}</div>
+          <div class="channel-meta">${esc(a.description).substring(0,80)}...</div>
+        </div>
+      </div>`).join('');
+  }
+
+  list.innerHTML = html;
+}
+
+function renderGameCard(g) {
+  const isLive = g.state === 'in';
+  const isFinal = g.state === 'post';
+  const isPre = g.state === 'pre';
+  const gameDate = new Date(g.date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const ytQuery = encodeURIComponent(`${g.away_team} vs ${g.home_team} highlights ${gameDate}`);
+
+  return `
+  <div class="game-card ${isLive?'live':''} ${isFinal?'final':''}">
+    <div class="game-teams">
+      <div class="game-team away">
+        ${g.away_logo ? `<img src="${g.away_logo}" style="width:32px;height:32px;" onerror="this.style.display='none'">` : ''}
+        <div>
+          <div class="game-team-name">${esc(g.away_team)}</div>
+          <div class="game-team-abbr">${esc(g.away_record || g.away_abbr)}</div>
+        </div>
+      </div>
+      ${isPre
+        ? `<div class="game-vs">VS</div>`
+        : `<div class="game-score ${isLive?'live-score':''}">${g.away_score} - ${g.home_score}</div>`
+      }
+      <div class="game-team home">
+        <div>
+          <div class="game-team-name">${esc(g.home_team)}</div>
+          <div class="game-team-abbr">${esc(g.home_record || g.home_abbr)}</div>
+        </div>
+        ${g.home_logo ? `<img src="${g.home_logo}" style="width:32px;height:32px;" onerror="this.style.display='none'">` : ''}
+      </div>
+    </div>
+    <div class="game-status ${g.state}">${esc(g.status)}</div>
+    ${g.series_note ? `<div style="text-align:center;font-size:11px;color:var(--accent2);margin-top:2px;">${esc(g.series_note)}</div>` : ''}
+    <div class="game-actions">
+      ${!isFinal ? `<button class="game-watch-btn" onclick="event.stopPropagation();findGameStream('${esc(g.away_abbr)}','${esc(g.home_abbr)}','${esc(g.away_team)}','${esc(g.home_team)}')">&#x25B6; Watch</button>` : ''}
+      <button class="game-watch-btn secondary" onclick="event.stopPropagation();showBoxScore('${g.event_id}','${esc(g.away_abbr)}','${esc(g.home_abbr)}')">&#x1F4CA; Box Score</button>
+      ${isFinal ? `<button class="game-watch-btn secondary" onclick="event.stopPropagation();window.open('https://www.youtube.com/results?search_query=${ytQuery}','_blank')">&#x1F3AC; Highlights</button>` : ''}
+    </div>
+  </div>`;
+}
+
+async function renderStandings(list, leagueBar) {
+  const data = await api(`/sports/standings?league=${currentLeague}`);
+  const confs = data.conferences || [];
+  let html = leagueBar;
+  for (const conf of confs) {
+    html += `<div style="padding:10px 16px 4px;font-size:14px;font-weight:700;">${esc(conf.name)}</div>`;
+    html += `<div style="margin:0 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">`;
+    html += `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <tr style="background:var(--surface2);"><th style="padding:6px;text-align:left;">#</th><th style="text-align:left;">Team</th><th>W</th><th>L</th><th>PCT</th><th>STRK</th><th>L10</th></tr>`;
+    for (let i = 0; i < (conf.teams || []).length; i++) {
+      const t = conf.teams[i];
+      const seed = t.seed || (i+1);
+      html += `<tr style="border-top:1px solid var(--border);">
+        <td style="padding:6px;color:var(--text2);">${seed}</td>
+        <td style="padding:6px;font-weight:600;display:flex;align-items:center;gap:6px;">
+          ${t.logo ? `<img src="${t.logo}" style="width:20px;height:20px;">` : ''}${esc(t.abbr)}</td>
+        <td style="text-align:center;padding:6px;">${t.wins}</td>
+        <td style="text-align:center;padding:6px;">${t.losses}</td>
+        <td style="text-align:center;padding:6px;">${t.pct}</td>
+        <td style="text-align:center;padding:6px;color:${t.streak?.startsWith('W')?'var(--success)':'var(--danger)'};">${esc(t.streak)}</td>
+        <td style="text-align:center;padding:6px;">${esc(t.last10)}</td>
+      </tr>`;
+    }
+    html += `</table></div>`;
+  }
+  list.innerHTML = html;
+}
+
+async function renderPlayoffs(list, leagueBar) {
+  const data = await api(`/sports?league=${currentLeague}`);
+  const games = data.games || [];
+  let html = leagueBar;
+
+  if (!data.is_postseason) {
+    html += `<div class="empty"><div class="emoji">&#x1F3C6;</div>${data.league} is not in playoffs right now</div>`;
+    list.innerHTML = html;
+    return;
+  }
+
+  // Group games by series (matchup)
+  const series = {};
+  for (const g of games) {
+    const key = [g.away_abbr, g.home_abbr].sort().join('-');
+    if (!series[key]) series[key] = { games: [], away: g.away_team, home: g.home_team,
+      away_abbr: g.away_abbr, home_abbr: g.home_abbr, away_logo: g.away_logo, home_logo: g.home_logo,
+      note: g.series_note };
+    series[key].games.push(g);
+    if (g.series_note) series[key].note = g.series_note;
+  }
+
+  html += `<div style="padding:10px 16px 4px;font-size:16px;font-weight:700;">${data.league} Playoffs</div>`;
+
+  for (const [key, s] of Object.entries(series)) {
+    // Parse series record from note (e.g. "DET leads 3-2" or "Series tied 3-3")
+    let awayWins = 0, homeWins = 0;
+    const note = s.note || '';
+    const leadMatch = note.match(/(\w+)\s+leads?\s+(\d+)-(\d+)/i);
+    const tiedMatch = note.match(/tied\s+(\d+)-(\d+)/i);
+    const winsMatch = note.match(/(\w+)\s+wins?\s+(\d+)-(\d+)/i);
+    if (leadMatch) {
+      const leader = leadMatch[1];
+      if (leader === s.away_abbr) { awayWins = parseInt(leadMatch[2]); homeWins = parseInt(leadMatch[3]); }
+      else { homeWins = parseInt(leadMatch[2]); awayWins = parseInt(leadMatch[3]); }
+    } else if (tiedMatch) {
+      awayWins = homeWins = parseInt(tiedMatch[1]);
+    } else if (winsMatch) {
+      const winner = winsMatch[1];
+      if (winner === s.away_abbr) { awayWins = parseInt(winsMatch[2]); homeWins = parseInt(winsMatch[3]); }
+      else { homeWins = parseInt(winsMatch[2]); awayWins = parseInt(winsMatch[3]); }
     }
 
-    const leagueBar = list.querySelector('.sports-leagues').outerHTML;
-    list.innerHTML = leagueBar + games.map(g => {
-      const isLive = g.state === 'in';
-      const isFinal = g.state === 'post';
-      const isPre = g.state === 'pre';
+    const total = awayWins + homeWins;
+    const awayPct = total > 0 ? (awayWins / 7 * 100) : 0;
+    const homePct = total > 0 ? (homeWins / 7 * 100) : 0;
 
-      return `
-      <div class="game-card ${isLive?'live':''} ${isFinal?'final':''}">
-        <div class="game-teams">
-          <div class="game-team away">
-            <div>
-              <div class="game-team-name">${esc(g.away_team)}</div>
-              <div class="game-team-abbr">${esc(g.away_abbr)}</div>
-            </div>
-          </div>
-          ${isPre ?
-            `<div class="game-vs">VS</div>` :
-            `<div class="game-score ${isLive?'live-score':''}">${g.away_score} - ${g.home_score}</div>`
-          }
-          <div class="game-team home">
-            <div>
-              <div class="game-team-name">${esc(g.home_team)}</div>
-              <div class="game-team-abbr">${esc(g.home_abbr)}</div>
-            </div>
+    html += `
+    <div class="game-card" style="border-left:3px solid #${s.games[0]?.away_color || '6c5ce7'};">
+      <div class="game-teams">
+        <div class="game-team away">
+          ${s.away_logo ? `<img src="${s.away_logo}" style="width:28px;height:28px;">` : ''}
+          <div>
+            <div class="game-team-name">${esc(s.away_team)}</div>
           </div>
         </div>
-        <div class="game-status ${g.state}">${esc(g.status)}</div>
-        ${!isFinal ? `
-        <div class="game-actions">
-          <button class="game-watch-btn" onclick="findGameStream('${esc(g.away_abbr)}','${esc(g.home_abbr)}','${esc(g.away_team)}','${esc(g.home_team)}')">
-            &#x25B6; Watch
-          </button>
-          <button class="game-watch-btn secondary" onclick="findGameStream('${esc(g.away_team)}','${esc(g.home_team)}','${esc(g.away_team)}','${esc(g.home_team)}')">
-            Find Best Stream
-          </button>
-        </div>` : ''}
-      </div>`;
-    }).join('');
+        <div style="text-align:center;">
+          <div class="game-score">${awayWins} - ${homeWins}</div>
+          <div style="font-size:10px;color:var(--text2);">Best of 7</div>
+        </div>
+        <div class="game-team home">
+          <div>
+            <div class="game-team-name">${esc(s.home_team)}</div>
+          </div>
+          ${s.home_logo ? `<img src="${s.home_logo}" style="width:28px;height:28px;">` : ''}
+        </div>
+      </div>
+      <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin:8px 0;background:var(--surface2);">
+        <div style="width:${awayPct}%;background:#${s.games[0]?.away_color || '6c5ce7'};"></div>
+        <div style="width:${100-awayPct-homePct}%;"></div>
+        <div style="width:${homePct}%;background:#${s.games[0]?.home_color || 'e17055'};"></div>
+      </div>
+      <div class="game-status ${note.includes('wins') ? 'post' : 'live'}">${esc(note || 'Series in progress')}</div>
+    </div>`;
+  }
 
-    // Re-attach league buttons
-    list.querySelectorAll('.league-btn').forEach(btn => {
-      btn.onclick = () => {
-        currentLeague = btn.textContent.toLowerCase();
-        showSportsLive();
-      };
-    });
+  if (Object.keys(series).length === 0) {
+    html += `<div class="empty"><div class="emoji">&#x1F3C6;</div>No active playoff series</div>`;
+  }
+
+  list.innerHTML = html;
+}
+
+async function showBoxScore(eventId, awayAbbr, homeAbbr) {
+  const list = document.getElementById('channelList');
+  list.innerHTML = `<div class="loading"><div class="spinner"></div>Loading box score...</div>`;
+
+  try {
+    const data = await api(`/sports/boxscore?event=${eventId}&league=${currentLeague}`);
+    const teams = data.teams || [];
+    const quarters = data.quarters || [];
+    const gameDate = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    const ytQuery = encodeURIComponent(`${awayAbbr} vs ${homeAbbr} highlights ${gameDate}`);
+
+    let html = `<div class="channel-item" onclick="showSportsLive()" style="border-color:var(--accent);margin:8px 16px;">
+      <div style="font-size:18px;">&#x2190;</div><div class="channel-info"><div class="channel-name">Back to Scores</div></div></div>`;
+
+    // Quarter scores
+    if (quarters.length >= 2) {
+      html += `<div style="margin:0 16px;padding:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);">`;
+      html += `<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-bottom:6px;">
+        <span>${quarters[1]?.team || awayAbbr}</span><span>${quarters[0]?.team || homeAbbr}</span></div>`;
+      const maxQ = Math.max(quarters[0]?.scores?.length || 0, quarters[1]?.scores?.length || 0);
+      for (let q = 0; q < maxQ; q++) {
+        const label = q < 4 ? `Q${q+1}` : `OT${q-3}`;
+        html += `<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);padding:2px 0;">
+          <span>${quarters[1]?.scores?.[q] || '-'}</span><span style="color:var(--text2)">${label}</span><span>${quarters[0]?.scores?.[q] || '-'}</span></div>`;
+      }
+      html += `<div style="display:flex;justify-content:space-between;font-size:15px;font-weight:800;border-top:1px solid var(--border);padding-top:4px;margin-top:4px;">
+        <span>${quarters[1]?.total || '?'}</span><span>FINAL</span><span>${quarters[0]?.total || '?'}</span></div>`;
+      html += `</div>`;
+    }
+
+    // Stats table
+    if (teams.length >= 2) {
+      html += `<div style="margin:8px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">`;
+      html += `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <tr style="background:var(--surface2);"><th style="padding:6px;text-align:left;">Stat</th>
+        <th style="text-align:center;">${esc(teams[0].abbr)}</th><th style="text-align:center;">${esc(teams[1].abbr)}</th></tr>`;
+      const keyStats = ['Field Goal %','Three Point %','Free Throw %','Rebounds','Assists','Steals','Blocks','Turnovers'];
+      const t0Stats = teams[0].stats || [];
+      const t1Stats = teams[1].stats || [];
+      for (const statName of keyStats) {
+        const s0 = t0Stats.find(s => s.name === statName);
+        const s1 = t1Stats.find(s => s.name === statName);
+        if (s0 || s1) {
+          html += `<tr style="border-top:1px solid var(--border);">
+            <td style="padding:5px 6px;">${statName}</td>
+            <td style="text-align:center;padding:5px;">${s0?.value || '-'}</td>
+            <td style="text-align:center;padding:5px;">${s1?.value || '-'}</td></tr>`;
+        }
+      }
+      html += `</table></div>`;
+    }
+
+    // YouTube highlights
+    html += `<div style="margin:8px 16px;">
+      <button class="game-watch-btn" style="width:100%;padding:12px;" onclick="window.open('https://www.youtube.com/results?search_query=${ytQuery}','_blank')">
+        &#x1F3AC; Watch Highlights on YouTube</button></div>`;
+
+    list.innerHTML = html;
   } catch (e) {
-    list.innerHTML = list.innerHTML.split('<div class="loading">')[0] +
-      `<div class="empty"><div class="emoji">&#x26A0;</div>Failed to load scores<br><small>${e.message}</small></div>`;
+    list.innerHTML = `<div class="empty"><div class="emoji">&#x26A0;</div>Failed to load box score<br><small>${e.message}</small></div>`;
   }
 }
 
 async function findGameStream(team1, team2, fullName1, fullName2) {
-  // Search for PPV game channels with team names
   const searches = [team1, team2, fullName1.split(' ').pop(), fullName2.split(' ').pop()];
-  let bestChannel = null;
-  let bestScore = -1;
-
+  let bestChannel = null, bestScore = -1;
   for (const q of searches) {
     try {
       const data = await api(`/channels?search=${encodeURIComponent(q)}&limit=20`);
@@ -1010,24 +1215,16 @@ async function findGameStream(team1, team2, fullName1, fullName2) {
         if (n.includes(team1.toUpperCase()) || n.includes(team2.toUpperCase())) score += 50;
         if (n.includes('HD') || n.includes('ᴴᴰ')) score += 30;
         if (n.includes('4K') || n.includes('UHD')) score += 40;
-        if (n.includes('1080')) score += 35;
         if (n.includes('NO EVENT') || n.includes('SD') || n.startsWith('-')) score -= 200;
         if (score > bestScore) { bestScore = score; bestChannel = ch; }
       }
     } catch {}
   }
-
-  if (bestChannel && bestScore > 0) {
-    playChannel(bestChannel.id, bestChannel.name);
-  } else {
-    alert(`No stream found for ${fullName1} vs ${fullName2}. Try searching manually.`);
-  }
+  if (bestChannel && bestScore > 0) playChannel(bestChannel.id, bestChannel.name);
+  else alert(`No stream found for ${fullName1} vs ${fullName2}`);
 }
 
-// Auto-refresh live scores every 30 seconds
-setInterval(() => {
-  if (currentTab === 'sports_live') showSportsLive();
-}, 30000);
+setInterval(() => { if (currentTab === 'sports_live') showSportsLive(); }, 30000);
 
 // === Zap Mode (instant channel switch on tap) ===
 let zapMode = false;
